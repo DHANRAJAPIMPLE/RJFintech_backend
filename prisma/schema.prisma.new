@@ -1,0 +1,236 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model user {
+  id         String   @id @default(uuid())
+  name       String
+  email      String   @unique
+  password   String
+  phone      String
+  create_at  DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Relations
+  user_mappings                 user_mapping[]       @relation("UserMappings")
+  managed_users                 user_mapping[]       @relation("ReportingManager")
+  user_activities               user_activity[]
+  initiated_user_onboardings    user_onboarding[]    @relation("UserOnboardingInitiator")
+  approved_user_onboardings     user_onboarding[]    @relation("UserOnboardingApprover")
+  initiated_company_onboardings company_onboarding[] @relation("CompanyOnboardingInitiator")
+  approved_company_onboardings  company_onboarding[] @relation("CompanyOnboardingApprover")
+  initiated_org_reqs            org_structure_req[]  @relation("OrgReqInitiator")
+  approved_org_reqs             org_structure_req[]  @relation("OrgReqApprover")
+  user_accesses                 user_access[]
+}
+
+model company {
+  id                 String   @id @default(uuid())
+  gst_number         String   @unique
+  legalName         String  @map("legal_name")
+  address            String
+  registration_date  DateTime @default(now())
+  brandName         String  @map("brand_name")
+  iecode             String   @unique
+  company_code       String   @unique
+  create_at          DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  // Relations
+  user_mappings      user_mapping[]
+  company_mappings   company_mapping[]
+  org_structures     org_structure[]
+  org_structure_reqs org_structure_req[]
+  user_accesses      user_access[]
+}
+
+model group_company {
+  id         String   @id @default(uuid())
+  name       String
+  group_code String   @unique
+  remarks    String? 
+  create_at  DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Relations
+  company_mappings company_mapping[]
+ 
+}
+
+enum Status {
+  active
+  inactive
+}
+
+model user_mapping {
+  id                String   @id @default(uuid())
+  userId           String  @map("user_id")
+  companyId        String  @map("company_id")
+  reporting_manager String?   // uuid requried checking  all fk
+  status            Status
+  designation       String
+  employeeId       String  @map("employee_id")
+  create_at         DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  // FK Relations
+  user              user     @relation("UserMappings", fields: [user_id], references: [id])
+  company           company  @relation(fields: [company_id], references: [id])
+  manager           user?    @relation("ReportingManager", fields: [reporting_manager], references: [id])
+}
+
+model company_mapping {
+  id           String   @id @default(uuid())
+  companyId   String  @map("company_id")
+  groupId     String  @map("group_id")
+  create_at    DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  // FK Relations
+  company      company       @relation(fields: [company_id], references: [id])
+  group        group_company @relation(fields: [group_id], references: [id])
+}
+
+model user_activity {
+  id              String    @id @default(uuid())
+  userId         String  @map("user_id")
+  refreshToken   String?  @map("refresh_token")
+  version         String?
+  ipAddress      String  @map("ip_address")
+  userAgent      String  @map("user_agent")
+  forceLogToken String?  @map("force_log_token")
+  expiryAt       DateTime?  @map("expiry_at")
+  
+  create_at       DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  // FK Relation
+  user          user      @relation(fields: [user_id], references: [id])
+}
+
+enum OnboardingStatus {
+  pending
+  approved
+  rejected
+}
+
+
+model user_onboarding {
+  id           String           @id @default(uuid())
+  initiatorId String  @map("initiator_id")
+  approverId  String?  @map("approver_id")
+  groupCode   String?  @map("group_code")
+  companyCode String?  @map("company_code")
+  data         Json?           //existing user email basic 
+  status       OnboardingStatus @default(pending)
+  approvedAt  DateTime?  @map("approved_at")
+  create_at    DateTime         @default(now())
+  updated_at   DateTime         @updatedAt
+  approvalRemark String?  @map("approval_remark")
+  // Relations
+  initiator user  @relation("UserOnboardingInitiator", fields: [initiator_id], references: [id])
+  approver  user? @relation("UserOnboardingApprover", fields: [approver_id], references: [id])
+}
+
+enum OnboardedType {
+  existing
+  new
+}
+
+model company_onboarding {
+  id             String           @id @default(uuid())
+  initiatorId   String  @map("initiator_id")
+  approverId    String?  @map("approver_id")
+  data           Json?
+  groupCode     String?  @map("group_code")
+  company_code   String           @unique  // need to remove
+  onboarded_type OnboardedType    @default(new)
+  status         OnboardingStatus @default(pending)
+  approvedAt    DateTime?  @map("approved_at")
+  create_at      DateTime         @default(now())
+  updated_at     DateTime         @updatedAt
+  approvalRemark String?  @map("approval_remark")
+  // Relations
+  initiator user  @relation("CompanyOnboardingInitiator", fields: [initiator_id], references: [id])
+  approver  user? @relation("CompanyOnboardingApprover", fields: [approver_id], references: [id])
+}
+
+
+model org_structure_req {
+  id           String           @id @default(uuid())
+  initiatorId String  @map("initiator_id")
+  approverId  String?  @map("approver_id")
+  data         Json
+  companyId   String  @map("company_id")
+  status       OnboardingStatus @default(pending)
+  approvedAt  DateTime?  @map("approved_at")
+  create_at    DateTime         @default(now())
+  remarks      String?
+  updated_at   DateTime         @updatedAt
+
+  // Relations
+  initiator user     @relation("OrgReqInitiator", fields: [initiator_id], references: [id])
+  approver  user?    @relation("OrgReqApprover", fields: [approver_id], references: [id])
+  company   company  @relation(fields: [company_id], references: [id])
+}
+
+model org_structure {
+  id         String   @id @default(uuid())
+  companyId String  @map("company_id")
+  nodepath   String   @unique // ltree style
+  nodeName   String  @map("nodename")
+  nodetype   String   // root, division, department, team, plant, location
+  parentId  String?  @map("parent_id")
+  create_at  DateTime @default(now())
+
+  // Relations
+  company    company         @relation(fields: [company_id], references: [id])
+  parent     org_structure?  @relation("ParentChild", fields: [parent_id], references: [id])
+  children   org_structure[] @relation("ParentChild")
+  user_access user_access[]
+}
+
+model roles {
+  role_code        String   @id
+  role_name        String   @unique
+  category         String
+  subCategory     String  @map("sub_category")
+  permissionLevel String?  @map("permission_level")
+  view             Boolean  @default(false)
+  modify           Boolean  @default(false)
+  approve          Boolean  @default(false)
+  initiate         Boolean  @default(false)
+  isactive         Boolean  @default(true)
+  create_at        DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  // Relations
+  user_access      user_access[]
+}
+
+model user_access {
+  id              String   @id @default(uuid())
+  userId         String  @map("user_id")
+  roleCode       String?  @map("role_code")
+  nodeId         String  @map("node_id")
+  accessType     String?  @map("access_type")
+  companyId      String  @map("company_id")
+  isglobalAccess  Boolean  @default(false)
+  create_at       DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  // Relations
+  user          user          @relation(fields: [user_id], references: [id])
+  role          roles?         @relation(fields: [role_code], references: [role_code])
+
+  org_structure org_structure @relation(fields: [node_id], references: [id])
+  company       company       @relation(fields: [company_id], references: [id])
+}
