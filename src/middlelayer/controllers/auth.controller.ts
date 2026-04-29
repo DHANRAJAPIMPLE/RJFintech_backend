@@ -8,11 +8,14 @@ import { TokenUtil } from '../utils/token.util';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { setAuthCookies, clearAuthCookies } from '../utils/cookie.util';
+import { zodParse } from '../utils/zod-parse.util';
+import { registerSchema, loginSchema } from '../validations/auth.validation';
 
 export class AuthController {
   static async register(req: Request, res: Response, next: NextFunction) {
     try {
-      const { email, password, name, phone } = req.body;
+      const validatedData = zodParse(registerSchema, { body: req.body });
+      const { email, password, name, phone } = validatedData.body;
 
       // 1. Check if user already exists
       const existingUserRes = await internalPost<any>(
@@ -59,12 +62,13 @@ export class AuthController {
 
   static async login(req: Request, res: Response, next: NextFunction) {
     try {
+      const validatedData = zodParse(loginSchema, { body: req.body });
       const {
         email,
         password,
         action,
         forceLogToken: providedForceLogToken,
-      } = req.body;
+      } = validatedData.body;
       const ip = requestIp.getClientIp(req) || 'unknown';
       const userAgent = req.headers['user-agent'] || 'unknown';
 

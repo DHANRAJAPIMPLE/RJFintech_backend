@@ -38,7 +38,7 @@ export class CompanyController {
           if (groupCheck.exists) {
             finalGroupCode = group.groupCode;
           } else {
-            finalGroupCode = group.groupCode;
+            throw new AppError('Provided group code does not exist', 400);
           }
         } else {
           // Name exists but code doesn't: Create new code

@@ -10,10 +10,6 @@ const groupCodeSchema = z
   .trim()
   .min(3, 'Group code must be at least 3 characters')
   .max(20, 'Group code too long')
-  .regex(
-    /^[A-Z0-9_-]+$/,
-    'Group code must be alphanumeric (caps, numbers, _, -)',
-  )
   .nullable()
   .optional();
 
