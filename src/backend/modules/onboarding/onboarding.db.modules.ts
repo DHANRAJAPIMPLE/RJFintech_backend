@@ -1,12 +1,6 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response } from 'express';
 import { prisma } from '../../lib/prisma';
-import { HashUtil } from '../../../shared/utils/hash.util';
 import { AccessUtil } from '../../utils/access.util';
-import { AppError } from '../../middlewares/error.middleware';
-
-function toTitleCase(str: string): string {
-  return str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-}
 
 export class OnboardingDbController {
   // --- Internal Atomic Operations ---
@@ -66,9 +60,8 @@ export class OnboardingDbController {
   }
 
   static async getGlobalAccessUserIds(req: Request, res: Response) {
-    const {companyCode} = req.body;
+    const { companyCode } = req.body;
     const userIds = await AccessUtil.getGlobalAccessUserIds(companyCode);
     res.json(userIds);
   }
-
 }

@@ -1,11 +1,10 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
-import { AccessUtil } from '../../utils/access.util';
+
 import { AppError } from '../../middlewares/error.middleware';
 
 export class CompanyDbController {
-
   static async getMyCompanies(req: Request, res: Response, next: NextFunction) {
     try {
       const { userId } = req.body;
@@ -82,18 +81,25 @@ export class CompanyDbController {
       // 3. Fetch pending onboarding records
       const pendingOnboardings = await prisma.companyOnboarding.findMany({
         where: { status: 'PENDING' },
-
       });
 
       // 4. Fetch history for active and pending records to get initiator/approver
       const allActiveCompanyCodes = [
-        ...groups.flatMap((g: any) => g.companyMappings.map((cm: any) => cm.company.companyCode)),
+        ...groups.flatMap((g: any) =>
+          g.companyMappings.map((cm: any) => cm.company.companyCode),
+        ),
         ...soloCompanies.map((c: any) => c.companyCode),
       ];
       const allGroupCodes = groups.map((g: any) => g.groupCode);
-      const allPendingCodes = pendingOnboardings.map(onb => onb.companyCode);
+      const allPendingCodes = pendingOnboardings.map((onb) => onb.companyCode);
 
-      const allCodes = [...new Set([...allActiveCompanyCodes, ...allGroupCodes, ...allPendingCodes])];
+      const allCodes = [
+        ...new Set([
+          ...allActiveCompanyCodes,
+          ...allGroupCodes,
+          ...allPendingCodes,
+        ]),
+      ];
 
       const histories = await prisma.companyHistory.findMany({
         where: {
@@ -130,16 +136,24 @@ export class CompanyDbController {
           approvedAt: approveHistory?.createdAt || null,
           createdAt: initiateHistory?.createdAt || g.createdAt,
           companyMappings: g.companyMappings.map((cm: any) => {
-            const compInit = historyMap.get(`${cm.company.companyCode}_INITIATE`);
-            const compApprove = historyMap.get(`${cm.company.companyCode}_APPROVE`);
+            const compInit = historyMap.get(
+              `${cm.company.companyCode}_INITIATE`,
+            );
+            const compApprove = historyMap.get(
+              `${cm.company.companyCode}_APPROVE`,
+            );
             return {
               ...cm,
               company: {
                 ...cm.company,
                 initiator: compInit?.user || initiateHistory?.user || null,
                 approver: compApprove?.user || approveHistory?.user || null,
-                approvedAt: compApprove?.createdAt || approveHistory?.createdAt || null,
-                createdAt: compInit?.createdAt || initiateHistory?.createdAt || cm.company.createdAt,
+                approvedAt:
+                  compApprove?.createdAt || approveHistory?.createdAt || null,
+                createdAt:
+                  compInit?.createdAt ||
+                  initiateHistory?.createdAt ||
+                  cm.company.createdAt,
               },
             };
           }),
@@ -219,7 +233,7 @@ export class CompanyDbController {
                 email: sig.email,
                 event: 'INITIATE',
                 eventUserId: initiatorId,
-                companyCode: companyCode
+                companyCode: companyCode,
               },
             });
           }
@@ -254,7 +268,7 @@ export class CompanyDbController {
         if (!onboarding) {
           throw new AppError('Onboarding request not found', 404);
         }
-        console.log("Status : ", onboarding.status);
+        console.log('Status : ', onboarding.status);
         if (onboarding.status !== 'PENDING') {
           throw new AppError('Onboarding request already processed', 400);
         }
@@ -297,7 +311,7 @@ export class CompanyDbController {
                     email: sig.email,
                     event: 'REJECTED',
                     eventUserId: approverId,
-                    companyCode: onboarding.companyCode
+                    companyCode: onboarding.companyCode,
                   },
                 });
               }
@@ -458,7 +472,6 @@ export class CompanyDbController {
               companyCode: onboarding.companyCode,
               event: 'APPROVED',
               eventUserId: approverId,
-
             },
           });
         }
@@ -491,11 +504,11 @@ export class CompanyDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      const formattedHistories = histories.map(h => ({
+      const formattedHistories = histories.map((h) => ({
         companyCode: h.companyCode,
         event: h.event,
         createdAt: h.createdAt,
-        user: h.user
+        user: h.user,
       }));
 
       res.json(formattedHistories);
@@ -503,5 +516,4 @@ export class CompanyDbController {
       next(error);
     }
   }
-
 }

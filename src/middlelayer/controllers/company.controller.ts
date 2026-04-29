@@ -1,24 +1,23 @@
-import { ZodError } from 'zod';
 import type { Request, Response, NextFunction } from 'express';
-import type { AuthRequest } from '../middlewares/auth.middleware';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import { zodParse } from '../utils/zod-parse.util';
 import {
   companyOnboardingSchema,
   companyActionSchema,
+  companyHistory,
 } from '../validations/onboarding.validator';
 import { CodeGenUtil } from '../utils/code-gen.util';
 
 export class CompanyController {
-
   static async initiateCompanyOnboarding(
     req: Request & { user?: { id: string } },
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const validatedData = companyOnboardingSchema.parse(req.body);
+      const validatedData = zodParse(companyOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
       const { group, company, signatories } = validatedData;
 
@@ -35,19 +34,17 @@ export class CompanyController {
             `${config.backendUrl}/internal/onboarding/group/check-code`,
             { code: group.groupCode },
           );
-          
+
           if (groupCheck.exists) {
-            // Verify if name matches too? For now, if code exists, use it.
             finalGroupCode = group.groupCode;
           } else {
-            // Provided code doesn't exist, treat as new or error? 
-            // User says "if both are present then check". Let's assume we use it if it doesn't conflict, 
-            // but the safer bet is to use the provided one if it's new, or generate if requested.
             finalGroupCode = group.groupCode;
           }
         } else {
           // Name exists but code doesn't: Create new code
-          finalGroupCode = await CodeGenUtil.generateUniqueGroupCode(group.name);
+          finalGroupCode = await CodeGenUtil.generateUniqueGroupCode(
+            group.name,
+          );
         }
       } else {
         // Both null or no name: Independent company
@@ -60,36 +57,39 @@ export class CompanyController {
       );
 
       // Logic: Get global access user IDs
-      // Note: Since it's a new company, we might pass a null/temp code or handle in backend
       const { data: globalAccessIds } = await internalPost<string[]>(
         `${config.backendUrl}/internal/onboarding/global-access-ids`,
         { companyCode: finalCompanyCode },
       );
 
+      const emails = signatories.map((signatory) => signatory.email);
+      const phoneNumbers = signatories.map((signatory) => signatory.phone);
 
+      const uniqueEmail = [...new Set(emails)];
+      const uniquePhoneNumbers = [...new Set(phoneNumbers)];
 
-     const emails = signatories.map((signatory) => signatory.email);
-     const phoneNumbers = signatories.map((signatory) => signatory.phone);
-
-     const uniqueEmail = [...new Set(emails)];
-     const uniquePhoneNumbers = [...new Set(phoneNumbers)];
-     
-     
-    let databaseEmailExists : String = "";
-      for(const signatory of signatories) {
+      let databaseEmailExists: string = '';
+      for (const signatory of signatories) {
         const existingUserRes = await internalPost<any>(
-      `${config.backendAuthUrl}/get-user`,
-      { email: signatory.email },
-    );
-      if (existingUserRes.ok) {
-        databaseEmailExists += signatory.email + ",";
+          `${config.backendAuthUrl}/get-user`,
+          { email: signatory.email },
+        );
+        if (existingUserRes.ok) {
+          databaseEmailExists += signatory.email + ',';
+        }
       }
-    }
 
-    if(uniqueEmail.length !== emails.length || uniquePhoneNumbers.length !== phoneNumbers.length || databaseEmailExists !== "") {
-      throw new AppError(`Following users are already exists in database : ${databaseEmailExists}`, 400);
-     }
-    
+      if (
+        uniqueEmail.length !== emails.length ||
+        uniquePhoneNumbers.length !== phoneNumbers.length ||
+        databaseEmailExists !== ''
+      ) {
+        throw new AppError(
+          `Following users already exist in database: ${databaseEmailExists}`,
+          400,
+        );
+      }
+
       // Call Backend to create the record
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/company/create`,
@@ -109,7 +109,7 @@ export class CompanyController {
 
       if (!ok) {
         throw new AppError(
-          data.error || 'Failed to initiate onboarding',
+          data?.message || data?.error || 'Failed to initiate onboarding',
           status,
         );
       }
@@ -120,12 +120,7 @@ export class CompanyController {
         groupCode: finalGroupCode,
       });
     } catch (error) {
-      if (error instanceof ZodError) {
-        return res
-          .status(400)
-          .json({ error: 'Validation failed', details: error.errors });
-      }
-       next(error);
+      next(error);
     }
   }
 
@@ -135,7 +130,7 @@ export class CompanyController {
     next: NextFunction,
   ) {
     try {
-      const validatedData = companyActionSchema.parse(req.body);
+      const validatedData = zodParse(companyActionSchema, req.body);
       const approverId = req.user?.id;
       const { id, action, remark } = validatedData;
 
@@ -154,7 +149,6 @@ export class CompanyController {
       }
 
       // 2. Logic: Validate status
-      console.log("Status : ",onboarding.status);
       if (onboarding.status !== 'PENDING') {
         throw new AppError('Onboarding request already processed', 400);
       }
@@ -167,22 +161,22 @@ export class CompanyController {
         );
       }
 
-      // 4. Handle rejection
-
-       const {data: updateStatusRes, ok: updateStatusOk, status: updateStatusStatus}  = await internalPost(
-          `${config.backendUrl}/internal/company/action`,
-          {  id,
-            action,
-            approverId,
-            remark
-
-          },
-        );
+      const {
+        data: updateStatusRes,
+        ok: updateStatusOk,
+        status: updateStatusStatus,
+      } = await internalPost(`${config.backendUrl}/internal/company/action`, {
+        id,
+        action,
+        approverId,
+        remark,
+      });
 
       if (!updateStatusOk) {
-        console.log(updateStatusRes,updateStatusOk,updateStatusStatus)
         throw new AppError(
-          updateStatusRes.message || updateStatusRes.error || 'Failed to process onboarding approval',
+          updateStatusRes?.message ||
+            updateStatusRes?.error ||
+            'Failed to process onboarding approval',
           updateStatusStatus,
         );
       }
@@ -191,55 +185,38 @@ export class CompanyController {
         .status(200)
         .json({ message: 'Onboarding request approved and data populated' });
     } catch (error) {
-      if (error instanceof ZodError) {
-        return res
-          .status(400)
-          .json({ error: 'Validation failed', details: error.errors });
-      }
       next(error);
     }
   }
 
- static async fetchCompanyHistory(
-    req: Request ,
+  static async fetchCompanyHistory(
+    req: Request,
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode } = zodParse(companyHistory, req.body);
 
-      if (!companyCode) {
-        throw new AppError('Company code is required', 400);
-      }
-
-      // 1. Fetch onboarding record
-      const { data, ok } = await internalPost<any>(
+      // 1. Fetch history record
+      const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/company/history`,
         { companyCode },
       );
 
       if (!ok) {
-        throw new AppError('Onboarding request not found', 404);
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch company history',
+          status || 404,
+        );
       }
 
-    
-
-      res
-        .status(200)
-        .json({ 
-          message: 'Company history fetched successfully!', 
-          code: 200,
-          data 
-        });
+      res.status(200).json({
+        message: 'Company history fetched successfully!',
+        code: 200,
+        data,
+      });
     } catch (error) {
-      if (error instanceof ZodError) {
-        return res
-          .status(400)
-          .json({ error: 'Validation failed', details: error.errors });
-      }
       next(error);
     }
   }
-
-
 }

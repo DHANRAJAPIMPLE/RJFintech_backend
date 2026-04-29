@@ -2,8 +2,14 @@ import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
-import { orgOnboardingSchema } from '../validations/onboarding.validator';
-import { validate } from '../middlewares/validate.middleware';
+import { zodParse } from '../utils/zod-parse.util';
+import {
+  orgOnboardingSchema,
+  orgOnboardingAction,
+  companyCodeOnly,
+  orgHistory,
+} from '../validations/onboarding.validator';
+
 export class OrgController {
   private static formatDate(date: Date | string | null): string {
     if (!date) return 'N/A';
@@ -20,11 +26,12 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const validateData = orgOnboardingSchema.parse(req.body); 
-      const { companyCode, newNodeName, nodeType, parentNode } =validateData;
+      const { companyCode, newNodeName, nodeType, parentNode } = zodParse(
+        orgOnboardingSchema,
+        req.body,
+      );
       const initiatorId = req.user?.id;
 
-        
       if (!initiatorId) {
         throw new AppError('Unauthorized', 401);
       }
@@ -36,12 +43,11 @@ export class OrgController {
       );
 
       if (!companyOk || !company) {
-        throw new AppError('Company not found', 404);
+        throw new AppError(
+          company?.message || company?.error || 'Company not found',
+          404,
+        );
       }
-
-      // Wait, let's use a simpler way if get-by-code doesn't exist yet
-      // Actually, I'll assume I might need to add it or use an existing one.
-      // Let's check company.db.modules.ts for a get-by-code.
 
       // 2. Logic: Get global access IDs
       const { data: globalAccessIds } = await internalPost<string[]>(
@@ -54,7 +60,7 @@ export class OrgController {
         `${config.backendUrl}/internal/org/initiate`,
         {
           initiatorId,
-          companyId: company?.id, // This might be null if company fetch failed, backend should handle or we check here
+          companyId: company?.id,
           data: {
             newNodeName,
             nodeType,
@@ -67,7 +73,9 @@ export class OrgController {
 
       if (!ok) {
         throw new AppError(
-          data.message || 'Failed to initiate org structure request',
+          data?.message ||
+            data?.error ||
+            'Failed to initiate org structure request',
           status,
         );
       }
@@ -88,8 +96,7 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      // FIX: Use 'id' and 'remark' to match user input, but map to logic
-      const { id, action, remark } = req.body;
+      const { id, action, remark } = zodParse(orgOnboardingAction, req.body);
       const approverId = req.user?.id;
 
       if (!approverId) {
@@ -103,7 +110,12 @@ export class OrgController {
       );
 
       if (!fetchOk || !request) {
-        throw new AppError('Org structure request not found', 404);
+        throw new AppError(
+          request?.message ||
+            request?.error ||
+            'Org structure request not found',
+          404,
+        );
       }
 
       // 2. Logic: Verify status and permissions
@@ -174,23 +186,22 @@ export class OrgController {
         data: commitRes,
         ok: commitOk,
         status: commitStatus,
-      } = await internalPost(
-        `${config.backendUrl}/internal/org/action`,
-        {
-          id,
-          status: 'APPROVED',
-          approverId,
-          remarks: remark,
-          newNodePath,
-          newNodeName,
-          nodeType,
-          parentId,
-        },
-      );
+      } = await internalPost(`${config.backendUrl}/internal/org/action`, {
+        id,
+        status: 'APPROVED',
+        approverId,
+        remarks: remark,
+        newNodePath,
+        newNodeName,
+        nodeType,
+        parentId,
+      });
 
       if (!commitOk) {
         throw new AppError(
-          commitRes.message || 'Failed to approve org structure request',
+          commitRes?.message ||
+            commitRes?.error ||
+            'Failed to approve org structure request',
           commitStatus,
         );
       }
@@ -211,7 +222,7 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode } = zodParse(companyCodeOnly, req.body);
       const userId = req.user?.id;
 
       if (!userId) {
@@ -221,14 +232,12 @@ export class OrgController {
       // Forward to Backend (5001)
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/org/fetch`,
-        {
-          companyCode,
-        },
+        { companyCode },
       );
 
       if (!ok) {
         throw new AppError(
-          data.message || 'Failed to fetch org structure',
+          data?.message || data?.error || 'Failed to fetch org structure',
           status,
         );
       }
@@ -236,7 +245,7 @@ export class OrgController {
       // Format response with active and pending arrays
       const formattedPending = data.data.pending.map((req: any) => {
         const reqData = req.data || {};
-        const initiatorHistory = req.orgHistories?.[0]; // The backend filters for event: 'INITIATE'
+        const initiatorHistory = req.orgHistories?.[0];
         return {
           id: req.id,
           newNodeName: reqData.newNodeName,
@@ -245,7 +254,7 @@ export class OrgController {
           initiatorName: initiatorHistory?.user?.name || null,
           initiatorEmail: initiatorHistory?.user?.email || null,
           initiatedDate: OrgController.formatDate(req.createdAt),
-          approverName: null, // Since it's pending, there's no approver yet
+          approverName: null,
           approverEmail: null,
           approvedDate: null,
         };
@@ -270,23 +279,23 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode } = zodParse(orgHistory, req.body);
 
       // Forward to Backend (5001)
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/org/fetch-history`,
-        {
-          companyCode,
-        },
+        { companyCode },
       );
 
       if (!ok) {
         throw new AppError(
-          data.message || 'Failed to fetch org structure history',
+          data?.message ||
+            data?.error ||
+            'Failed to fetch org structure history',
           status,
         );
       }
-      if(!data){
+      if (!data) {
         return res.status(404).json({
           message: 'Organization structure history not found!',
           code: 404,

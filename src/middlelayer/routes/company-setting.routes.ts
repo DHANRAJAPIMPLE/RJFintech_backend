@@ -5,7 +5,6 @@ import { OrgController } from '../controllers/org.controller';
 import { RoleController } from '../controllers/role.controller';
 import { UserController } from '../controllers/user.controller';
 
-
 const router = Router();
 router.use(authMiddleware);
 

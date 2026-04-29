@@ -21,8 +21,6 @@ export class OrgStructureDbController {
     res.json(node);
   }
 
-
-
   // --- Transactional Commit Operations ---
 
   static async updateOrgRequestStatus(
@@ -166,7 +164,11 @@ export class OrgStructureDbController {
     }
   }
 
- static async fetchOrgHistory(req: Request, res: Response, next: NextFunction) {
+  static async fetchOrgHistory(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { companyCode } = req.body;
 
@@ -178,11 +180,11 @@ export class OrgStructureDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      const formattedHistories = histories.map(h => ({
+      const formattedHistories = histories.map((h) => ({
         companyCode: h.companyCode,
         event: h.event,
         createdAt: h.createdAt,
-        user: h.user
+        user: h.user,
       }));
 
       res.json(formattedHistories);
@@ -228,7 +230,7 @@ export class OrgStructureDbController {
       const safeNodes = nodes.map((node) => ({
         nodeName: node.nodeName,
         nodeType: node.nodeType,
-        nodePath: node.nodePath
+        nodePath: node.nodePath,
       }));
 
       res.status(200).json({

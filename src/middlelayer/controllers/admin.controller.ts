@@ -25,7 +25,10 @@ export class AdminController {
       );
 
       if (!ok) {
-        throw new AppError(data.error || 'Failed to fetch groups', status);
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch groups',
+          status,
+        );
       }
 
       const { groups, soloCompanies, pendingOnboardings } = data;
@@ -39,13 +42,13 @@ export class AdminController {
         const processCompanies = (companies: any[]) => {
           const signatoryMap = new Map();
           const companyDetails = companies.map((c: any) => ({
-            companycode: c.companyCode,
+            companyCode: c.companyCode,
             name: c.legalName,
             gst: c.gstNumber,
             brand: c.brandName,
             iecode: c.iecode || '',
             registration: c.registrationDate,
-            address: c.address || ''
+            address: c.address || '',
           }));
 
           companies.forEach((c: any) => {
@@ -65,18 +68,22 @@ export class AdminController {
           });
 
           return {
-            groupdetails: {
-              groupcode: g.groupCode,
-              groupname: g.name,
+            groupDetails: {
+              groupCode: g.groupCode,
+              groupName: g.name,
             },
-            comapnydetails: companyDetails,
+            comapnyDetails: companyDetails,
             signatories: Array.from(signatoryMap.values()),
           };
         };
 
         const mappedCompanies = g.companyMappings.map((cm: any) => cm.company);
-        const activeGroupCompanies = mappedCompanies.filter((c: any) => c.status === 'ACTIVE');
-        const inactiveGroupCompanies = mappedCompanies.filter((c: any) => c.status === 'INACTIVE');
+        const activeGroupCompanies = mappedCompanies.filter(
+          (c: any) => c.status === 'ACTIVE',
+        );
+        const inactiveGroupCompanies = mappedCompanies.filter(
+          (c: any) => c.status === 'INACTIVE',
+        );
 
         if (g.status === 'ACTIVE') {
           if (activeGroupCompanies.length > 0) {
@@ -93,11 +100,11 @@ export class AdminController {
             // Even if no companies, still show the inactive group if it's inactive?
             // The original code did this. Let's keep it.
             inactive.push({
-              groupdetails: {
-                groupcode: g.groupCode,
-                groupname: g.name,
+              groupDetails: {
+                groupCode: g.groupCode,
+                groupName: g.name,
               },
-              comapnydetails: [],
+              comapnyDetails: [],
               signatories: [],
             });
           }
@@ -107,16 +114,16 @@ export class AdminController {
       // 3. Process Solo Companies
       soloCompanies.forEach((c: any) => {
         const soloEntry = {
-          groupdetails: null,
-          comapnydetails: [
+          groupDetails: null,
+          comapnyDetails: [
             {
-              companycode: c.companyCode,
+              companyCode: c.companyCode,
               name: c.legalName,
               gst: c.gstNumber,
               brand: c.brandName,
               iecode: c.iecode || '',
-              registration:c.registrationDate,
-              address: c.address || ''
+              registration: c.registrationDate,
+              address: c.address || '',
             },
           ],
           signatories: (c.userMappings || []).map((um: any) => ({
@@ -142,21 +149,23 @@ export class AdminController {
         const group = onbData.group || {};
         const company = onbData.company || {};
         const signatories = onbData.signatories || [];
-        const groupCode = onb.groupCode || 'SOLO_PENDING';
+        const groupCode = onb.groupCode || `SOLO_PENDING_${onb.companyCode || onb.id}`;
 
         if (!pendingGroups[groupCode]) {
           pendingGroups[groupCode] = {
-            groupdetails: onb.groupCode ? {
-              groupcode: onb.groupCode,
-              groupname: group.name || 'Pending Group',
-            } : null,
-            comapnydetails: [],
+            groupDetails: onb.groupCode
+              ? {
+                groupCode: onb.groupCode,
+                groupName: group.name || 'Pending Group',
+              }
+              : null,
+            comapnyDetails: [],
             signatories: [],
           };
         }
 
-        pendingGroups[groupCode].comapnydetails.push({
-          companycode: onb.companyCode,
+        pendingGroups[groupCode].comapnyDetails.push({
+          companyCode: onb.companyCode,
           name: company.name || '',
           gst: company.gst || '',
           brand: company.brand || '',
@@ -165,12 +174,16 @@ export class AdminController {
           address: company.address || '',
           initiatorName: onb.initiator?.name || null,
           initiatorEmail: onb.initiator?.email || null,
-          initiatedDate: onb.createdAt
+          initiatedDate: onb.createdAt,
         });
 
         // Add signatories if not already there
         signatories.forEach((s: any) => {
-          if (!pendingGroups[groupCode].signatories.some((existing: any) => existing.email === s.email)) {
+          if (
+            !pendingGroups[groupCode].signatories.some(
+              (existing: any) => existing.email === s.email,
+            )
+          ) {
             pendingGroups[groupCode].signatories.push({
               name: s.name || '',
               email: s.email || '',

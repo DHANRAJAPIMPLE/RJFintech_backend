@@ -4,18 +4,16 @@ import { prisma } from '../../lib/prisma';
 export class AuthDbController {
   static async getByUser(req: Request, res: Response, next: NextFunction) {
     try {
-       const { userId, email } = req.body;
+      const { userId, email } = req.body;
 
-    if (!userId && !email) {
-      return res.status(400).json({ error: 'userId or email is required' });
-    }
+      if (!userId && !email) {
+        return res.status(400).json({ error: 'userId or email is required' });
+      }
 
-    const whereCondition = userId
-      ? { id: userId }
-      : { email: email };
+      const whereCondition = userId ? { id: userId } : { email: email };
 
       const user = await prisma.user.findUnique({
-       where:whereCondition,
+        where: whereCondition,
         include: {
           userMappings: {
             include: {
@@ -43,50 +41,44 @@ export class AuthDbController {
     }
   }
 
+  static async getActivity(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { userId, refreshTokenHash } = req.body;
 
-static async getActivity(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) {
-  try {
-    const { userId, refreshTokenHash } = req.body;
+      if (!userId && !refreshTokenHash) {
+        return res.status(400).json({
+          error: 'userId or refreshTokenHash is required',
+        });
+      }
 
-    if (!userId && !refreshTokenHash) {
-      return res.status(400).json({
-        error: 'userId or refreshTokenHash is required',
-      });
-    }
-
-    const activity = await prisma.userActivity.findFirst({
-      where: {
-        OR: [
-          userId ? { userId } : undefined,
-          refreshTokenHash ? { refreshToken: refreshTokenHash } : undefined,
-        ].filter(Boolean) as any,
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
+      const activity = await prisma.userActivity.findFirst({
+        where: {
+          OR: [
+            userId ? { userId } : undefined,
+            refreshTokenHash ? { refreshToken: refreshTokenHash } : undefined,
+          ].filter(Boolean) as any,
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    if (!activity) {
-      return res.status(404).json({ error: 'Activity not found' });
+      if (!activity) {
+        return res.status(404).json({ error: 'Activity not found' });
+      }
+
+      res.status(200).json(activity);
+    } catch (error) {
+      next(error);
     }
-
-    res.status(200).json(activity);
-  } catch (error) {
-    next(error);
   }
-}
-
 
   static async upsertActivity(req: Request, res: Response, next: NextFunction) {
     try {
@@ -117,7 +109,6 @@ static async getActivity(
     }
   }
 
-  
   static async deleteActivity(req: Request, res: Response, next: NextFunction) {
     try {
       const { refreshTokenHash } = req.body;

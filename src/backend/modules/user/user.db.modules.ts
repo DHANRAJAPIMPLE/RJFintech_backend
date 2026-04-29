@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
-import { AccessUtil } from '../../utils/access.util';
+
 import { AppError } from '../../middlewares/error.middleware';
 
 export class UserDbController {
@@ -53,8 +53,10 @@ export class UserDbController {
       });
 
       // Fetch history for these pending onboardings to get initiator/approver
-      const pendingEmails = pendingOnboardings.map((onb: any) => (onb.data as any)?.basicDetails?.email).filter(Boolean);
-      
+      const pendingEmails = pendingOnboardings
+        .map((onb: any) => (onb.data as any)?.basicDetails?.email)
+        .filter(Boolean);
+
       const histories = await prisma.userHistory.findMany({
         where: {
           email: { in: pendingEmails },
@@ -94,7 +96,11 @@ export class UserDbController {
     }
   }
 
-  static async updateUserStatus(req: Request, res: Response, next: NextFunction) {
+  static async updateUserStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { userId, status } = req.body;
       await prisma.userMapping.updateMany({
@@ -107,7 +113,7 @@ export class UserDbController {
     }
   }
 
-    static async createUserOnboarding(req: Request, res: Response) {
+  static async createUserOnboarding(req: Request, res: Response) {
     const { initiatorId, ...onboardingData } = req.body;
     const email = onboardingData.data?.basicDetails?.email;
 
@@ -132,8 +138,6 @@ export class UserDbController {
 
   // --- Get Operations ---
 
-
-
   static async getUserOnboardingById(req: Request, res: Response) {
     const { id } = req.body;
     const onboarding = await prisma.userOnboarding.findUnique({
@@ -141,8 +145,6 @@ export class UserDbController {
     });
     res.json(onboarding);
   }
-
-
 
   static async handleUserOnboardingStatus(
     req: Request,
@@ -162,14 +164,8 @@ export class UserDbController {
 
       const data = onboarding.data as any;
       const { basicDetails, permissions } = data || {};
-      const {
-        name,
-        email,
-        phone,
-        reportingManager,
-        designation,
-        employeeId,
-      } = basicDetails || {};
+      const { name, email, phone, reportingManager, designation, employeeId } =
+        basicDetails || {};
 
       await prisma.$transaction(async (tx) => {
         // =========================
@@ -314,26 +310,25 @@ export class UserDbController {
     }
   }
 
-
   static async getUserHistory(req: Request, res: Response, next: NextFunction) {
     try {
       const { email, companyCode } = req.body;
       const history = await prisma.userHistory.findMany({
         where: {
           email,
-          companyCode
+          companyCode,
         },
         include: {
           user: { select: { name: true, email: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
-      const formattedHistory = history.map(h => ({
+      const formattedHistory = history.map((h) => ({
         email: h.email,
         companyCode: h.companyCode,
         event: h.event,
         createdAt: h.createdAt,
-        user: h.user
+        user: h.user,
       }));
 
       res.status(200).json(formattedHistory);
@@ -341,5 +336,4 @@ export class UserDbController {
       next(error);
     }
   }
-
 }

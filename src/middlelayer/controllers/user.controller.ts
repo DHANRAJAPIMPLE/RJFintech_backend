@@ -1,11 +1,14 @@
-import { ZodError } from 'zod';
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import { zodParse } from '../utils/zod-parse.util';
 import {
   userOnboardingSchema,
   userActionSchema,
+  companyCodeOnly,
+  userStatusUpdateSchema,
+  userHistory,
 } from '../validations/onboarding.validator';
 
 export class UserController {
@@ -20,20 +23,22 @@ export class UserController {
 
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
-      // 1. Fetch raw data from Backend (5001)
-      const { companyCode } = req.body;
+      const { companyCode } = zodParse(companyCodeOnly, req.body);
+
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/user/fetch-all`,
-        { companyCode }
+        { companyCode },
       );
 
       if (!ok) {
-        throw new AppError(data.error || 'Failed to fetch users', status);
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch users',
+          status,
+        );
       }
 
       const { users, pendingOnboardings } = data;
 
-      // 2. Apply formatting and business logic in Middle Layer
       const result = {
         activeUsers: [] as any[],
         pendingUsers: [] as any[],
@@ -41,7 +46,6 @@ export class UserController {
       };
 
       users.forEach((u: any) => {
-        // If user has no mapping, treat as inactive
         if (u.userMappings.length === 0) {
           const primaryRoles = u.userAccesses
             .filter((a: any) => a.accessType === 'PRIMARY')
@@ -72,7 +76,7 @@ export class UserController {
               phone: u.phone,
               createdAt: UserController.formatDate(u.createdAt),
               designation: 'N/A',
-              reportingManager: 'N/A'
+              reportingManager: 'N/A',
             },
             primary: primaryRoles,
             secondary: secondaryRoles,
@@ -112,7 +116,7 @@ export class UserController {
                 phone: u.phone,
                 createdAt: UserController.formatDate(m.createdAt),
                 designation: m.designation,
-                reportingManager: m.manager?.email || 'N/A'
+                reportingManager: m.manager?.email || 'N/A',
               },
               primary: primaryRoles,
               secondary: secondaryRoles,
@@ -165,7 +169,7 @@ export class UserController {
             reportingManager: basic.reportingManager || 'N/A',
             initiatorName: onb.initiator?.name || null,
             initiatorEmail: onb.initiator?.email || null,
-            initiatedDate:onb.createdAt
+            initiatedDate: onb.createdAt,
           },
           primary,
           secondary,
@@ -188,7 +192,7 @@ export class UserController {
     next: NextFunction,
   ) {
     try {
-      const validatedData = userOnboardingSchema.parse(req.body);
+      const validatedData = zodParse(userOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
       const { basicDetails, permissions } = validatedData;
       const { email, reportingManager } = basicDetails;
@@ -204,7 +208,12 @@ export class UserController {
       );
 
       if (!managerOk || !manager) {
-        throw new AppError('Reporting manager email not found', 400);
+        throw new AppError(
+          manager?.message ||
+            manager?.error ||
+            'Reporting manager email not found',
+          400,
+        );
       }
 
       // 2. Logic: Check if user already exists
@@ -220,7 +229,6 @@ export class UserController {
       let companyCode: string | undefined;
       let groupCode: string | undefined;
 
-      // Priority 1: Use manager's company/group
       const managerMapping = manager.userMappings?.[0];
       if (managerMapping && managerMapping.company) {
         companyCode = managerMapping.company.companyCode;
@@ -228,11 +236,6 @@ export class UserController {
         if (compMapping && compMapping.group) {
           groupCode = compMapping.group.groupCode;
         }
-      }
-
-      // Priority 2: Use initiator's company/group (if manager mapping not enough)
-      if (!companyCode) {
-        // Here we could fetch initiator mapping if needed, but let's stick to manager for now as per original logic
       }
 
       // Logic: Get global access user IDs
@@ -246,24 +249,23 @@ export class UserController {
         data: createRes,
         ok: createOk,
         status: createStatus,
-      } = await internalPost(
-        `${config.backendUrl}/internal/user/create`,
-        {
-          initiatorId,
-          companyCode,
-          groupCode,
-          data: {
-            basicDetails,
-            permissions,
-          },
-          status: 'PENDING',
-          accessibleBy: globalAccessIds || [],
+      } = await internalPost(`${config.backendUrl}/internal/user/create`, {
+        initiatorId,
+        companyCode,
+        groupCode,
+        data: {
+          basicDetails,
+          permissions,
         },
-      );
+        status: 'PENDING',
+        accessibleBy: globalAccessIds || [],
+      });
 
       if (!createOk) {
         throw new AppError(
-          createRes.error || 'Failed to initiate user onboarding',
+          createRes?.message ||
+            createRes?.error ||
+            'Failed to initiate user onboarding',
           createStatus,
         );
       }
@@ -272,11 +274,6 @@ export class UserController {
         .status(201)
         .json({ message: 'User onboarding initiated successfully' });
     } catch (error) {
-      if (error instanceof ZodError) {
-        return res
-          .status(400)
-          .json({ error: 'Validation failed', details: error.errors });
-      }
       next(error);
     }
   }
@@ -287,7 +284,7 @@ export class UserController {
     next: NextFunction,
   ) {
     try {
-      const validatedData = userActionSchema.parse(req.body);
+      const validatedData = zodParse(userActionSchema, req.body);
       const approverId = req.user?.id;
       const { id, action, remark } = validatedData;
 
@@ -302,7 +299,12 @@ export class UserController {
       );
 
       if (!fetchOk || !onboarding) {
-        throw new AppError('User onboarding request not found', 404);
+        throw new AppError(
+          onboarding?.message ||
+            onboarding?.error ||
+            'User onboarding request not found',
+          404,
+        );
       }
 
       // 2. Logic: Validate status
@@ -318,39 +320,40 @@ export class UserController {
         );
       }
 
-     
-
-      // 5. Handle approval (Commit to Backend Transaction)
+      // 4. Handle approval / rejection
       const {
         data: commitRes,
         ok: commitOk,
         status: commitStatus,
-      } = await internalPost(
-        `${config.backendUrl}/internal/user/action`,
-        { id, approverId, remark , status:action},
-      );
+      } = await internalPost(`${config.backendUrl}/internal/user/action`, {
+        id,
+        approverId,
+        remark,
+        status: action,
+      });
 
       if (!commitOk) {
         throw new AppError(
-          commitRes.error || 'Failed to process user onboarding approval',
+          commitRes?.message ||
+            commitRes?.error ||
+            'Failed to process user onboarding approval',
           commitStatus,
         );
       }
 
       res.status(200).json({ message: 'User approved and onboarded' });
     } catch (error) {
-      if (error instanceof ZodError) {
-        return res
-          .status(400)
-          .json({ error: 'Validation failed', details: error.errors });
-      }
       next(error);
     }
   }
 
-  static async updateUserStatus(req: Request, res: Response, next: NextFunction) {
+  static async updateUserStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
-      const { email } = req.body;
+      const { email } = zodParse(userStatusUpdateSchema, req.body);
 
       // 1. Fetch user by email
       const { data: user, ok } = await internalPost<any>(
@@ -359,16 +362,24 @@ export class UserController {
       );
 
       if (!ok || !user) {
-        throw new AppError('User not found', 404);
+        throw new AppError(
+          user?.message || user?.error || 'User not found',
+          404,
+        );
       }
 
       // 2. Determine target status (Toggle)
-      // If any mapping is active, set to inactive. Otherwise set to active.
-      const hasActive = user.userMappings.some((m: any) => m.status === 'ACTIVE');
+      const hasActive = user.userMappings.some(
+        (m: any) => m.status === 'ACTIVE',
+      );
       const targetStatus = hasActive ? 'INACTIVE' : 'ACTIVE';
 
       // 3. Update status in Backend
-      const { ok: updateOk } = await internalPost(
+      const {
+        data: updateData,
+        ok: updateOk,
+        status: updateStatus,
+      } = await internalPost(
         `${config.backendUrl}/internal/user/update-status`,
         {
           userId: user.id,
@@ -377,7 +388,12 @@ export class UserController {
       );
 
       if (!updateOk) {
-        throw new AppError('Failed to update user status', 500);
+        throw new AppError(
+          updateData?.message ||
+            updateData?.error ||
+            'Failed to update user status',
+          updateStatus || 500,
+        );
       }
 
       res.status(200).json({
@@ -388,17 +404,23 @@ export class UserController {
       next(error);
     }
   }
-  
+
   static async getUserHistory(req: Request, res: Response, next: NextFunction) {
     try {
-      const { email, companyCode } = req.body;
-      const { data, ok } = await internalPost<any>(
+      const { email, companyCode } = zodParse(userHistory, req.body);
+
+      const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/user/history`,
         { email, companyCode },
       );
+
       if (!ok || !data) {
-        throw new AppError('User not found', 404);
+        throw new AppError(
+          data?.message || data?.error || 'User not found',
+          status || 404,
+        );
       }
+
       res.status(200).json({
         message: 'User history fetched successfully!',
         code: 200,
@@ -408,7 +430,4 @@ export class UserController {
       next(error);
     }
   }
-  
 }
-
-

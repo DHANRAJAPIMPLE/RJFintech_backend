@@ -8,6 +8,7 @@ export default tseslint.config(
   prettier,
   {
     rules: {
+      // ✅ Unused vars
       '@typescript-eslint/no-unused-vars': [
         'error',
         {
@@ -16,44 +17,49 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: '^_',
         },
       ],
+
+      // ✅ Naming convention (camelCase enforcement)
       '@typescript-eslint/naming-convention': [
         'error',
+
+        // variables, functions, params
         {
-          selector: 'default',
+          selector: 'variableLike',
           format: ['camelCase'],
         },
+
+        // constants
         {
           selector: 'variable',
+          modifiers: ['const'],
           format: ['camelCase', 'UPPER_CASE'],
-          leadingUnderscore: 'allow',
         },
+
+        // types (class, interface, type)
         {
           selector: 'typeLike',
           format: ['PascalCase'],
         },
+
+        // object properties (strict camelCase)
         {
           selector: 'property',
           format: ['camelCase'],
         },
-        {
-          selector: 'parameter',
-          format: ['camelCase'],
-          leadingUnderscore: 'allow',
-        },
-        {
-          selector: 'function',
-          format: ['camelCase'],
-        },
+
+        // allow special cases (Prisma + headers)
         {
           selector: 'objectLiteralProperty',
           format: null,
           filter: {
-            regex: '^(Content-Type|Authorization)$',
+            regex: '^(OR|AND|NOT|Content-Type|Authorization)$',
             match: true,
           },
         },
       ],
+
+      // optional
       '@typescript-eslint/no-explicit-any': 'off',
     },
-  },
+  }
 );

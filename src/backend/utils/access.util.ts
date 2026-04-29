@@ -7,13 +7,13 @@ export class AccessUtil {
   static async getGlobalAccessUserIds(companyCode: string): Promise<string[]> {
     if (!companyCode) return [];
     const accessRecords = await prisma.userAccess.findMany({
-      where: { 
+      where: {
         isGlobalAccess: true,
         company: {
           is: {
-            companyCode: companyCode
-          }
-        }
+            companyCode: companyCode,
+          },
+        },
       },
       select: { userId: true },
     });

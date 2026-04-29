@@ -35,5 +35,6 @@ export const createErrorMiddleware =
       status: 'error',
       statusCode,
       message,
+      ...((err as any).details && { details: (err as any).details }),
     });
   };
