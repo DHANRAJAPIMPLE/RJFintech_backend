@@ -11,10 +11,10 @@ import { AppError } from '../../shared/middlewares/error.middleware';
  * 3. Error Handling: Catches ZodErrors, maps them to user-friendly messages,
  *    and forwards them to the global error handler.
  */
-export const validate = (schema: z.ZodObject<any>) => {
+export const validate = (schema: z.ZodTypeAny) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Logic: Validate the full request object. 
+      // Logic: Validate the full request object.
       // parseAsync validates and returns the data, or throws if data is invalid.
       await schema.parseAsync({
         body: req.body,
@@ -26,11 +26,14 @@ export const validate = (schema: z.ZodObject<any>) => {
       // Logic: Specifically capture validation-related errors from Zod
       if (error instanceof ZodError) {
         // Logic: Convert complex Zod error issues into a single readable string
-        const message = error.issues.map((issue: z.ZodIssue) => `${issue.path.join('.')}: ${issue.message}`).join(', ');
+        const message = error.issues
+          .map(
+            (issue: z.ZodIssue) => `${issue.path.join('.')}: ${issue.message}`,
+          )
+          .join(', ');
         return next(new AppError(message, 400));
       }
       next(error); // Logic: Pass non-validation errors (500s) to global handler
     }
   };
 };
-

@@ -8,7 +8,13 @@
     "start": "tsx src/server.ts",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
-    "build": "tsc"
+    "build": "tsc",
+    "lint": "eslint src",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "keywords": [],
   "author": "",

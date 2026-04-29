@@ -14,10 +14,10 @@ export class AppError extends Error {
  * GLOBAL ERROR HANDLING LOGIC (Backend Service):
  */
 export const errorMiddleware = (
-  err: any,
+  err: Error & { statusCode?: number },
   req: Request,
   res: Response,
-  next: NextFunction,
+  _next: NextFunction,
 ) => {
   const statusCode = err.statusCode || 500;
   const message = err.message || 'Internal Server Error';

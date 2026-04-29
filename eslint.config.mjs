@@ -8,6 +8,14 @@ export default tseslint.config(
   prettier,
   {
     rules: {
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
       '@typescript-eslint/naming-convention': [
         'error',
         {
@@ -17,6 +25,7 @@ export default tseslint.config(
         {
           selector: 'variable',
           format: ['camelCase', 'UPPER_CASE'],
+          leadingUnderscore: 'allow',
         },
         {
           selector: 'typeLike',
@@ -29,12 +38,22 @@ export default tseslint.config(
         {
           selector: 'parameter',
           format: ['camelCase'],
+          leadingUnderscore: 'allow',
         },
         {
           selector: 'function',
           format: ['camelCase'],
         },
+        {
+          selector: 'objectLiteralProperty',
+          format: null,
+          filter: {
+            regex: '^(Content-Type|Authorization)$',
+            match: true,
+          },
+        },
       ],
+      '@typescript-eslint/no-explicit-any': 'off',
     },
   },
 );

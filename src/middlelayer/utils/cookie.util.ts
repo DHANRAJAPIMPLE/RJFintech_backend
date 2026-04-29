@@ -8,19 +8,19 @@ import { config } from '../config';
 
 export const setAuthCookies = (
   res: Response,
-  tokens: { accessToken: string; refreshToken: string; versionHash: string }
+  tokens: { accessToken: string; refreshToken: string; versionHash: string },
 ) => {
-  res.cookie('accessToken', tokens.accessToken, { 
-    ...config.cookieOptions, 
-    maxAge: config.accessTokenMaxAge 
+  res.cookie('accessToken', tokens.accessToken, {
+    ...config.cookieOptions,
+    maxAge: config.accessTokenMaxAge,
   });
-  res.cookie('refreshToken', tokens.refreshToken, { 
-    ...config.cookieOptions, 
-    maxAge: config.refreshTokenMaxAge 
+  res.cookie('refreshToken', tokens.refreshToken, {
+    ...config.cookieOptions,
+    maxAge: config.refreshTokenMaxAge,
   });
-  res.cookie('versionHash', tokens.versionHash, { 
-    ...config.cookieOptions, 
-    maxAge: config.refreshTokenMaxAge 
+  res.cookie('versionHash', tokens.versionHash, {
+    ...config.cookieOptions,
+    maxAge: config.refreshTokenMaxAge,
   });
 };
 

@@ -30,4 +30,3 @@ router.post('/me', authMiddleware, AuthController.me);
 router.post('/logout', AuthController.logout);
 
 export default router;
-

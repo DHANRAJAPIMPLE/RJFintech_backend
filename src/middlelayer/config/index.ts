@@ -9,12 +9,12 @@ export const config = {
 
   cookieOptions: {
     httpOnly: true,
-    
+
     secure: false,
     sameSite: 'lax',
     path: '/',
   },
 
-  accessTokenMaxAge: 15 * 60 * 1000,        // 15 minutes
-  refreshTokenMaxAge: 24 * 60 * 60 * 1000,  // 24 hours
+  accessTokenMaxAge: 15 * 60 * 1000, // 15 minutes
+  refreshTokenMaxAge: 24 * 60 * 60 * 1000, // 24 hours
 } as const;

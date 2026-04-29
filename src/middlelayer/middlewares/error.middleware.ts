@@ -1,7 +1,12 @@
+// need to delete this file
+
 import type { Request, Response, NextFunction } from 'express';
 
 export class AppError extends Error {
-  constructor(public message: string, public statusCode: number = 400) {
+  constructor(
+    public message: string,
+    public statusCode: number = 400,
+  ) {
     super(message);
     Object.setPrototypeOf(this, AppError.prototype);
   }
@@ -17,10 +22,10 @@ export class AppError extends Error {
  *    knows where to find the error message.
  */
 export const errorMiddleware = (
-  err: any,
+  err: Error & { statusCode?: number },
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction,
 ) => {
   const statusCode = err.statusCode || 500;
   const message = err.message || 'Internal Server Error';
@@ -36,4 +41,3 @@ export const errorMiddleware = (
     message,
   });
 };
-

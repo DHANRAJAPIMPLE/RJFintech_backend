@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'access_secret';
-const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'refresh_secret';
+const _REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'refresh_secret';
 
 /**
  * TOKEN UTILITY LOGIC:
@@ -36,4 +36,3 @@ export class TokenUtil {
     return jwt.decode(token);
   }
 }
-

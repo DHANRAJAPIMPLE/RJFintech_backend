@@ -1,18 +1,14 @@
-# API Documentation - Backend Services
+# API Documentation
 
-This document provides a list of available API endpoints with `curl` examples.
-
-## Base URL
-`http://localhost:5000/api` (default development port)
+This document provides details for the Middle-Layer APIs (Port 5000). All APIs require `Content-Type: application/json`. Most protected APIs require an `Authorization` cookie (JWT).
 
 ---
 
-## Authentication Endpoints
+## 1. Authentication Module
 
-### 1. Register User
-Creates a new user account.
-- **Endpoint**: `POST /auth/register`
-- **Body**:
+### Register User
+- **Endpoint**: `POST /api/v1/auth/register`
+- **Request Body**:
 ```json
 {
   "name": "John Doe",
@@ -21,130 +17,240 @@ Creates a new user account.
   "phone": "9876543210"
 }
 ```
-- **Curl Example**:
-```bash
-curl -X POST http://localhost:5000/api/auth/register \
-     -H "Content-Type: application/json" \
-     -d '{"name": "John Doe", "email": "john@example.com", "password": "securepassword123", "phone": "9876543210"}'
-```
-
-### 2. Login User
-Logs in a user and returns an access token. Supports forceful login if already logged in elsewhere.
-- **Endpoint**: `POST /auth/login`
-- **Body**:
+- **Success Response (201)**:
 ```json
 {
-  "email": "john@example.com",
-  "password": "securepassword123",
+  "message": "User registered successfully",
+  "user": {
+    "id": "uuid",
+    "name": "John Doe",
+    "email": "john@example.com"
+  }
+}
+```
+
+### Login User
+- **Endpoint**: `POST /api/v1/auth/login`
+- **Request Body**:
+```json
+{
+  "email": "admin@globaltech.com",
+  "password": "Admin@123",
   "force": 0
 }
 ```
-- **Curl Example**:
-```bash
-curl -X POST http://localhost:5000/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"email": "john@example.com", "password": "securepassword123", "force": 0}'
-
-# If already logged in, returns 409:
-# { "message": "User already logged in another device", "status": 1 }
-```
-
-### 3. Refresh Token
-Exchanges a valid refresh token for a new access token and a new refresh token (rotation).
-- **Endpoint**: `POST /auth/refresh`
-- **Body**: (Optional if cookies are sent)
+- **Success Response (200)**: Sets `accessToken` and `refreshToken` cookies.
 ```json
 {
-  "refreshToken": "YOUR_RAW_REFRESH_TOKEN"
+  "message": "Login successful",
+  "user": {
+    "id": "uuid",
+    "email": "admin@globaltech.com",
+    "name": "Super Admin",
+    "companies": [...]
+  }
 }
 ```
-- **Curl Example**:
-```bash
-curl -X POST http://localhost:5000/api/auth/refresh \
-     -H "Content-Type: application/json" \
-     -d '{"refreshToken": "YOUR_RAW_REFRESH_TOKEN"}'
-```
 
-### 4. Logout User
-Invalidates the current session.
-- **Endpoint**: `POST /auth/logout`
-- **Curl Example**:
-```bash
-curl -X POST http://localhost:5000/api/auth/logout \
-     -H "Content-Type: application/json" \
-     -b "refreshToken=YOUR_REFRESH_TOKEN"
+### Get Current User (Me)
+- **Endpoint**: `GET /api/v1/auth/me`
+- **Success Response (200)**:
+```json
+{
+  "user": {
+    "id": "uuid",
+    "email": "admin@globaltech.com",
+    "name": "Super Admin",
+    "companies": [...]
+  }
+}
 ```
 
 ---
 
-## Company Management Endpoints
+## 2. Onboarding Module
 
-### 5. Get My Companies
-Returns companies mapped to the currently logged-in user.
-- **Endpoint**: `GET /company/my-companies`
-- **Headers**: Requires `Authorization: Bearer <accessToken>` or cookies.
-- **Curl Example**:
-```bash
-curl -X GET http://localhost:5000/api/company/my-companies \
-     -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
-```
-
-### 6. Get Group Companies
-Returns all group companies and their associated child companies.
-- **Endpoint**: `GET /company/groups`
-- **Curl Example**:
-```bash
-curl -X GET http://localhost:5000/api/company/groups \
-     -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
-```
-
-### 7. Register Group & Companies
-Registers a new group company along with multiple child companies.
-- **Endpoint**: `POST /company/register-group`
-- **Body**:
+### Initiate Company Onboarding
+- **Endpoint**: `POST /api/v1/company-settings/initiate`
+- **Request Body**:
 ```json
 {
-  "group_name": "Tech Conglomerate",
-  "group_code": "TC001",
-  "companies": [
+  "group": {
+    "name": "New Group",
+    "groupCode": "OptionalCode",
+    "remarks": "Notes"
+  },
+  "company": {
+    "name": "New Company Ltd",
+    "companyCode": "OptionalCode",
+    "gst": "27AAAAA0000A1Z5",
+    "brand": "BrandName",
+    "ieCode": "IE123",
+    "address": "Company Address",
+    "registeredAt": "2024-04-27"
+  },
+  "signatories": [
     {
-      "company_code": "SFT01",
-      "brand_name": "Soft Solutions",
-      "legal_name": "Soft Solutions Pvt Ltd",
-      "gst_number": "27AAAAA1234A1Z1",
-      "address": "123 Tech Park, Mumbai",
-      "registration_date": "2023-01-01"
+      "name": "Manager Name",
+      "email": "manager@example.com",
+      "phone": "9876543211",
+      "designation": "Director",
+      "employeeId": "EMP002"
     }
   ]
 }
 ```
-- **Curl Example**:
-```bash
-curl -X POST http://localhost:5000/api/company/register-group \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
-     -d '{
-          "group_name": "Tech Conglomerate",
-          "group_code": "TC001",
-          "companies": [
-            {
-              "company_code": "SFT01",
-              "brand_name": "Soft Solutions"
-            }
-          ]
-        }'
+- **Success Response (201)**:
+```json
+{
+  "message": "Onboarding initiated successfully",
+  "companyCode": "GTSOL00127042026",
+  "groupCode": "NEWGROUP27042026"
+}
+```
+
+### Action Company Onboarding (Approve/Reject)
+- **Endpoint**: `POST /api/v1/company-settings/action`
+- **Request Body**:
+```json
+{
+  "id": "onboarding-uuid",
+  "action": "approve",
+  "remark": "Looks good"
+}
+```
+
+### Initiate User Onboarding
+- **Endpoint**: `POST /api/v1/company-settings/user/action`
+- **Request Body**:
+```json
+{
+  "id": "-uuid",
+  "action": "approve",
+  "remark": "Looks good"
+}
+```
+
+
+### Initiate User Onboarding
+- **Endpoint**: `POST /api/v1/company-settings/user/initiate`
+- **Request Body**:
+```json
+{
+  "basicDetails": {
+    "name": "User Name",
+    "email": "user@example.com",
+    "phone": "9876543212",
+    "reportingManager": "admin@globaltech.com",
+    "designation": "Executive",
+    "employeeId": "EMP003"
+  },
+  "permissions": [
+    {
+      "accessType": "PRIMARY",
+      "roleName": "Administrator",
+      "nodePath": "GTSOL001.ROOT"
+    }
+  ]
+}
 ```
 
 ---
 
-## Notes
-- **Cookies**: The API uses HTTP-only cookies for `accessToken`, `refreshToken`, and `versionHash` by default.
-- **Security**: Database IDs are never returned in JSON responses. Identity is managed via `company_code`, `group_code`, and secure sessions.
-- **Error Scenarios**:
-    - **Session Hijacking / Simultaneous Login**: 
-      Returns `401 Unauthorized` with message: `"User already logged in another device"`.
-      Occurs when a token's version hash doesn't match the current active version in the DB.
-    - **Invalid / Expired Session**:
-      Returns `401 Unauthorized` with message: `"Unauthorized - Invalid token"`.
-      Occurs when the JWT is invalid, expired, or the session has been cleared from the backend.
-- **Log Management**: Backend logs suppress stack traces for 4xx errors to keep the console clean.
+## 3. Organization Structure Module
+
+### Initiate Org Request
+- **Endpoint**: `POST /api/v1/company-settings/org/initiate`
+- **Request Body**:
+```json
+{
+  "companyCode": "GTSOL001",
+  "newNodeName": "Sales Department",
+  "nodeType": "DEPARTMENT",
+  "parentNode": {
+    "nodePath": "GTSOL001.ROOT"
+  }
+}
+```
+
+### Approve Org Request
+- **Endpoint**: `POST /api/v1/company-settings/org/approve`
+- **Request Body**:
+```json
+{
+  "id": "request-uuid",
+  "action": "approve",
+  "remark": "Approved"
+}
+```
+
+### Fetch Org Structure
+- **Endpoint**: `POST /api/v1/company-settings/org/fetch`
+- **Request Body**:
+```json
+{
+  "companyCode": "GTSOL001"
+}
+```
+- **Success Response (200)**:
+```json
+{
+  "message": "Organization structure fetched successfully!",
+  "code": 200,
+  "data": [
+    {
+      "nodeName": "Global Tech Solutions",
+      "nodeType": "ROOT",
+      "nodePath": "GTSOL001.ROOT"
+    },
+    {
+      "nodeName": "Sales Department",
+      "nodeType": "DEPARTMENT",
+      "nodePath": "GTSOL001.ROOT.SALES_DEPARTMENT"
+    }
+  ]
+}
+```
+
+---
+
+## 4. Admin & Management
+
+### Fetch All Users
+- **Endpoint**: `GET /api/v1/company-settings/user/fetch-all`
+- **Success Response (200)**:
+```json
+{
+  "message": "Users fetched successfully!",
+  "code": 200,
+  "data": {
+    "activeUsers": [...],
+    "pendingUsers": [
+        {
+            "id": "uuid",
+            "basicDetails": { ... },
+            "primary": [...],
+            "secondary": [...]
+        }
+    ],
+    "inactiveUsers": [...]
+  }
+}
+```
+
+### Fetch Groups & Companies
+- **Endpoint**: `GET /api/v1/admin/groups`
+- **Success Response (200)**:
+```json
+{
+  "message": "Companies fetched successfully!",
+  "companies": {
+    "active": [...],
+    "pending": [...],
+    "inactive": [...]
+  }
+}
+```
+
+
+```

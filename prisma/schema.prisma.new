@@ -187,7 +187,7 @@ model org_structure {
   companyId String  @map("company_id")
   nodepath   String   @unique // ltree style
   nodeName   String  @map("nodename")
-  nodetype   String   // root, division, department, team, plant, location
+  nodetype   String   //
   parentId  String?  @map("parent_id")
   create_at  DateTime @default(now())
 

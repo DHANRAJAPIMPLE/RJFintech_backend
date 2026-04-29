@@ -2,139 +2,190 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 
 export class OrgStructureDbController {
-  static async initiateRequest(
+  // --- Internal Atomic Operations ---
+
+  static async getOrgRequestById(req: Request, res: Response) {
+    const { id } = req.body;
+    const request = await prisma.orgStructureReq.findUnique({
+      where: { id },
+      include: { company: true },
+    });
+    res.json(request);
+  }
+
+  static async getOrgNodeByPath(req: Request, res: Response) {
+    const { nodePath } = req.body;
+    const node = await prisma.orgStructure.findUnique({
+      where: { nodePath },
+    });
+    res.json(node);
+  }
+
+
+
+  // --- Transactional Commit Operations ---
+
+  static async updateOrgRequestStatus(
     req: Request,
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { companyCode, newNodeName, nodeType, parentNode, initiatorId } =
-        req.body;
+      const {
+        id,
+        status, // 'approved' | 'rejected'
+        approverId,
+        remarks,
+        newNodePath,
+        newNodeName,
+        nodeType,
+        parentId,
+      } = req.body;
 
-      const company = await prisma.company.findUnique({
-        where: { companyCode: companyCode },
-      });
-
-      if (!company) {
-        return res
-          .status(404)
-          .json({ success: false, message: 'Company not found' });
+      if (!id || !status) {
+        throw new Error('id and status are required');
       }
 
-      const request = await prisma.orgStructureReq.create({
-        data: {
-          initiatorId,
-          companyId: company.id,
-          data: {
-            newNodeName,
-            nodeType,
-            parentNode, // { nodeName, nodePath }
-          },
-          status: 'pending',
-        },
+      const result = await prisma.$transaction(async (tx) => {
+        const request = await tx.orgStructureReq.findUnique({
+          where: { id },
+          include: { company: true },
+        });
+
+        if (!request) throw new Error('Request not found');
+
+        // ✅ REJECT FLOW
+        if (status.toUpperCase() === 'REJECTED') {
+          const updated = await tx.orgStructureReq.update({
+            where: { id },
+            data: {
+              status: 'REJECTED',
+              remarks,
+            },
+          });
+
+          if (approverId) {
+            await tx.orgHistory.create({
+              data: {
+                companyCode: request.company.companyCode,
+                event: 'REJECTED',
+                eventUserId: approverId,
+                orgReqId: id,
+              },
+            });
+          }
+
+          return updated;
+        }
+
+        // ✅ APPROVE FLOW
+        if (status.toUpperCase() === 'APPROVED') {
+          // validate required fields for approval
+          if (!newNodePath || !newNodeName || !nodeType) {
+            throw new Error('Missing node details for approval');
+          }
+
+          // create org node
+          await tx.orgStructure.create({
+            data: {
+              companyId: request.companyId,
+              nodePath: newNodePath,
+              nodeName: newNodeName,
+              nodeType: nodeType,
+              parentId: parentId || null,
+            },
+          });
+
+          // update request
+          const updated = await tx.orgStructureReq.update({
+            where: { id },
+            data: {
+              status: 'APPROVED',
+              remarks,
+            },
+          });
+
+          // history
+          await tx.orgHistory.create({
+            data: {
+              companyCode: request.company.companyCode,
+              event: 'APPROVED',
+              eventUserId: approverId,
+              orgReqId: id,
+            },
+          });
+
+          return updated;
+        }
+
+        throw new Error('Invalid status value');
       });
 
-      res.status(201).json({
+      res.status(200).json({
         success: true,
-        message: 'Org structure request initiated',
-        requestId: request.id,
+        message:
+          status === 'approved'
+            ? 'Org structure approved'
+            : 'Org structure rejected',
+        data: result,
       });
     } catch (error) {
       next(error);
     }
   }
 
-  static async approveRequest(req: Request, res: Response, next: NextFunction) {
+  static async initiateRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
-      const { requestId, approverId, remarks } = req.body;
-
-      const request = await prisma.orgStructureReq.findUnique({
-        where: { id: requestId },
-        include: { company: true },
-      });
-
-      if (!request) {
-        return res
-          .status(404)
-          .json({ success: false, message: 'Request not found' });
-      }
-
-      if (request.status !== 'pending') {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Request is already processed' });
-      }
-
-      const reqData = request.data as {
-        newNodeName: string;
-        nodeType: string;
-        parentNode: { nodePath: string };
-      };
-      const { newNodeName, nodeType, parentNode } = reqData;
-
-      let newNodePath = '';
-      let parentId: string | null = null;
-
-      if (nodeType === 'ROOT') {
-        newNodePath = `${request.company.companyCode.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase()}.ROOT`;
-      } else {
-        const parentPath = parentNode.nodePath;
-        const safeName = newNodeName
-          .trim()
-          .replace(/[^a-zA-Z0-9_]/g, '_')
-          .toUpperCase();
-        newNodePath = `${parentPath}.${safeName}`;
-
-        const parentNodeRecord = await prisma.orgStructure.findUnique({
-          where: { nodePath: parentPath },
+      const { initiatorId, companyId, ...rest } = req.body;
+      const request = await prisma.$transaction(async (tx) => {
+        const reqRecord = await tx.orgStructureReq.create({
+          data: {
+            ...rest,
+            companyId: companyId,
+          },
+          include: { company: true },
         });
 
-        if (!parentNodeRecord && nodeType !== 'ROOT') {
-          return res
-            .status(400)
-            .json({ success: false, message: 'Parent node not found' });
-        }
-        parentId = parentNodeRecord?.id || null;
-      }
+        await tx.orgHistory.create({
+          data: {
+            companyCode: reqRecord.company.companyCode,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+            orgReqId: reqRecord.id,
+          },
+        });
+        return reqRecord;
+      });
+      res.status(201).json(request);
+    } catch (error) {
+      next(error);
+    }
+  }
 
-      // Check if path already exists
-      const existingNode = await prisma.orgStructure.findUnique({
-        where: { nodePath: newNodePath },
+ static async fetchOrgHistory(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { companyCode } = req.body;
+
+      const histories = await prisma.orgHistory.findMany({
+        where: { companyCode },
+        include: {
+          user: { select: { name: true, email: true } },
+        },
+        orderBy: { createdAt: 'desc' },
       });
 
-      if (existingNode) {
-        return res
-          .status(400)
-          .json({ success: false, message: 'Node path already exists' });
-      }
+      const formattedHistories = histories.map(h => ({
+        companyCode: h.companyCode,
+        event: h.event,
+        createdAt: h.createdAt,
+        user: h.user
+      }));
 
-      // Transaction: Create node and update request
-      await prisma.$transaction([
-        prisma.orgStructure.create({
-          data: {
-            companyId: request.companyId,
-            nodePath: newNodePath,
-            nodeName: newNodeName,
-            nodeType: nodeType,
-            parentId: parentId,
-          },
-        }),
-        prisma.orgStructureReq.update({
-          where: { id: requestId },
-          data: {
-            status: 'approved',
-            approverId,
-            approvedAt: new Date(),
-            remarks,
-          },
-        }),
-      ]);
-
-      res.status(200).json({
-        success: true,
-        message: 'Org structure request approved and node created',
-        nodePath: newNodePath,
-      });
+      res.json(formattedHistories);
     } catch (error) {
       next(error);
     }
@@ -159,17 +210,34 @@ export class OrgStructureDbController {
         orderBy: { nodePath: 'asc' },
       });
 
+      // Fetch pending requests for this company
+      const pendingRequests = await prisma.orgStructureReq.findMany({
+        where: {
+          companyId: company.id,
+          status: 'PENDING',
+        },
+        include: {
+          orgHistories: {
+            where: { event: 'INITIATE' },
+            include: { user: true },
+          },
+        },
+      });
+
       // Map to remove internal IDs and match user's desired format
       const safeNodes = nodes.map((node) => ({
         nodeName: node.nodeName,
         nodeType: node.nodeType,
-        nodePath: node.nodePath,
+        nodePath: node.nodePath
       }));
 
       res.status(200).json({
         message: 'Organization structure fetched successfully!',
         code: 200,
-        data: safeNodes,
+        data: {
+          nodes: safeNodes,
+          pending: pendingRequests,
+        },
       });
     } catch (error) {
       next(error);
