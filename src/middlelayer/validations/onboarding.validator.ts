@@ -101,13 +101,6 @@ export const userOnboardingSchema = z.object({
       .max(20, 'Name too long'),
     email: z.string().trim().toLowerCase().email('Invalid email format'),
     phone: phoneSchema,
-    incorporationDate: z
-      .string()
-      .trim()
-      .refine((val) => !isNaN(Date.parse(val)), {
-        message: 'Invalid date format',
-      })
-      .optional(),
     designation: z
       .string()
       .trim()

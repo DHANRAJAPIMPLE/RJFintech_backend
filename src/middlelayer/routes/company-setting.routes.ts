@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { CompanyController } from '../controllers/company.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import { OrgController } from '../controllers/org.controller';
 import { RoleController } from '../controllers/role.controller';
@@ -9,9 +8,7 @@ const router = Router();
 router.use(authMiddleware);
 
 // -------------company routes------------------------------
-router.post('/initiate', CompanyController.initiateCompanyOnboarding);
-router.post('/action', CompanyController.actionCompanyOnboarding);
-router.post('/fetch-history', CompanyController.fetchCompanyHistory);
+;
 // ----------------------------------------------------------
 
 // -------------user routes----------------------------------

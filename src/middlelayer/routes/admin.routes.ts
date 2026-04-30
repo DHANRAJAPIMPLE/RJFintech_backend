@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AdminController } from '../controllers/admin.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
+import { adminMiddleware } from '../middlewares/admin.middleware';
 
 /**
  * ADMIN ROUTES LOGIC:
@@ -8,9 +9,13 @@ import { authMiddleware } from '../middlewares/auth.middleware';
  */
 const router = Router();
 router.use(authMiddleware);
+router.use(adminMiddleware);
 
 // -------------company routes------------------------------
 router.post('/groups', AdminController.getGroupCompanies);
+router.post('/initiate', AdminController.initiateCompanyOnboarding);
+router.post('/action', AdminController.actionCompanyOnboarding);
+router.post('/fetch-history', AdminController.fetchCompanyHistory)
 // ----------------------------------------------------------
 
 export default router;

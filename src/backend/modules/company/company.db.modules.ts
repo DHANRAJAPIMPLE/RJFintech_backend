@@ -273,13 +273,13 @@ export class CompanyDbController {
           throw new AppError('Onboarding request already processed', 400);
         }
 
-        // Optional: permission check (if stored)
-        if (
-          onboarding.accessibleBy &&
-          !onboarding.accessibleBy.includes(approverId)
-        ) {
-          throw new AppError('Unauthorized to process this request', 403);
-        }
+        // // Optional: permission check (if stored)
+        // if (
+        //   onboarding.accessibleBy &&
+        //   !onboarding.accessibleBy.includes(approverId)
+        // ) {
+        //   throw new AppError('Unauthorized to process this request', 403);
+        // }
 
         // =========================
         // 🔴 REJECT FLOW

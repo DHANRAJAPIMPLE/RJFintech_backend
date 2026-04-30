@@ -76,14 +76,38 @@ export class UserDbController {
         }
       });
 
+      // Fetch manager details for pending onboardings
+      const managerEmails = pendingOnboardings
+        .map((onb: any) => (onb.data as any)?.basicDetails?.reportingManager)
+        .filter(Boolean);
+
+      const managers = await prisma.user.findMany({
+        where: {
+          email: { in: managerEmails },
+        },
+        select: { name: true, email: true },
+      });
+
+      const managerMap = new Map();
+      managers.forEach((m) => managerMap.set(m.email, m));
+
       const enhancedPending = pendingOnboardings.map((onb: any) => {
-        const email = (onb.data as any)?.basicDetails?.email;
+        const dataBlob = onb.data as any;
+        const email = dataBlob?.basicDetails?.email;
+        const managerEmail = dataBlob?.basicDetails?.reportingManager;
+        
         const init = historyMap.get(`${email}_INITIATE`);
         const approve = historyMap.get(`${email}_APPROVE`);
+        const managerInfo = managerMap.get(managerEmail);
+
         return {
           ...onb,
           initiator: init?.user || null,
           approver: approve?.user || null,
+          reportingManagerInfo: managerInfo ? {
+            name: managerInfo.name,
+            email: managerInfo.email
+          } : null
         };
       });
 

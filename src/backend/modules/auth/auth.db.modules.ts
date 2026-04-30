@@ -122,7 +122,7 @@ export class AuthDbController {
     }
   }
 
-  static async createUser(req: Request, res: Response, next: NextFunction) {
+static async createUser(req: Request, res: Response, next: NextFunction) {
     try {
       const { email, password, name, phone } = req.body;
       const user = await prisma.user.create({
@@ -133,6 +133,22 @@ export class AuthDbController {
           phone,
         },
       });
+
+      res.status(201).json(user);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getUserRole(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { userId } = req.body;
+      const user = await prisma.userAccess.findMany({
+         where: {
+            userId,
+            roleCode: 'SAAS_ADMIN',
+         },
+       });
 
       res.status(201).json(user);
     } catch (error) {

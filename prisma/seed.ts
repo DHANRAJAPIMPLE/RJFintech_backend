@@ -1,3 +1,11 @@
+import { config } from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+config({ path: path.resolve(__dirname, '../.env') });
+
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 
@@ -8,6 +16,17 @@ async function main() {
 
   // 1. Seed Roles
   const roles = [
+    {
+      roleCode: 'SAAS_ADMIN',
+      roleName: 'Saas Admin',
+      category: 'SAAS_ADMIN',
+      subCategory: 'SAAS_ADMIN',
+      permissionLevel: 'SAAS_ADMIN',
+      view: true,
+      modify: true,
+      approve: true,
+      initiate: true,
+    },
     {
       roleCode: 'ACCOUNTS_VIEWER',
       roleName: 'Accounts Viewer',
@@ -324,11 +343,8 @@ async function main() {
     },
   });
 
-  await prisma.companyMapping.upsert({
-    where: { id: 'default-mapping' }, // Note: Upsert needs a unique field. id is @id.
-    update: {},
-    create: {
-      id: 'default-mapping',
+  await prisma.companyMapping.create({
+    data: {
       companyId: company.id,
       groupId: group.id,
     },
@@ -362,7 +378,7 @@ async function main() {
   await prisma.userAccess.create({
     data: {
       userId: superAdmin.id,
-      roleCode: null,
+      roleCode: "SAAS_ADMIN",
       nodeId: rootNode.id,
       accessType: null,
       companyId: company.id,

@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,85 +7,57 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum NodeType {
-  ROOT
-  DEPARTMENT
-  TEAM
-  PLANT
-  LOCATION
-}
-
-enum EventType {
-  INITIATE
-  APPROVED
-  REJECTED
-  MODIFY
-}
-
 model User {
-  id        String   @id @default(uuid())
-  name      String
-  email     String   @unique
-  password  String
-  phone     String
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  // Relations
-  userMappings                 UserMapping[]       @relation("UserMappings")
-  managedUsers                 UserMapping[]       @relation("ReportingManager")
-  userActivities               UserActivity[]
-  userAccesses                 UserAccess[]
-
-  // History Relations
-  userHistory    UserHistory[]    @relation("UserHistoryRel")
+  id             String           @id @default(uuid())
+  name           String
+  email          String           @unique
+  password       String
+  phone          String
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
   companyHistory CompanyHistory[] @relation("CompanyHistoryRel")
   orgHistory     OrgHistory[]     @relation("OrgHistoryRel")
+  userAccesses   UserAccess[]
+  userActivities UserActivity[]
+  userHistory    UserHistory[]    @relation("UserHistoryRel")
+  managedUsers   UserMapping[]    @relation("ReportingManager")
+  userMappings   UserMapping[]    @relation("UserMappings")
 
   @@map("user")
 }
 
 model Company {
-  id               String   @id @default(uuid())
-  gstNumber        String   @unique @map("gst_number")
-  legalName        String   @map("legal_name")
+  id               String            @id @default(uuid())
+  gstNumber        String            @unique @map("gst_number")
+  legalName        String            @map("legal_name")
   address          String
   status           Status
-  registrationDate DateTime @map("registration_date")
-  brandName        String   @map("brand_name")
-  iecode           String   @unique
-  companyCode      String   @unique @map("company_code")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
-
-  // Relations
-  userMappings     UserMapping[]
+  registrationDate DateTime          @map("registration_date")
+  brandName        String            @map("brand_name")
+  iecode           String            @unique
+  companyCode      String            @unique @map("company_code")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
   companyMappings  CompanyMapping[]
   orgStructures    OrgStructure[]
   orgStructureReqs OrgStructureReq[]
   userAccesses     UserAccess[]
+  userMappings     UserMapping[]
 
   @@map("company")
 }
 
 model GroupCompany {
-  id        String   @id @default(uuid())
-  name      String
-  status    Status
-  groupCode String   @unique @map("group_code")
-  remarks   String?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  // Relations
+  id              String           @id @default(uuid())
+  name            String
+  status          Status
+  groupCode       String           @unique @map("group_code")
+  remarks         String?
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
   companyMappings CompanyMapping[]
 
   @@map("group_company")
-}
-
-enum Status {
-  ACTIVE
-  INACTIVE
 }
 
 model UserHistory {
@@ -98,9 +67,7 @@ model UserHistory {
   event       EventType
   eventUserId String    @map("event_user_id")
   createdAt   DateTime  @default(now()) @map("created_at")
-
-  // Relations
-  user User @relation("UserHistoryRel", fields: [eventUserId], references: [id])
+  user        User      @relation("UserHistoryRel", fields: [eventUserId], references: [id])
 
   @@map("user_history")
 }
@@ -111,45 +78,39 @@ model CompanyHistory {
   event       EventType
   eventUserId String    @map("event_user_id")
   createdAt   DateTime  @default(now()) @map("created_at")
-
-  // Relations
-  user User @relation("CompanyHistoryRel", fields: [eventUserId], references: [id])
+  user        User      @relation("CompanyHistoryRel", fields: [eventUserId], references: [id])
 
   @@map("company_history")
 }
 
-
-
 model UserMapping {
-  id               String    @id @default(uuid())
-  userId           String    @map("user_id")
-  companyId        String    @map("company_id")
-  reportingManager String?   @map("reporting_manager")
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  companyId        String   @map("company_id")
+  reportingManager String?  @map("reporting_manager")
   status           Status
   designation      String
-  employeeId       String    @map("employee_id")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
-
-  // FK Relations
-  user      User    @relation("UserMappings", fields: [userId], references: [id])
-  company   Company @relation(fields: [companyId], references: [id])
-  manager   User?   @relation("ReportingManager", fields: [reportingManager], references: [id])
-
+  employeeId       String   @map("employee_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  company          Company  @relation(fields: [companyId], references: [id])
+  manager          User?    @relation("ReportingManager", fields: [reportingManager], references: [id])
+  user             User     @relation("UserMappings", fields: [userId], references: [id])
+ 
+  @@unique([userId, companyId])
   @@map("user_mapping")
 }
 
 model CompanyMapping {
-  id        String   @id @default(uuid())
-  companyId String   @map("company_id")
-  groupId   String   @map("group_id")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id        String       @id @default(uuid())
+  companyId String       @map("company_id")
+  groupId   String       @map("group_id")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  company   Company      @relation(fields: [companyId], references: [id])
+  group     GroupCompany @relation(fields: [groupId], references: [id])
 
-  // FK Relations
-  company Company      @relation(fields: [companyId], references: [id])
-  group   GroupCompany @relation(fields: [groupId], references: [id])
-
+  @@unique([groupId, companyId])
   @@map("company_mapping")
 }
 
@@ -162,20 +123,11 @@ model UserActivity {
   userAgent     String    @map("user_agent")
   forceLogToken String?   @map("force_log_token")
   expiryAt      DateTime? @map("expiry_at")
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  // FK Relation
-  user User @relation(fields: [userId], references: [id])
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  user          User      @relation(fields: [userId], references: [id])
 
   @@map("user_activity")
-}
-
-enum OnboardingStatus {
-  PENDING
-  APPROVED
-  REJECTED
 }
 
 model UserOnboarding {
@@ -190,12 +142,6 @@ model UserOnboarding {
   accessibleBy   String[]         @default([]) @map("accessible_by")
 
   @@map("user_onboarding")
-}
-
-
-enum OnboardedType {
-  EXISTING
-  NEW
 }
 
 model CompanyOnboarding {
@@ -222,39 +168,34 @@ model OrgStructureReq {
   remarks      String?
   updatedAt    DateTime         @updatedAt @map("updated_at")
   accessibleBy String[]         @default([]) @map("accessible_by")
-
-  company      Company      @relation(fields: [companyId], references: [id])
-  orgHistories OrgHistory[] @relation("OrgRequestHistory")
+  orgHistories OrgHistory[]     @relation("OrgRequestHistory")
+  company      Company          @relation(fields: [companyId], references: [id])
 
   @@map("org_structure_req")
 }
 
 model OrgHistory {
-  id          String    @id @default(uuid())
-  orgReqId    String    @map("org_req_id")
-  companyCode String    @map("company_code")
+  id          String          @id @default(uuid())
+  orgReqId    String          @map("org_req_id")
+  companyCode String          @map("company_code")
   event       EventType
-  eventUserId String    @map("event_user_id")
-  createdAt   DateTime  @default(now()) @map("created_at")
-
-  // Relations
-  user    User           @relation("OrgHistoryRel", fields: [eventUserId], references: [id])
-  orgReq  OrgStructureReq @relation("OrgRequestHistory", fields: [orgReqId], references: [id])
+  eventUserId String          @map("event_user_id")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  user        User            @relation("OrgHistoryRel", fields: [eventUserId], references: [id])
+  orgReq      OrgStructureReq @relation("OrgRequestHistory", fields: [orgReqId], references: [id])
 
   @@map("org_history")
 }
 
 model OrgStructure {
-  id        String   @id @default(uuid())
-  companyId String   @map("company_id")
-  nodePath  String   @unique @map("node_path")
-  nodeName  String   @map("node_name")
-  nodeType  NodeType @map("node_type")
-  parentId  String?  @map("parent_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  // Relations
-  company    Company         @relation(fields: [companyId], references: [id])
+  id         String         @id @default(uuid())
+  companyId  String         @map("company_id")
+  nodePath   String         @unique @map("node_path")
+  nodeName   String         @map("node_name")
+  nodeType   NodeType       @map("node_type")
+  parentId   String?        @map("parent_id")
+  createdAt  DateTime       @default(now()) @map("created_at")
+  company    Company        @relation(fields: [companyId], references: [id])
   parent     OrgStructure?  @relation("ParentChild", fields: [parentId], references: [id])
   children   OrgStructure[] @relation("ParentChild")
   userAccess UserAccess[]
@@ -263,41 +204,68 @@ model OrgStructure {
 }
 
 model Roles {
-  roleCode        String   @id @map("role_code")
-  roleName        String   @unique @map("role_name")
+  roleCode        String       @id @map("role_code")
+  roleName        String       @unique @map("role_name")
   category        String
-  subCategory     String   @map("sub_category")
-  permissionLevel String?  @map("permission_level")
-  view            Boolean  @default(false)
-  modify          Boolean  @default(false)
-  approve         Boolean  @default(false)
-  initiate        Boolean  @default(false)
-  isActive        Boolean  @default(true) @map("is_active")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-
-  // Relations
-  userAccess UserAccess[]
+  subCategory     String       @map("sub_category")
+  permissionLevel String?      @map("permission_level")
+  view            Boolean      @default(false)
+  modify          Boolean      @default(false)
+  approve         Boolean      @default(false)
+  initiate        Boolean      @default(false)
+  isActive        Boolean      @default(true) @map("is_active")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  userAccess      UserAccess[]
 
   @@map("roles")
 }
 
 model UserAccess {
-  id             String   @id @default(uuid())
-  userId         String   @map("user_id")
-  roleCode       String?  @map("role_code")
-  nodeId         String   @map("node_id")
-  accessType     String?  @map("access_type")
-  companyId      String   @map("company_id")
-  isGlobalAccess Boolean  @default(false) @map("is_global_access")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-
-  // Relations
-  user         User         @relation(fields: [userId], references: [id])
-  role         Roles?       @relation(fields: [roleCode], references: [roleCode])
-  orgStructure OrgStructure @relation(fields: [nodeId], references: [id])
-  company      Company      @relation(fields: [companyId], references: [id])
+  id             String       @id @default(uuid())
+  userId         String       @map("user_id")
+  roleCode       String?      @map("role_code")
+  nodeId         String       @map("node_id")
+  accessType     String?      @map("access_type")
+  companyId      String       @map("company_id")
+  isGlobalAccess Boolean      @default(false) @map("is_global_access")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  company        Company      @relation(fields: [companyId], references: [id])
+  orgStructure   OrgStructure @relation(fields: [nodeId], references: [id])
+  role           Roles?       @relation(fields: [roleCode], references: [roleCode])
+  user           User         @relation(fields: [userId], references: [id])
 
   @@map("user_access")
+}
+
+enum NodeType {
+  ROOT
+  DEPARTMENT
+  TEAM
+  PLANT
+  LOCATION
+}
+
+enum EventType {
+  INITIATE
+  APPROVED
+  REJECTED
+  MODIFY
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+enum OnboardingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OnboardedType {
+  EXISTING
+  NEW
 }
