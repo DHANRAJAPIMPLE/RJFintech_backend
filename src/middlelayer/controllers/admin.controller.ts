@@ -225,8 +225,61 @@ static async initiateCompanyOnboarding(
       const initiatorId = req.user?.id;
       const { group, company, signatories } = validatedData;
 
+
       if (!initiatorId) {
         throw new AppError('Unauthorized', 401);
+      }
+
+      // 1. Check if Company already exists (GST check in Master and Onboarding)
+      const { data: companyCheck, ok: companyCheckOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/company/check-company`,
+        { gstNumber: company.gst }
+      );
+
+      if (companyCheckOk && companyCheck.exists) {
+        throw new AppError(companyCheck.message || 'Company with this GST already exists', 400);
+      }
+
+      // 2. Check if Signatories already exist in other pending company onboardings
+      const { data: signatoryCheck, ok: signatoryCheckOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/company/check-signatories`,
+        { emails: signatories.map(s => s.email) }
+      );
+
+      if (signatoryCheckOk && signatoryCheck.exists) {
+        throw new AppError(signatoryCheck.message || 'One or more signatories are already pending', 400);
+      }
+
+
+
+      // 2. Check if Signatories already exist
+      let existingEmails: string[] = [];
+      for (const signatory of signatories) {
+        // Check in master user table
+        const existingUserRes = await internalPost<any>(
+          `${config.backendAuthUrl}/get-user`,
+          { email: signatory.email },
+        );
+
+        // Check in pending user onboarding table
+        const pendingUserRes = await internalPost<any>(
+          `${config.backendUrl}/internal/user/get-pending-users`,
+          { email: signatory.email },
+        );
+        console.log(existingUserRes, 'existingUserRes');
+        console.log(pendingUserRes, 'pendingUserRes');
+        if (existingUserRes.ok && existingUserRes.data) {
+          existingEmails.push(signatory.email);
+        } else if (pendingUserRes.ok && pendingUserRes.data) {
+          existingEmails.push(signatory.email);
+        }
+      }
+
+      if (existingEmails.length > 0) {
+        throw new AppError(
+          `Following signatory emails already exist in database or pending onboarding: ${existingEmails.join(', ')}`,
+          400,
+        );
       }
 
       // Logic: Handle Group Code
@@ -272,27 +325,16 @@ static async initiateCompanyOnboarding(
       const uniqueEmail = [...new Set(emails)];
       const uniquePhoneNumbers = [...new Set(phoneNumbers)];
 
-      let databaseEmailExists: string = '';
-      for (const signatory of signatories) {
-        const existingUserRes = await internalPost<any>(
-          `${config.backendAuthUrl}/get-user`,
-          { email: signatory.email },
-        );
-        if (existingUserRes.ok) {
-          databaseEmailExists += signatory.email + ',';
-        }
-      }
-
       if (
         uniqueEmail.length !== emails.length ||
-        uniquePhoneNumbers.length !== phoneNumbers.length ||
-        databaseEmailExists !== ''
+        uniquePhoneNumbers.length !== phoneNumbers.length
       ) {
         throw new AppError(
-          `Following users already exist in database: ${databaseEmailExists}`,
+          'Duplicate emails or phone numbers found in signatories list',
           400,
         );
       }
+
 
       // Call Backend to create the record
       const { data, ok, status } = await internalPost(

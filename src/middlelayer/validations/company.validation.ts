@@ -41,13 +41,13 @@ export const companyOnboardingSchema = z.object({
       .min(2, 'Company name must be at least 2 characters')
       .toUpperCase()
       .max(150, 'Company name too long'),
-    gst: z.string().trim().max(15, 'Gst too long'),
+    gst: z.string().trim().min(10, 'Gst too short').max(15, 'Gst too long'),
     brand: z
       .string()
       .trim()
       .min(2, 'Brand name must be at least 2 characters')
       .max(100, 'Brand name too long'),
-    ieCode: z.string().trim().max(10, 'IE Code too long'),
+    ieCode: z.string().trim().min(5, 'IE Code too short').max(10, 'IE Code too long'),
     registeredAt: z
       .string()
       .trim()

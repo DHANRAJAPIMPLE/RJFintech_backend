@@ -516,4 +516,83 @@ export class CompanyDbController {
       next(error);
     }
   }
+  
+  static async checkCompany(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { gstNumber } = req.body;
+
+      // 1. Check GST in master table
+      const masterCheck = await prisma.company.findUnique({
+        where: { gstNumber },
+      });
+      if (masterCheck) {
+        return res.status(200).json({
+          exists: true,
+          message: 'GST Number already exists in master records',
+        });
+      }
+
+      // 2. Check GST in onboarding table (pending requests)
+      const onboardingCheck = await prisma.companyOnboarding.findFirst({
+        where: {
+          status: 'PENDING',
+          data: {
+            path: ['company', 'gst'],
+            equals: gstNumber,
+          },
+        },
+      });
+
+      if (onboardingCheck) {
+        return res.status(200).json({
+          exists: true,
+          message: 'GST Number already exists in pending onboarding',
+        });
+      }
+
+      res.status(200).json({ exists: false });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async checkSignatories(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { emails } = req.body;
+
+      if (!emails || !Array.isArray(emails) || emails.length === 0) {
+        return res.status(200).json({ exists: false });
+      }
+
+      const pendingOnboardings = await prisma.companyOnboarding.findMany({
+        where: { status: 'PENDING' },
+      });
+
+      const existingEmails: string[] = [];
+      pendingOnboardings.forEach((onb) => {
+        const onbData = onb.data as any;
+        const onbSignatories = onbData?.signatories || [];
+        onbSignatories.forEach((s: any) => {
+          if (emails.includes(s.email)) {
+            existingEmails.push(s.email);
+          }
+        });
+      });
+
+      if (existingEmails.length > 0) {
+        return res.status(200).json({
+          exists: true,
+          message: `Following signatories are already part of another pending company onboarding: ${[
+            ...new Set(existingEmails),
+          ].join(', ')}`,
+        });
+      }
+
+      res.status(200).json({ exists: false });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
+
+

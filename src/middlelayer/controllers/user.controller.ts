@@ -69,8 +69,10 @@ export class UserController {
               name: u.name,
               email: u.email,
               phone: u.phone,
+              employeeId: 'N/A',
               createdAt: UserController.formatDate(u.createdAt)
             },
+
             primary: primaryRoles,
             secondary: secondaryRoles,
           });
@@ -161,12 +163,14 @@ export class UserController {
             phone: basic.phone || 'N/A',
             createdAt: UserController.formatDate(onb.createdAt),
             designation: basic.designation || 'N/A',
+            employeeId: basic.employeeId || 'N/A',
             reportingManagerName: onb.reportingManagerInfo?.name || 'N/A',
             reportingManagerEmail: onb.reportingManagerInfo?.email || basic.reportingManager || 'N/A',
             initiatorName: onb.initiator?.name || null,
             initiatorEmail: onb.initiator?.email || null,
             initiatedDate: onb.createdAt,
           },
+
           primary,
           secondary,
         });
@@ -229,7 +233,18 @@ export class UserController {
         throw new AppError('User already exists in pending onboarding', 400);
       }
 
-      // 3. Logic: Validate Permissions (Roles and Nodes)
+      // 3. Logic: Check if user exists as a signatory in pending company onboarding
+      const { data: signatoryCheck, ok: signatoryCheckOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/company/check-signatories`,
+        { emails: [email] }
+      );
+      if (signatoryCheckOk && signatoryCheck.exists) {
+        throw new AppError(signatoryCheck.message || 'User already exists as a signatory in a pending company onboarding', 400);
+      }
+
+
+      // 4. Logic: Validate Permissions (Roles and Nodes)
+
       for (const permission of permissions) {
         const { data: roles, ok: rolesOk } = await internalPost<any>(
           `${config.backendUrl}/internal/roles/fetch`,
@@ -261,7 +276,7 @@ export class UserController {
         }
       }
 
-      // 4. Logic: Determine Company and Group Code
+      // 5. Logic: Determine Company and Group Code
       let companyCode: string | undefined;
       let groupCode: string | undefined;
 
@@ -274,13 +289,13 @@ export class UserController {
         }
       }
 
-      // 5. Logic: Get global access user IDs
+      // 6. Logic: Get global access user IDs
       const { data: globalAccessIds, ok: globalOk } = await internalPost<string[]>(
         `${config.backendUrl}/internal/onboarding/global-access-ids`,
         { companyCode },
       );
 
-      // 6. Call Backend to create the record
+      // 7. Call Backend to create the record
       const {
         data: createRes,
         ok: createOk,

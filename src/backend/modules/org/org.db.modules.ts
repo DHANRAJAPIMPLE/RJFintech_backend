@@ -173,7 +173,61 @@ static async initiateRequest(
     }
   }
 
+  static async validateInitiation(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { companyId, newNodeName, nodeType, parentNode } = req.body;
+
+      // 1. Check if Parent exists in master (if provided)
+      if (parentNode && parentNode.nodePath) {
+        const parentRecord = await prisma.orgStructure.findFirst({
+          where: {
+            companyId,
+            nodePath: parentNode.nodePath,
+            nodeName: parentNode.nodeName,
+          },
+        });
+        if (!parentRecord) {
+          return res.status(400).json({
+            success: false,
+            message: 'Parent node not found in organization structure',
+          });
+        }
+      }
+
+
+      // 3. Check if node request is pending
+      const pendingCheck = await prisma.orgStructureReq.findFirst({
+        where: {
+          companyId,
+          status: 'PENDING',
+          AND: [
+            { data: { path: ['newNodeName'], equals: newNodeName } },
+            { data: { path: ['nodeType'], equals: nodeType } },
+            {
+              data: {
+                path: ['parentNode', 'nodePath'],
+                equals: parentNode?.nodePath || null,
+              },
+            },
+          ],
+        },
+      });
+
+      if (pendingCheck) {
+        return res.status(400).json({
+          success: false,
+          message: `A request for node '${newNodeName}' is already pending for this location`,
+        });
+      }
+
+      res.status(200).json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async fetchOrgHistory(
+
     req: Request,
     res: Response,
     next: NextFunction,

@@ -52,7 +52,26 @@ export class OrgController {
         { companyCode },
       );
 
-      // 3. Create request in Backend
+      // 3. Validate Node Initiation (Check for duplicates and parent existence)
+      const { data: validationRes, ok: validationOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/org/validate-initiation`,
+        {
+          companyId: company?.id,
+          newNodeName,
+          nodeType,
+          parentNode,
+        },
+      );
+
+      if (!validationOk || !validationRes.success) {
+        throw new AppError(
+          validationRes?.message || 'Invalid organization structure request',
+          400,
+        );
+      }
+
+      // 4. Create request in Backend
+
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/org/initiate`,
         {
