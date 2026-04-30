@@ -9,4 +9,5 @@ router.post('/create', UserDbController.createUserOnboarding);
 router.post('/get', UserDbController.getUserOnboardingById);
 router.post('/action', UserDbController.handleUserOnboardingStatus);
 router.post('/history', UserDbController.getUserHistory);
+router.post('/get-pending-users', UserDbController.getPendingUsers);
 export default router;

@@ -360,4 +360,23 @@ export class UserDbController {
       next(error);
     }
   }
+
+  static async getPendingUsers(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { email } = req.body;
+      const user = await prisma.userOnboarding.findFirst({
+        where: {
+          status: 'PENDING',
+          data: {
+            path: ['basicDetails', 'email'],
+            equals: email,
+          },
+        },
+      });
+      res.status(200).json(user);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
+

@@ -3,13 +3,8 @@ import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
-import {
-  userOnboardingSchema,
-  userActionSchema,
-  companyCodeOnly,
-  userStatusUpdateSchema,
-  userHistory,
-} from '../validations/onboarding.validator';
+import { companyCodeOnly } from '../validations/company.validation';
+import {userOnboardingSchema, userActionSchema, userStatusUpdateSchema, userHistory} from "../validations/user.validation";
 
 export class UserController {
   private static formatDate(date: Date | null) {
@@ -218,15 +213,55 @@ export class UserController {
       }
 
       // 2. Logic: Check if user already exists
-      const { data: existingUser } = await internalPost<any>(
+      const { data: existingUser, ok: existsOk } = await internalPost<any>(
         `${config.backendUrl}/internal/onboarding/user/check-exists`,
         { email },
       );
-      if (existingUser) {
+      if (existsOk && existingUser) {
         throw new AppError('User already exists in master table', 400);
       }
 
-      // 3. Logic: Determine Company and Group Code
+      const { data: pendingUsers, ok: pendingOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/user/get-pending-users`,
+        { email },
+      );
+      if (pendingOk && pendingUsers) {
+        throw new AppError('User already exists in pending onboarding', 400);
+      }
+
+      // 3. Logic: Validate Permissions (Roles and Nodes)
+      for (const permission of permissions) {
+        const { data: roles, ok: rolesOk } = await internalPost<any>(
+          `${config.backendUrl}/internal/roles/fetch`,
+          {
+            roleName: permission.roleName,
+            roleCategory: permission.roleCategory,
+            roleSubCategory: permission.roleSubCategory,
+          },
+        );
+
+        if (!rolesOk || !Array.isArray(roles) || roles.length === 0) {
+          throw new AppError(`Role '${permission.roleName}' not found`, 400);
+        }
+
+        const { data: node, ok: nodeOk } = await internalPost<any>(
+          `${config.backendUrl}/internal/org/get-node-by-path-companyid`,
+          {
+            nodePath: permission.nodePath,
+            companyId: manager?.userMappings?.[0]?.companyId,
+          },
+        );
+         console.log(node)
+        
+        if (!nodeOk || !node) {
+          throw new AppError(`Node '${permission.nodePath}' not found`, 400);
+        }
+        if(node.nodeName !== permission.nodeName){
+          throw new AppError(`Node name '${permission.nodeName}' not found`, 400);
+        }
+      }
+
+      // 4. Logic: Determine Company and Group Code
       let companyCode: string | undefined;
       let groupCode: string | undefined;
 
@@ -239,13 +274,13 @@ export class UserController {
         }
       }
 
-      // Logic: Get global access user IDs
-      const { data: globalAccessIds } = await internalPost<string[]>(
+      // 5. Logic: Get global access user IDs
+      const { data: globalAccessIds, ok: globalOk } = await internalPost<string[]>(
         `${config.backendUrl}/internal/onboarding/global-access-ids`,
         { companyCode },
       );
 
-      // Call Backend to create the record
+      // 6. Call Backend to create the record
       const {
         data: createRes,
         ok: createOk,
@@ -259,7 +294,7 @@ export class UserController {
           permissions,
         },
         status: 'PENDING',
-        accessibleBy: globalAccessIds || [],
+        accessibleBy: (globalOk && globalAccessIds) ? globalAccessIds : [],
       });
 
       if (!createOk) {
@@ -278,6 +313,7 @@ export class UserController {
       next(error);
     }
   }
+
 
   static async actionUserOnboarding(
     req: Request & { user?: { id: string } },

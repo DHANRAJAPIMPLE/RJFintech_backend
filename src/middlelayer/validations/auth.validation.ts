@@ -40,7 +40,7 @@ export const loginSchema = z.object({
     .object({
       email: z.string().trim().toLowerCase().email('Invalid email format'),
 
-      password: z.string().min(1, 'Password is required'),
+      password: z.string().min(8, 'Password is required'),
 
       // action: 0 for normal login, 1 for force login
       action: z
@@ -65,5 +65,6 @@ export const loginSchema = z.object({
         message: 'forceLogToken is required when action = 1',
         path: ['forceLogToken'],
       },
-    ),
+    )
+    .strict(),
 });

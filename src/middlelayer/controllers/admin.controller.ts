@@ -5,11 +5,8 @@ import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
-import {
-  companyOnboardingSchema,
-  companyActionSchema,
-  companyHistory,
-} from '../validations/onboarding.validator';
+import { companyOnboardingSchema, companyActionSchema, companyHistory} from '../validations/company.validation';
+
 import { CodeGenUtil } from '../utils/code-gen.util';
 
 export class AdminController {

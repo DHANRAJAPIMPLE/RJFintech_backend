@@ -3,12 +3,9 @@ import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
-import {
-  orgOnboardingSchema,
-  orgOnboardingAction,
-  companyCodeOnly,
-  orgHistory,
-} from '../validations/onboarding.validator';
+import {  companyCodeOnly } from '../validations/company.validation';
+import {orgOnboardingSchema, orgOnboardingAction, orgHistory} from "../validations/org.validation";
+
 
 export class OrgController {
   private static formatDate(date: Date | string | null): string {

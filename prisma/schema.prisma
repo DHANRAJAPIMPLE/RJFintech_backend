@@ -226,7 +226,7 @@ model UserAccess {
   userId         String       @map("user_id")
   roleCode       String?      @map("role_code")
   nodeId         String       @map("node_id")
-  accessType     String?      @map("access_type")
+  accessType     AccessType?  @map("access_type")
   companyId      String       @map("company_id")
   isGlobalAccess Boolean      @default(false) @map("is_global_access")
   createdAt      DateTime     @default(now()) @map("created_at")
@@ -268,4 +268,20 @@ enum OnboardingStatus {
 enum OnboardedType {
   EXISTING
   NEW
+}
+
+enum ApproverType {
+  REPORTING_MANAGER
+  NODE_APPROVER
+  HIERARCHY_APPROVER
+}
+
+enum ApprovalType {
+  AND
+  OR
+}
+
+enum AccessType{
+  PRIMARY
+  SECONDARY
 }

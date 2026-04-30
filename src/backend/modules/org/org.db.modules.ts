@@ -21,6 +21,15 @@ export class OrgStructureDbController {
     res.json(node);
   }
 
+   static async getOrgNodeByPathCompanyId(req: Request, res: Response) {
+    const { nodePath, companyId } = req.body;
+    const node = await prisma.orgStructure.findUnique({
+      where: { nodePath, companyId },
+    });
+    res.json(node);
+  }
+
+
   // --- Transactional Commit Operations ---
 
   static async updateOrgRequestStatus(
@@ -132,7 +141,7 @@ export class OrgStructureDbController {
     }
   }
 
-  static async initiateRequest(
+static async initiateRequest(
     req: Request,
     res: Response,
     next: NextFunction,
