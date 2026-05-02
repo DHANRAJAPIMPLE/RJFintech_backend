@@ -3,9 +3,12 @@ import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
-import {  companyCodeOnly } from '../validations/company.validation';
-import {orgOnboardingSchema, orgOnboardingAction, orgHistory} from "../validations/org.validation";
-
+import { companyCodeOnly } from '../validations/company.validation';
+import {
+  orgOnboardingSchema,
+  orgOnboardingAction,
+  orgHistory,
+} from '../validations/org.validation';
 
 export class OrgController {
   private static formatDate(date: Date | string | null): string {
@@ -46,10 +49,24 @@ export class OrgController {
         );
       }
 
-      // 2. Logic: Get global access IDs
-      const { data: globalAccessIds } = await internalPost<string[]>(
-        `${config.backendUrl}/internal/onboarding/global-access-ids`,
-        { companyCode },
+      // 2. Logic: Get eligible approver IDs (Global Access + Org Structure Managers)
+      const [globalRes, mgrRes] = await Promise.all([
+        internalPost<string[]>(
+          `${config.backendUrl}/internal/onboarding/global-access-ids`,
+          { companyCode },
+        ),
+        internalPost<string[]>(
+          `${config.backendUrl}/internal/onboarding/org-str-mgr-ids`,
+          { companyCode },
+        ),
+      ]);
+
+      const globalAccessIds = globalRes.data || [];
+      const orgStrMgrIds = mgrRes.data || [];
+
+      // Combine and deduplicate
+      const eligibleApprovers = Array.from(
+        new Set([...globalAccessIds, ...orgStrMgrIds]),
       );
 
       // 3. Validate Node Initiation (Check for duplicates and parent existence)
@@ -83,7 +100,7 @@ export class OrgController {
             parentNode,
           },
           status: 'PENDING',
-          accessibleBy: globalAccessIds || [],
+          eligibleApprovers: eligibleApprovers,
         },
       );
 
@@ -139,7 +156,7 @@ export class OrgController {
         throw new AppError('Request is already processed', 400);
       }
 
-      if (!request.accessibleBy.includes(approverId)) {
+      if (!request.eligibleApprovers.includes(approverId)) {
         throw new AppError(
           'Unauthorized: You do not have permission to process this request',
           403,
@@ -248,7 +265,7 @@ export class OrgController {
       // Forward to Backend (5001)
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/org/fetch`,
-        { companyCode },
+        { companyCode, userId },
       );
 
       if (!ok) {
@@ -296,11 +313,12 @@ export class OrgController {
   ) {
     try {
       const { companyCode } = zodParse(orgHistory, req.body);
+      const userId = req.user?.id;
 
       // Forward to Backend (5001)
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/org/fetch-history`,
-        { companyCode },
+        { companyCode, userId },
       );
 
       if (!ok) {
@@ -311,18 +329,13 @@ export class OrgController {
           status,
         );
       }
-      if (!data) {
-        return res.status(404).json({
-          message: 'Organization structure history not found!',
-          code: 404,
-          data: [],
-        });
-      }
-
       res.status(200).json({
-        message: 'Organization structure history fetched successfully!',
+        message:
+          data && data.length > 0
+            ? 'Organization structure history fetched successfully!'
+            : 'Organization structure history not found',
         code: 200,
-        data: data,
+        data: data || [],
       });
     } catch (error) {
       next(error);

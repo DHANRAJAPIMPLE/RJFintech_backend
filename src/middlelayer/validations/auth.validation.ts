@@ -42,6 +42,8 @@ export const loginSchema = z.object({
 
       password: z.string().min(8, 'Password is required'),
 
+      companyCode: z.string().trim().optional(),
+
       // action: 0 for normal login, 1 for force login
       action: z
         .number()

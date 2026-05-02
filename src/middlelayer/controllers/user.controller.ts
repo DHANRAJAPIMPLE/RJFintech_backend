@@ -4,7 +4,12 @@ import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
 import { companyCodeOnly } from '../validations/company.validation';
-import {userOnboardingSchema, userActionSchema, userStatusUpdateSchema, userHistory} from "../validations/user.validation";
+import {
+  userOnboardingSchema,
+  userActionSchema,
+  userStatusUpdateSchema,
+  userHistory,
+} from '../validations/user.validation';
 
 export class UserController {
   private static formatDate(date: Date | null) {
@@ -70,7 +75,7 @@ export class UserController {
               email: u.email,
               phone: u.phone,
               employeeId: 'N/A',
-              createdAt: UserController.formatDate(u.createdAt)
+              createdAt: UserController.formatDate(u.createdAt),
             },
 
             primary: primaryRoles,
@@ -110,8 +115,8 @@ export class UserController {
                 email: u.email,
                 phone: u.phone,
                 createdAt: UserController.formatDate(m.createdAt),
-                designation: m.designation,
-                employeeId: m.employeeId,
+                designation: m.designation || '',
+                employeeId: m.employeeId || '',
                 reportingManagerName: m.manager?.name || 'N/A',
                 reportingManagerEmail: m.manager?.email || 'N/A',
               },
@@ -165,7 +170,10 @@ export class UserController {
             designation: basic.designation || 'N/A',
             employeeId: basic.employeeId || 'N/A',
             reportingManagerName: onb.reportingManagerInfo?.name || 'N/A',
-            reportingManagerEmail: onb.reportingManagerInfo?.email || basic.reportingManager || 'N/A',
+            reportingManagerEmail:
+              onb.reportingManagerInfo?.email ||
+              basic.reportingManager ||
+              'N/A',
             initiatorName: onb.initiator?.name || null,
             initiatorEmail: onb.initiator?.email || null,
             initiatedDate: onb.createdAt,
@@ -234,14 +242,18 @@ export class UserController {
       }
 
       // 3. Logic: Check if user exists as a signatory in pending company onboarding
-      const { data: signatoryCheck, ok: signatoryCheckOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/company/check-signatories`,
-        { emails: [email] }
-      );
+      const { data: signatoryCheck, ok: signatoryCheckOk } =
+        await internalPost<any>(
+          `${config.backendUrl}/internal/company/check-signatories`,
+          { emails: [email] },
+        );
       if (signatoryCheckOk && signatoryCheck.exists) {
-        throw new AppError(signatoryCheck.message || 'User already exists as a signatory in a pending company onboarding', 400);
+        throw new AppError(
+          signatoryCheck.message ||
+            'User already exists as a signatory in a pending company onboarding',
+          400,
+        );
       }
-
 
       // 4. Logic: Validate Permissions (Roles and Nodes)
 
@@ -266,13 +278,15 @@ export class UserController {
             companyId: manager?.userMappings?.[0]?.companyId,
           },
         );
-         console.log(node)
-        
+
         if (!nodeOk || !node) {
           throw new AppError(`Node '${permission.nodePath}' not found`, 400);
         }
-        if(node.nodeName !== permission.nodeName){
-          throw new AppError(`Node name '${permission.nodeName}' not found`, 400);
+        if (node.nodeName !== permission.nodeName) {
+          throw new AppError(
+            `Node name '${permission.nodeName}' not found`,
+            400,
+          );
         }
       }
 
@@ -289,10 +303,24 @@ export class UserController {
         }
       }
 
-      // 6. Logic: Get global access user IDs
-      const { data: globalAccessIds, ok: globalOk } = await internalPost<string[]>(
-        `${config.backendUrl}/internal/onboarding/global-access-ids`,
-        { companyCode },
+      // 6. Logic: Get eligible approver IDs (Global Access + User Access Managers)
+      const [globalRes, mgrRes] = await Promise.all([
+        internalPost<string[]>(
+          `${config.backendUrl}/internal/onboarding/global-access-ids`,
+          { companyCode },
+        ),
+        internalPost<string[]>(
+          `${config.backendUrl}/internal/onboarding/user-acc-mgr-ids`,
+          { companyCode },
+        ),
+      ]);
+
+      const globalAccessIds = globalRes.data || [];
+      const userAccMgrIds = mgrRes.data || [];
+
+      // Combine and deduplicate
+      const eligibleApprovers = Array.from(
+        new Set([...globalAccessIds, ...userAccMgrIds]),
       );
 
       // 7. Call Backend to create the record
@@ -309,7 +337,7 @@ export class UserController {
           permissions,
         },
         status: 'PENDING',
-        accessibleBy: (globalOk && globalAccessIds) ? globalAccessIds : [],
+        eligibleApprovers: eligibleApprovers,
       });
 
       if (!createOk) {
@@ -328,7 +356,6 @@ export class UserController {
       next(error);
     }
   }
-
 
   static async actionUserOnboarding(
     req: Request & { user?: { id: string } },
@@ -365,7 +392,7 @@ export class UserController {
       }
 
       // 3. Logic: Verify permissions
-      if (!onboarding.accessibleBy.includes(approverId)) {
+      if (!onboarding.eligibleApprovers.includes(approverId)) {
         throw new AppError(
           'Unauthorized: You do not have permission to process this request',
           403,
@@ -474,7 +501,10 @@ export class UserController {
       }
 
       res.status(200).json({
-        message: 'User history fetched successfully!',
+        message:
+          data && data.length > 0
+            ? 'User history fetched successfully!'
+            : 'User history not found',
         code: 200,
         data,
       });

@@ -13,6 +13,7 @@ export interface AuthRequest extends Request {
     name: string;
     email: string;
     phone: string;
+    companyId: string;
   };
 }
 
@@ -20,6 +21,7 @@ export interface AuthRequest extends Request {
  * AUTH MIDDLEWARE LOGIC:
  * Refactored to forward verification to the Backend Database Service (5001).
  */
+
 export const authMiddleware = async (
   req: AuthRequest,
   res: Response,
@@ -32,22 +34,27 @@ export const authMiddleware = async (
     const versionHashFromCookie = req.cookies?.versionHash;
 
     let userId: string | null = null;
+    let companyId: string | null = null;
     let isExpired = false;
 
-    // 1. Try to get userId from access token
+    // 1. Try to get userId and companyId from access token
     if (accessToken) {
       try {
         const decoded = TokenUtil.verifyAccessToken(accessToken) as {
           userId: string;
+          companyId: string;
         };
         userId = decoded.userId;
+        companyId = decoded.companyId;
       } catch (err: any) {
         if (err.name === 'TokenExpiredError') {
           isExpired = true;
           const decoded = TokenUtil.decodeToken(accessToken) as {
             userId: string;
+            companyId: string;
           };
           userId = decoded?.userId || null;
+          companyId = decoded?.companyId || null;
         }
       }
     }
@@ -116,15 +123,43 @@ export const authMiddleware = async (
       // Generate and set new access token
       const newAccessToken = TokenUtil.generateAccessToken({
         userId: activity.userId,
+        companyId: activity.companyId,
       });
       res.cookie('accessToken', newAccessToken, {
         ...config.cookieOptions,
         maxAge: config.accessTokenMaxAge,
       });
+      companyId = activity.companyId;
     }
 
-    // 4. Finalize Request
-    req.user = activity.user;
+    // 4. Company Access Control (for non-admin routes)
+    // Admin routes are handled by adminMiddleware, but we ensure basic company matching here
+    const isCompanyRoute = req.originalUrl.includes('/api/v1/company-settings');
+    if (isCompanyRoute) {
+      const requestedCompanyCode =
+        req.body?.companyCode || req.query?.companyCode;
+
+      if (requestedCompanyCode) {
+        const belongsToCompany = activity.user?.userMappings?.some(
+          (m: any) =>
+            m?.company?.companyCode === requestedCompanyCode &&
+            m?.companyId === companyId,
+        );
+
+        if (!belongsToCompany) {
+          throw new AppError(
+            'Unauthorized - You do not belong to this company',
+            403,
+          );
+        }
+      }
+    }
+
+    // 5. Finalize Request
+    req.user = {
+      ...activity.user,
+      companyId: companyId,
+    };
     next();
   } catch (error) {
     if (error instanceof AppError) {

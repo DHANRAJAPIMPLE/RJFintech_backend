@@ -21,14 +21,13 @@ export class OrgStructureDbController {
     res.json(node);
   }
 
-   static async getOrgNodeByPathCompanyId(req: Request, res: Response) {
+  static async getOrgNodeByPathCompanyId(req: Request, res: Response) {
     const { nodePath, companyId } = req.body;
     const node = await prisma.orgStructure.findUnique({
       where: { nodePath, companyId },
     });
     res.json(node);
   }
-
 
   // --- Transactional Commit Operations ---
 
@@ -60,6 +59,15 @@ export class OrgStructureDbController {
         });
 
         if (!request) throw new Error('Request not found');
+
+        // ✅ PERMISSION CHECK
+        if (
+          request.eligibleApprovers &&
+          request.eligibleApprovers.length > 0 &&
+          !request.eligibleApprovers.includes(approverId)
+        ) {
+          throw new Error('Unauthorized to process this request');
+        }
 
         // ✅ REJECT FLOW
         if (status.toUpperCase() === 'REJECTED') {
@@ -141,7 +149,7 @@ export class OrgStructureDbController {
     }
   }
 
-static async initiateRequest(
+  static async initiateRequest(
     req: Request,
     res: Response,
     next: NextFunction,
@@ -173,7 +181,11 @@ static async initiateRequest(
     }
   }
 
-  static async validateInitiation(req: Request, res: Response, next: NextFunction) {
+  static async validateInitiation(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { companyId, newNodeName, nodeType, parentNode } = req.body;
 
@@ -193,7 +205,6 @@ static async initiateRequest(
           });
         }
       }
-
 
       // 3. Check if node request is pending
       const pendingCheck = await prisma.orgStructureReq.findFirst({
@@ -227,7 +238,6 @@ static async initiateRequest(
   }
 
   static async fetchOrgHistory(
-
     req: Request,
     res: Response,
     next: NextFunction,
@@ -239,6 +249,7 @@ static async initiateRequest(
         where: { companyCode },
         include: {
           user: { select: { name: true, email: true } },
+          orgReq: true,
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -248,6 +259,7 @@ static async initiateRequest(
         event: h.event,
         createdAt: h.createdAt,
         user: h.user,
+        newNodeName: (h.orgReq?.data as any)?.newNodeName || 'N/A',
       }));
 
       res.json(formattedHistories);

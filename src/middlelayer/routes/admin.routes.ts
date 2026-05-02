@@ -15,7 +15,7 @@ router.use(adminMiddleware);
 router.post('/groups', AdminController.getGroupCompanies);
 router.post('/initiate', AdminController.initiateCompanyOnboarding);
 router.post('/action', AdminController.actionCompanyOnboarding);
-router.post('/fetch-history', AdminController.fetchCompanyHistory)
+router.post('/fetch-history', AdminController.fetchCompanyHistory);
 // ----------------------------------------------------------
 
 export default router;

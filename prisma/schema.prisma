@@ -22,6 +22,8 @@ model User {
   userHistory    UserHistory[]    @relation("UserHistoryRel")
   managedUsers   UserMapping[]    @relation("ReportingManager")
   userMappings   UserMapping[]    @relation("UserMappings")
+  workflowHistories WorkflowReqHistory[] @relation("WorkflowHistoryRel")
+
 
   @@map("user")
 }
@@ -34,7 +36,7 @@ model Company {
   status           Status
   registrationDate DateTime          @map("registration_date")
   brandName        String            @map("brand_name")
-  iecode           String            @unique
+  ieCode           String            @unique @map("ie_code")
   companyCode      String            @unique @map("company_code")
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
@@ -43,6 +45,9 @@ model Company {
   orgStructureReqs OrgStructureReq[]
   userAccesses     UserAccess[]
   userMappings     UserMapping[]
+  workflows         Workflow[]
+  workflowReqs      WorkflowReq[]
+
 
   @@map("company")
 }
@@ -89,8 +94,8 @@ model UserMapping {
   companyId        String   @map("company_id")
   reportingManager String?  @map("reporting_manager")
   status           Status
-  designation      String
-  employeeId       String   @map("employee_id")
+  designation      String?
+  employeeId       String?   @map("employee_id")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
   company          Company  @relation(fields: [companyId], references: [id])
@@ -117,6 +122,7 @@ model CompanyMapping {
 model UserActivity {
   id            String    @id @default(uuid())
   userId        String    @map("user_id")
+  companyId     String    @map("company_id") 
   refreshToken  String?   @map("refresh_token")
   version       String?
   ipAddress     String    @map("ip_address")
@@ -125,8 +131,10 @@ model UserActivity {
   expiryAt      DateTime? @map("expiry_at")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
+
   user          User      @relation(fields: [userId], references: [id])
 
+  @@unique([userId, companyId])   
   @@map("user_activity")
 }
 
@@ -139,7 +147,7 @@ model UserOnboarding {
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
   approvalRemark String?          @map("approval_remark")
-  accessibleBy   String[]         @default([]) @map("accessible_by")
+  eligibleApprovers   String[]         @default([]) @map("eligible_approvers")
 
   @@map("user_onboarding")
 }
@@ -154,7 +162,7 @@ model CompanyOnboarding {
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
   approvalRemark String?          @map("approval_remark")
-  accessibleBy   String[]         @default([]) @map("accessible_by")
+  eligibleApprovers   String[]         @default([]) @map("eligible_approvers")
 
   @@map("company_onboarding")
 }
@@ -167,7 +175,7 @@ model OrgStructureReq {
   createdAt    DateTime         @default(now()) @map("created_at")
   remarks      String?
   updatedAt    DateTime         @updatedAt @map("updated_at")
-  accessibleBy String[]         @default([]) @map("accessible_by")
+  eligibleApprovers String[]         @default([]) @map("eligible_approvers")
   orgHistories OrgHistory[]     @relation("OrgRequestHistory")
   company      Company          @relation(fields: [companyId], references: [id])
 
@@ -238,6 +246,79 @@ model UserAccess {
 
   @@map("user_access")
 }
+
+model Workflow {
+  id           String       @id @default(uuid())
+  name         String
+  alias        String       @unique
+  module       String
+  subModule    String       @map("sub_module")
+  companyId    String       @map("company_id")
+  
+  l1Approver1  ApproverType? @map("l1_approver1")
+  l1Type       ApprovalType? @map("l1_type")
+  l1Approver2  ApproverType? @map("l1_approver2")
+
+  l2Approver1  ApproverType? @map("l2_approver1")
+  l2Type       ApprovalType? @map("l2_type")
+  l2Approver2  ApproverType? @map("l2_approver2")
+
+  l3Approver1  ApproverType? @map("l3_approver1")
+  l3Type       ApprovalType? @map("l3_type")
+  l3Approver2  ApproverType? @map("l3_approver2")
+
+  l4Approver1  ApproverType? @map("l4_approver1")
+  l4Type       ApprovalType? @map("l4_type")
+  l4Approver2  ApproverType? @map("l4_approver2")
+
+  l5Approver1  ApproverType? @map("l5_approver1")
+  l5Type       ApprovalType? @map("l5_type")
+  l5Approver2  ApproverType? @map("l5_approver2")
+
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  company            Company              @relation(fields: [companyId], references: [id])
+  workflowRequests   WorkflowReq[]
+
+  @@map("workflow")
+}
+
+model WorkflowReq {
+  id             String           @id @default(uuid())
+  groupCode      String?          @map("group_code")
+  companyId      String           @map("company_id")
+  workflowId     String?          @map("workflow_id")
+  data           Json
+  status         OnboardingStatus @default(PENDING)
+  approvalRemark String?          @map("approval_remark")
+  eligibleApprovers   String[]         @default([]) @map("eligible_approvers")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  company          Company              @relation(fields: [companyId], references: [id])
+  workflow         Workflow?            @relation(fields: [workflowId], references: [id])
+
+  workflowHistories WorkflowReqHistory[] @relation("WorkflowRequestHistory")
+
+  @@map("workflow_req")
+}
+
+model WorkflowReqHistory {
+  id            String      @id @default(uuid())
+  workflowReqId String      @map("workflow_req_id")
+  companyCode   String      @map("company_code")
+  event         EventType
+  eventUserId   String      @map("event_user_id")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  user        User        @relation("WorkflowHistoryRel", fields: [eventUserId], references: [id])
+  workflowReq WorkflowReq @relation("WorkflowRequestHistory", fields: [workflowReqId], references: [id])
+
+  @@map("workflow_req_history")
+}
+
+
 
 enum NodeType {
   ROOT

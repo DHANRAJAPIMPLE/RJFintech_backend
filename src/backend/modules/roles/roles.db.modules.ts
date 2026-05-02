@@ -56,16 +56,20 @@ export class RolesDbController {
     }
   }
 
-  static async fetchRole(req: Request, res: Response, next: NextFunction){
+  static async fetchRole(req: Request, res: Response, next: NextFunction) {
     try {
-     const  {roleName, roleCategory, roleSubCategory} = req.body;
-      const roles = await prisma.roles.findMany({ where: { roleName, category: roleCategory, subCategory: roleSubCategory , isActive: true} });
+      const { roleName, roleCategory, roleSubCategory } = req.body;
+      const roles = await prisma.roles.findMany({
+        where: {
+          roleName,
+          category: roleCategory,
+          subCategory: roleSubCategory,
+          isActive: true,
+        },
+      });
       res.status(200).json(roles);
-    
-
     } catch (error) {
       next(error);
     }
-
   }
 }

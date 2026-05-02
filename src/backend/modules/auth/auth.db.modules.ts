@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
+import { Status } from '@prisma/client';
 
 export class AuthDbController {
   static async getByUser(req: Request, res: Response, next: NextFunction) {
@@ -43,7 +44,7 @@ export class AuthDbController {
 
   static async getActivity(req: Request, res: Response, next: NextFunction) {
     try {
-      const { userId, refreshTokenHash } = req.body;
+      const { userId, refreshTokenHash, companyId } = req.body;
 
       if (!userId && !refreshTokenHash) {
         return res.status(400).json({
@@ -54,17 +55,22 @@ export class AuthDbController {
       const activity = await prisma.userActivity.findFirst({
         where: {
           OR: [
-            userId ? { userId } : undefined,
+            userId && companyId
+              ? { userId, companyId }
+              : userId
+                ? { userId }
+                : undefined,
             refreshTokenHash ? { refreshToken: refreshTokenHash } : undefined,
           ].filter(Boolean) as any,
         },
         include: {
           user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
+            include: {
+              userMappings: {
+                include: {
+                  company: true,
+                },
+              },
             },
           },
         },
@@ -85,7 +91,10 @@ export class AuthDbController {
       const { userId, data } = req.body;
 
       const existingActivity = await prisma.userActivity.findFirst({
-        where: { userId },
+        where: {
+          userId,
+          companyId: data.companyId,
+        },
       });
 
       let activity;
@@ -122,7 +131,7 @@ export class AuthDbController {
     }
   }
 
-static async createUser(req: Request, res: Response, next: NextFunction) {
+  static async createUser(req: Request, res: Response, next: NextFunction) {
     try {
       const { email, password, name, phone } = req.body;
       const user = await prisma.user.create({
@@ -140,17 +149,61 @@ static async createUser(req: Request, res: Response, next: NextFunction) {
     }
   }
 
-  static async getUserRole(req: Request, res: Response, next: NextFunction) {
+  static async getUserAdminRole(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { userId } = req.body;
       const user = await prisma.userAccess.findMany({
-         where: {
-            userId,
-            roleCode: 'SAAS_ADMIN',
-         },
-       });
+        where: {
+          userId,
+          roleCode: 'SAAS_ADMIN',
+        },
+      });
 
       res.status(201).json(user);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getUserAccess(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { userId, companyId, module, action } = req.body;
+      if (!userId || !companyId || !module || !action) {
+        return res
+          .status(400)
+          .json({ error: 'userId, companyId, module and action are required' });
+      }
+
+      const isAuthorized = await prisma.userAccess.findFirst({
+        where: {
+          userId,
+          companyId,
+          user: {
+            userMappings: {
+              some: {
+                companyId,
+                status: Status.ACTIVE,
+              },
+            },
+          },
+          OR: [
+            { roleCode: 'SAAS_ADMIN' },
+            { isGlobalAccess: true },
+            {
+              role: {
+                subCategory: module,
+                [action]: true,
+              },
+            },
+          ],
+        },
+      });
+
+      res.status(200).json({ authorized: !!isAuthorized });
     } catch (error) {
       next(error);
     }

@@ -268,18 +268,19 @@ export class CompanyDbController {
         if (!onboarding) {
           throw new AppError('Onboarding request not found', 404);
         }
-        console.log('Status : ', onboarding.status);
+
         if (onboarding.status !== 'PENDING') {
           throw new AppError('Onboarding request already processed', 400);
         }
 
-        // // Optional: permission check (if stored)
-        // if (
-        //   onboarding.accessibleBy &&
-        //   !onboarding.accessibleBy.includes(approverId)
-        // ) {
-        //   throw new AppError('Unauthorized to process this request', 403);
-        // }
+        // ✅ PERMISSION CHECK
+        if (
+          onboarding.eligibleApprovers &&
+          onboarding.eligibleApprovers.length > 0 &&
+          !onboarding.eligibleApprovers.includes(approverId)
+        ) {
+          throw new AppError('Unauthorized to process this request', 403);
+        }
 
         // =========================
         // 🔴 REJECT FLOW
@@ -340,7 +341,7 @@ export class CompanyDbController {
             // Create the new group if it doesn't exist
             groupObj = await tx.groupCompany.create({
               data: {
-                groupName: group.name,
+                name: group.name,
                 groupCode: onboarding.groupCode,
                 status: 'ACTIVE',
               },
@@ -361,7 +362,7 @@ export class CompanyDbController {
               gstNumber: company.gst,
               address: company.address,
               brandName: company.brand,
-              iecode: company.ieCode,
+              ieCode: company.ieCode,
               companyCode: onboarding.companyCode as string,
               registrationDate: company.registeredAt
                 ? new Date(company.registeredAt)
@@ -429,7 +430,7 @@ export class CompanyDbController {
               userId: user.id,
               companyId: newCompany.id,
               status: 'ACTIVE',
-              designation: sig.designation,
+              designation: sig.designation || '',
               employeeId: sig.employeeId || '',
             },
           });
@@ -516,14 +517,14 @@ export class CompanyDbController {
       next(error);
     }
   }
-  
+
   static async checkCompany(req: Request, res: Response, next: NextFunction) {
     try {
-      const { gstNumber } = req.body;
+      const { gstNumber, ieCode } = req.body;
 
       // 1. Check GST in master table
       const masterCheck = await prisma.company.findUnique({
-        where: { gstNumber },
+        where: { gstNumber, ieCode },
       });
       if (masterCheck) {
         return res.status(200).json({
@@ -543,10 +544,27 @@ export class CompanyDbController {
         },
       });
 
+      const onboardingCheckIECode = await prisma.companyOnboarding.findFirst({
+        where: {
+          status: 'PENDING',
+          data: {
+            path: ['company', 'ieCode'],
+            equals: ieCode,
+          },
+        },
+      });
+
       if (onboardingCheck) {
         return res.status(200).json({
           exists: true,
           message: 'GST Number already exists in pending onboarding',
+        });
+      }
+
+      if (onboardingCheckIECode) {
+        return res.status(200).json({
+          exists: true,
+          message: 'IE Code already exists in pending onboarding',
         });
       }
 
@@ -556,7 +574,11 @@ export class CompanyDbController {
     }
   }
 
-  static async checkSignatories(req: Request, res: Response, next: NextFunction) {
+  static async checkSignatories(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { emails } = req.body;
 
@@ -594,5 +616,3 @@ export class CompanyDbController {
     }
   }
 }
-
-

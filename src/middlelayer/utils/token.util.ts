@@ -17,7 +17,10 @@ export class TokenUtil {
   /**
    * Logic: Signs a payload with the private secret to create a one-minute session token.
    */
-  static generateAccessToken(payload: { userId: string }): string {
+  static generateAccessToken(payload: {
+    userId: string;
+    companyId: string;
+  }): string {
     return jwt.sign(payload, ACCESS_SECRET, { expiresIn: '15m' });
   }
 

@@ -13,13 +13,13 @@ const groupCodeSchema = z
   .nullable()
   .optional();
 
-
-
 export const roleUpsertSchema = z.array(
-  z.object({
-    roleName: z.string().trim().min(1, 'Role name is required'),
-    category: z.string().trim().min(1, 'Category is required'),
-    subCategory: z.string().trim().min(1, 'Sub-category is required'),
-    permissionLevel: z.number().int().min(0, 'Permission level must be >= 0'),
-  }).strict(),
+  z
+    .object({
+      roleName: z.string().trim().min(1, 'Role name is required'),
+      category: z.string().trim().min(1, 'Category is required'),
+      subCategory: z.string().trim().min(1, 'Sub-category is required'),
+      permissionLevel: z.number().int().min(0, 'Permission level must be >= 0'),
+    })
+    .strict(),
 );

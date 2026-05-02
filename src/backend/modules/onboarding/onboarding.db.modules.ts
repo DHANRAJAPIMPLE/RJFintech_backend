@@ -64,4 +64,46 @@ export class OnboardingDbController {
     const userIds = await AccessUtil.getGlobalAccessUserIds(companyCode);
     res.json(userIds);
   }
+
+  static async getGlobalAccessUsers(req: Request, res: Response) {
+    const { companyCode } = req.body;
+    const users = await AccessUtil.getGlobalAccessUsers(companyCode);
+    res.json(users);
+  }
+
+  static async getUserAccMgrIds(req: Request, res: Response) {
+    const { companyCode } = req.body;
+    const userIds = await AccessUtil.getUsersByRoleAndAction(
+      companyCode,
+      'USER_ACC_MGR',
+      'approve',
+    );
+    res.json(userIds);
+  }
+
+  static async getOrgStrMgrIds(req: Request, res: Response) {
+    const { companyCode } = req.body;
+    const userIds = await AccessUtil.getUsersByRoleAndAction(
+      companyCode,
+      'ORG_STR_MGR',
+      'approve',
+    );
+    res.json(userIds);
+  }
+
+  static async getWorkFlowMgrIds(req: Request, res: Response) {
+    const { companyCode } = req.body;
+    const userIds = await AccessUtil.getUsersByRoleAndAction(
+      companyCode,
+      'WORK_FLOW_MGR',
+      'approve',
+    );
+    res.json(userIds);
+  }
+
+  static async getSaasAdminIds(req: Request, res: Response) {
+    const { companyCode } = req.body;
+    const userIds = await AccessUtil.getUsersByRole(companyCode, 'SAAS_ADMIN');
+    res.json(userIds);
+  }
 }

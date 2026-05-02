@@ -336,7 +336,7 @@ async function main() {
       gstNumber: '27AAAAA0000A1Z5',
       address: '123 Tech Park, Mumbai, Maharashtra',
       brandName: 'TEST Tech',
-      iecode: '0123456789',
+      ieCode: '0123456789',
       companyCode: 'TEST28042026',
       registrationDate: new Date('2023-01-01'),
       status: 'ACTIVE',

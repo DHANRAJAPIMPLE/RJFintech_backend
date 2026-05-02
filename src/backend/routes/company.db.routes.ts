@@ -13,5 +13,4 @@ router.post('/history', CompanyDbController.fetchCompanyHistory);
 router.post('/check-company', CompanyDbController.checkCompany);
 router.post('/check-signatories', CompanyDbController.checkSignatories);
 
-
 export default router;

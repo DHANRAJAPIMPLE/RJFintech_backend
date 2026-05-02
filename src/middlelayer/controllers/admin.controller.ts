@@ -1,11 +1,14 @@
-
 import type { AuthRequest } from '../middlewares/auth.middleware';
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
-import { companyOnboardingSchema, companyActionSchema, companyHistory} from '../validations/company.validation';
+import {
+  companyOnboardingSchema,
+  companyActionSchema,
+  companyHistory,
+} from '../validations/company.validation';
 
 import { CodeGenUtil } from '../utils/code-gen.util';
 
@@ -51,7 +54,7 @@ export class AdminController {
             name: c.legalName,
             gst: c.gstNumber,
             brand: c.brandName,
-            iecode: c.iecode || '',
+            ieCode: c.ieCode || '',
             registration: c.registrationDate,
             address: c.address || '',
           }));
@@ -64,8 +67,8 @@ export class AdminController {
                     name: um.user.name,
                     email: um.user.email,
                     phone: um.user.phone,
-                    designation: um.designation,
-                    employeeId: um.employeeId,
+                    designation: um.designation || '',
+                    employeeId: um.employeeId || '',
                   });
                 }
               });
@@ -126,7 +129,7 @@ export class AdminController {
               name: c.legalName,
               gst: c.gstNumber,
               brand: c.brandName,
-              iecode: c.iecode || '',
+              ieCode: c.ieCode || '',
               registration: c.registrationDate,
               address: c.address || '',
             },
@@ -135,8 +138,8 @@ export class AdminController {
             name: um.user.name,
             email: um.user.email,
             phone: um.user.phone,
-            designation: um.designation,
-            employeeId: um.employeeId,
+            designation: um.designation || '',
+            employeeId: um.employeeId || '',
           })),
         };
 
@@ -154,15 +157,16 @@ export class AdminController {
         const group = onbData.group || {};
         const company = onbData.company || {};
         const signatories = onbData.signatories || [];
-        const groupCode = onb.groupCode || `SOLO_PENDING_${onb.companyCode || onb.id}`;
+        const groupCode =
+          onb.groupCode || `SOLO_PENDING_${onb.companyCode || onb.id}`;
 
         if (!pendingGroups[groupCode]) {
           pendingGroups[groupCode] = {
             groupDetails: onb.groupCode
               ? {
-                groupCode: onb.groupCode,
-                groupName: group.name || 'Pending Group',
-              }
+                  groupCode: onb.groupCode,
+                  groupName: group.name || 'Pending Group',
+                }
               : null,
             comapnyDetails: [],
             signatories: [],
@@ -170,6 +174,7 @@ export class AdminController {
         }
 
         pendingGroups[groupCode].comapnyDetails.push({
+          companyId: onb.id,
           companyCode: onb.companyCode,
           name: company.name || '',
           gst: company.gst || '',
@@ -215,7 +220,7 @@ export class AdminController {
     }
   }
 
-static async initiateCompanyOnboarding(
+  static async initiateCompanyOnboarding(
     req: Request & { user?: { id: string } },
     res: Response,
     next: NextFunction,
@@ -225,32 +230,38 @@ static async initiateCompanyOnboarding(
       const initiatorId = req.user?.id;
       const { group, company, signatories } = validatedData;
 
-
       if (!initiatorId) {
         throw new AppError('Unauthorized', 401);
       }
 
       // 1. Check if Company already exists (GST check in Master and Onboarding)
-      const { data: companyCheck, ok: companyCheckOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/company/check-company`,
-        { gstNumber: company.gst }
-      );
+      const { data: companyCheck, ok: companyCheckOk } =
+        await internalPost<any>(
+          `${config.backendUrl}/internal/company/check-company`,
+          { gstNumber: company.gst, ieCode: company.ieCode },
+        );
 
       if (companyCheckOk && companyCheck.exists) {
-        throw new AppError(companyCheck.message || 'Company with this GST already exists', 400);
+        throw new AppError(
+          companyCheck.message || 'Company with this GST already exists',
+          400,
+        );
       }
 
       // 2. Check if Signatories already exist in other pending company onboardings
-      const { data: signatoryCheck, ok: signatoryCheckOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/company/check-signatories`,
-        { emails: signatories.map(s => s.email) }
-      );
+      const { data: signatoryCheck, ok: signatoryCheckOk } =
+        await internalPost<any>(
+          `${config.backendUrl}/internal/company/check-signatories`,
+          { emails: signatories.map((s) => s.email) },
+        );
 
       if (signatoryCheckOk && signatoryCheck.exists) {
-        throw new AppError(signatoryCheck.message || 'One or more signatories are already pending', 400);
+        throw new AppError(
+          signatoryCheck.message ||
+            'One or more signatories are already pending',
+          400,
+        );
       }
-
-
 
       // 2. Check if Signatories already exist
       let existingEmails: string[] = [];
@@ -266,8 +277,7 @@ static async initiateCompanyOnboarding(
           `${config.backendUrl}/internal/user/get-pending-users`,
           { email: signatory.email },
         );
-        console.log(existingUserRes, 'existingUserRes');
-        console.log(pendingUserRes, 'pendingUserRes');
+
         if (existingUserRes.ok && existingUserRes.data) {
           existingEmails.push(signatory.email);
         } else if (pendingUserRes.ok && pendingUserRes.data) {
@@ -313,10 +323,19 @@ static async initiateCompanyOnboarding(
         company.name,
       );
 
-      // Logic: Get global access user IDs
-      const { data: globalAccessIds } = await internalPost<string[]>(
-        `${config.backendUrl}/internal/onboarding/global-access-ids`,
-        { companyCode: finalCompanyCode },
+      // Logic: Get eligible approver IDs (Initiator's Company Global Access + SAAS_ADMINs)
+      const initiatorMapping = (req.user as any)?.userMappings?.find(
+        (m: any) => m.companyId === (req.user as any)?.companyId,
+      );
+      const initiatorCompanyCode = initiatorMapping?.company?.companyCode;
+
+      if (!initiatorCompanyCode) {
+        throw new AppError('Initiator company context not found', 400);
+      }
+
+      const { data: eligibleApprovers } = await internalPost<string[]>(
+        `${config.backendUrl}/internal/onboarding/saas-admin-ids`,
+        { companyCode: initiatorCompanyCode },
       );
 
       const emails = signatories.map((signatory) => signatory.email);
@@ -335,7 +354,6 @@ static async initiateCompanyOnboarding(
         );
       }
 
-
       // Call Backend to create the record
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/company/create`,
@@ -349,7 +367,7 @@ static async initiateCompanyOnboarding(
             signatories,
           },
           status: 'PENDING',
-          accessibleBy: globalAccessIds || [],
+          eligibleApprovers: eligibleApprovers,
         },
       );
 
@@ -400,12 +418,12 @@ static async initiateCompanyOnboarding(
       }
 
       // // 3. Logic: Verify permissions
-      // if (!onboarding.accessibleBy.includes(approverId)) {
-      //   throw new AppError(
-      //     'Unauthorized: You do not have permission to process this request',
-      //     403,
-      //   );
-      // }
+      if (!onboarding.eligibleApprovers.includes(approverId)) {
+        throw new AppError(
+          'Unauthorized: You do not have permission to process this request',
+          403,
+        );
+      }
 
       const {
         data: updateStatusRes,
@@ -457,7 +475,10 @@ static async initiateCompanyOnboarding(
       }
 
       res.status(200).json({
-        message: 'Company history fetched successfully!',
+        message:
+          data && data.length > 0
+            ? 'Company history fetched successfully!'
+            : 'Company history not found',
         code: 200,
         data,
       });

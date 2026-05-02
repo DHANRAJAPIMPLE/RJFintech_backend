@@ -34,72 +34,89 @@ export const companyOnboardingSchema = z.object({
     })
     .optional()
     .nullable(),
-  company: z.object({
-    name: z
-      .string()
-      .trim()
-      .min(2, 'Company name must be at least 2 characters')
-      .toUpperCase()
-      .max(150, 'Company name too long'),
-    gst: z.string().trim().min(10, 'Gst too short').max(15, 'Gst too long'),
-    brand: z
-      .string()
-      .trim()
-      .min(2, 'Brand name must be at least 2 characters')
-      .max(100, 'Brand name too long'),
-    ieCode: z.string().trim().min(5, 'IE Code too short').max(10, 'IE Code too long'),
-    registeredAt: z
-      .string()
-      .trim()
-      .refine((val) => !isNaN(Date.parse(val)), {
-        message: 'Invalid registration date format',
-      }),
-    address: z
-      .string()
-      .trim()
-      .min(10, 'Full address is required (min 10 characters)')
-      .max(500, 'Address too long'),
-  }).strict(),
+  company: z
+    .object({
+      name: z
+        .string()
+        .trim()
+        .min(2, 'Company name must be at least 2 characters')
+        .toUpperCase()
+        .max(150, 'Company name too long'),
+      gst: z.string().trim().min(10, 'Gst too short').max(15, 'Gst too long'),
+      brand: z
+        .string()
+        .trim()
+        .min(2, 'Brand name must be at least 2 characters')
+        .max(100, 'Brand name too long'),
+      ieCode: z
+        .string()
+        .trim()
+        .min(5, 'IE Code too short')
+        .max(10, 'IE Code too long'),
+      registeredAt: z
+        .string()
+        .trim()
+        .refine((val) => !isNaN(Date.parse(val)), {
+          message: 'Invalid registration date format',
+        }),
+      address: z
+        .string()
+        .trim()
+        .min(10, 'Full address is required (min 10 characters)')
+        .max(500, 'Address too long'),
+    })
+    .strict(),
   signatories: z
     .array(
-      z.object({
-        name: z
-          .string()
-          .trim()
-          .min(2, 'Name must be at least 2 characters')
-          .max(100, 'Name too long'),
-        email: z.string().trim().toLowerCase().email('Invalid email format'),
-        phone: phoneSchema,
-        designation: z
-          .string()
-          .trim()
-          .min(2, 'Designation must be at least 2 characters')
-          .max(100, 'Designation too long'),
-        employeeId: z
-          .string()
-          .trim()
-          .max(50, 'Employee ID too long')
-          .optional()
-          .nullable(),
-      }).strict(),
+      z
+        .object({
+          name: z
+            .string()
+            .trim()
+            .min(2, 'Name must be at least 2 characters')
+            .max(100, 'Name too long'),
+          email: z.string().trim().toLowerCase().email('Invalid email format'),
+          phone: phoneSchema,
+          designation: z
+            .string()
+            .trim()
+            .min(2, 'Designation must be at least 2 characters')
+            .max(100, 'Designation too long')
+            .optional()
+            .nullable(),
+          employeeId: z
+            .string()
+            .trim()
+            .max(50, 'Employee ID too long')
+            .optional()
+            .nullable(),
+        })
+        .strict(),
     )
     .min(2, 'At least one signatory is required')
     .max(3, 'Maximum 2 signatories allowed'),
-    
 });
 
-export const companyActionSchema = z.object({
-  id: z.string().uuid('Invalid onboarding ID'),
-  action: z.enum(['approve', 'reject']),
-  remark: z.string().trim().min(2, 'Remark too short').max(500, 'Remark too long'),
-}).strict();
+export const companyActionSchema = z
+  .object({
+    id: z.string().uuid('Invalid onboarding ID'),
+    action: z.enum(['approve', 'reject']),
+    remark: z
+      .string()
+      .trim()
+      .min(2, 'Remark too short')
+      .max(500, 'Remark too long'),
+  })
+  .strict();
 
+export const companyHistory = z
+  .object({
+    companyCode: z.string().trim().min(1, 'Company code is required'),
+  })
+  .strict();
 
-export const companyHistory = z.object({
-  companyCode: z.string().trim().min(1, 'Company code is required'),
-}).strict();
-
-
-export const companyCodeOnly = z.object({
-  companyCode: z.string().trim().min(1, 'Company code is required'),
-}).strict();
+export const companyCodeOnly = z
+  .object({
+    companyCode: z.string().trim().min(1, 'Company code is required'),
+  })
+  .strict();

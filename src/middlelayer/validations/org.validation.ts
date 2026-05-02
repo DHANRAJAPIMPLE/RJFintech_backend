@@ -13,25 +13,32 @@ const groupCodeSchema = z
   .nullable()
   .optional();
 
+export const orgOnboardingSchema = z
+  .object({
+    companyCode: z.string().trim().min(1, 'Company code is required'),
+    newNodeName: z.string().trim().min(1, 'New node name is required'),
+    nodeType: z.enum(['ROOT', 'DEPARTMENT', 'TEAM', 'PLANT', 'LOCATION']),
+    parentNode: z.object({
+      nodeName: z.string().trim().min(1, 'Node name is required'),
+      nodePath: z.string().trim().min(1, 'Node path is required'),
+    }),
+  })
+  .strict();
 
+export const orgOnboardingAction = z
+  .object({
+    id: z.string().uuid('Invalid onboarding ID'),
+    action: z.enum(['approve', 'reject']),
+    remark: z
+      .string()
+      .trim()
+      .min(2, 'Remark is too short')
+      .max(500, 'Remark too long'),
+  })
+  .strict();
 
-
-export const orgOnboardingSchema = z.object({
-  companyCode: z.string().trim().min(1, 'Company code is required'),
-  newNodeName: z.string().trim().min(1, 'New node name is required'),
-  nodeType: z.enum(['ROOT', 'DEPARTMENT', 'TEAM', 'PLANT', 'LOCATION']),
-  parentNode: z.object({
-    nodeName: z.string().trim().min(1, 'Node name is required'),
-    nodePath: z.string().trim().min(1, 'Node path is required'),
-  }),
-}).strict();
-
-export const orgOnboardingAction = z.object({
-  id: z.string().uuid('Invalid onboarding ID'),
-  action: z.enum(['approve', 'reject']),
-  remark: z.string().trim().min(2, 'Remark is too short').max(500, 'Remark too long'),
-}).strict();
-
-export const orgHistory = z.object({
-  companyCode: z.string().trim().min(1, 'Company code is required'),
-}).strict();
+export const orgHistory = z
+  .object({
+    companyCode: z.string().trim().min(1, 'Company code is required'),
+  })
+  .strict();

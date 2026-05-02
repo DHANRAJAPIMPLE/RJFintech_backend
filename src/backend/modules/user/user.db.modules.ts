@@ -95,7 +95,7 @@ export class UserDbController {
         const dataBlob = onb.data as any;
         const email = dataBlob?.basicDetails?.email;
         const managerEmail = dataBlob?.basicDetails?.reportingManager;
-        
+
         const init = historyMap.get(`${email}_INITIATE`);
         const approve = historyMap.get(`${email}_APPROVE`);
         const managerInfo = managerMap.get(managerEmail);
@@ -104,10 +104,12 @@ export class UserDbController {
           ...onb,
           initiator: init?.user || null,
           approver: approve?.user || null,
-          reportingManagerInfo: managerInfo ? {
-            name: managerInfo.name,
-            email: managerInfo.email
-          } : null
+          reportingManagerInfo: managerInfo
+            ? {
+                name: managerInfo.name,
+                email: managerInfo.email,
+              }
+            : null,
         };
       });
 
@@ -186,6 +188,15 @@ export class UserDbController {
         throw new AppError('User onboarding request not found', 404);
       }
 
+      // ✅ PERMISSION CHECK
+      if (
+        onboarding.eligibleApprovers &&
+        onboarding.eligibleApprovers.length > 0 &&
+        !onboarding.eligibleApprovers.includes(approverId)
+      ) {
+        throw new AppError('Unauthorized to process this request', 403);
+      }
+
       const data = onboarding.data as any;
       const { basicDetails, permissions } = data || {};
       const { name, email, phone, reportingManager, designation, employeeId } =
@@ -197,6 +208,15 @@ export class UserDbController {
         // =========================
         if (status === 'approve') {
           const manager = await tx.user.findUnique({
+            where: { id: approverId },
+            include: {
+              userMappings: {
+                include: { company: true },
+              },
+            },
+          });
+
+          const reportingManagerCheck = await tx.user.findUnique({
             where: { email: reportingManager },
             include: {
               userMappings: {
@@ -205,6 +225,8 @@ export class UserDbController {
             },
           });
 
+          if (!reportingManagerCheck)
+            throw new AppError('Reporting Manager not found', 404);
           if (!manager) throw new AppError('Manager not found', 404);
 
           let company;
@@ -361,7 +383,11 @@ export class UserDbController {
     }
   }
 
-  static async getPendingUsers(req: Request, res: Response, next: NextFunction) {
+  static async getPendingUsers(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { email } = req.body;
       const user = await prisma.userOnboarding.findFirst({
@@ -378,7 +404,4 @@ export class UserDbController {
       next(error);
     }
   }
-  
-
 }
-
