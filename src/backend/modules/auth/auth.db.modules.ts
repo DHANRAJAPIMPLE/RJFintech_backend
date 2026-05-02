@@ -156,14 +156,21 @@ export class AuthDbController {
   ) {
     try {
       const { userId } = req.body;
-      const user = await prisma.userAccess.findMany({
+      const userAccess = await prisma.userAccess.findMany({
         where: {
           userId,
           roleCode: 'SAAS_ADMIN',
+          user: {
+            userMappings: {
+              some: {
+                status: Status.ACTIVE,
+              },
+            },
+          },
         },
       });
 
-      res.status(201).json(user);
+      res.status(200).json(userAccess);
     } catch (error) {
       next(error);
     }

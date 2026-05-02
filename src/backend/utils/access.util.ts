@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { Status } from '@prisma/client';
 
 export class AccessUtil {
   /**
@@ -18,7 +19,7 @@ export class AccessUtil {
               company: {
                 companyCode: companyCode,
               },
-              status: 'ACTIVE',
+              status: Status.ACTIVE,
             },
           },
         },
@@ -46,7 +47,7 @@ export class AccessUtil {
               company: {
                 companyCode: companyCode,
               },
-              status: 'ACTIVE',
+              status: Status.ACTIVE,
             },
           },
         },
@@ -91,7 +92,7 @@ export class AccessUtil {
               company: {
                 companyCode: companyCode,
               },
-              status: 'ACTIVE',
+              status: Status.ACTIVE,
             },
           },
         },
@@ -127,7 +128,7 @@ export class AccessUtil {
               company: {
                 companyCode: companyCode,
               },
-              status: 'ACTIVE',
+              status: Status.ACTIVE,
             },
           },
         },
