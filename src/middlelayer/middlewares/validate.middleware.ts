@@ -3,13 +3,14 @@ import { z, ZodError } from 'zod';
 import { AppError } from '../../shared/middlewares/error.middleware';
 
 /**
- * VALIDATION MIDDLEWARE LOGIC:
- * Higher-order function that returns a middleware for validating request data.
- * Logic:
- * 1. Schema Parsing: Uses Zod to check body, query, and params against a schema.
- * 2. Async Support: Supports asynchronous validation rules.
- * 3. Error Handling: Catches ZodErrors, maps them to user-friendly messages,
- *    and forwards them to the global error handler.
+ * Validation Middleware:
+ * This middleware uses the Zod library to enforce strict data schemas for incoming requests.
+ * 
+ * Why we use it:
+ * - To ensure that only properly formatted data reaches our controllers.
+ * - To provide clear, automated error messages back to the client when validation fails.
+ * - To decouple validation logic from business logic in the controllers.
+ * - It handles body, query, and path parameters in a single pass.
  */
 export const validate = (schema: z.ZodTypeAny) => {
   return async (req: Request, res: Response, next: NextFunction) => {

@@ -1,10 +1,16 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
-
 import { AppError } from '../../middlewares/error.middleware';
 
+/**
+ * Controller for managing company records, group associations, and the company onboarding lifecycle.
+ * Handles the transition from a pending company request to a live production environment.
+ */
 export class CompanyDbController {
+  /**
+   * Fetches all companies that a specific user is mapped to.
+   */
   static async getMyCompanies(req: Request, res: Response, next: NextFunction) {
     try {
       const { userId } = req.body;
@@ -22,6 +28,14 @@ export class CompanyDbController {
     }
   }
 
+  /**
+   * Fetches a structured view of all company records for the administration panel.
+   * This method performs a multi-step aggregation:
+   * 1. Retrieves Group Companies and their associated Active companies.
+   * 2. Retrieves Solo Companies (those not mapped to any group).
+   * 3. Retrieves Pending Onboarding requests.
+   * 4. Enriches all records with Initiator and Approver data from the history tables.
+   */
   static async getGroupCompanies(
     req: Request,
     res: Response,
@@ -54,6 +68,7 @@ export class CompanyDbController {
           },
         },
       });
+
       // 2. Fetch companies NOT in any group (Solo)
       const soloCompanies = await prisma.company.findMany({
         where: {
@@ -83,7 +98,7 @@ export class CompanyDbController {
         where: { status: 'PENDING' },
       });
 
-      // 4. Fetch history for active and pending records to get initiator/approver
+      // 4. Resolve audit history for all entities to identify who initiated/approved them
       const allActiveCompanyCodes = [
         ...groups.flatMap((g: any) =>
           g.companyMappings.map((cm: any) => cm.company.companyCode),
@@ -111,8 +126,6 @@ export class CompanyDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Map history info for easy lookup
-      // Key: companyCode_event, Value: user details
       const historyMap = new Map();
       histories.forEach((h) => {
         const key = `${h.companyCode}_${h.event}`;
@@ -124,7 +137,7 @@ export class CompanyDbController {
         }
       });
 
-      // 5. Attach history info to groups and companies
+      // 5. Enhance Active data with history
       const enhancedGroups = groups.map((g: any) => {
         const initiateHistory = historyMap.get(`${g.groupCode}_INITIATE`);
         const approveHistory = historyMap.get(`${g.groupCode}_APPROVE`);
@@ -172,7 +185,7 @@ export class CompanyDbController {
         };
       });
 
-      // Also enhance pendingOnboardings if needed
+      // 6. Enhance Pending data with history
       const enhancedPending = pendingOnboardings.map((onb: any) => {
         const init = historyMap.get(`${onb.companyCode}_INITIATE`);
         return {
@@ -191,6 +204,9 @@ export class CompanyDbController {
     }
   }
 
+  /**
+   * Fetches basic company information by its unique company code.
+   */
   static async getCompanyByCode(
     req: Request,
     res: Response,
@@ -207,6 +223,13 @@ export class CompanyDbController {
     }
   }
 
+  /**
+   * Initiates a new company onboarding request.
+   * Performs an atomic transaction to:
+   * 1. Create a CompanyOnboarding record.
+   * 2. Log 'INITIATE' events in CompanyHistory.
+   * 3. Log 'INITIATE' events in UserHistory for all proposed signatories.
+   */
   static async createCompanyOnboarding(req: Request, res: Response) {
     const { initiatorId, ...onboardingData } = req.body;
     const companyCode = onboardingData.companyCode;
@@ -224,7 +247,6 @@ export class CompanyDbController {
           },
         });
 
-        // Add history for each signatory
         const signatories = (onboardingData.data as any)?.signatories || [];
         for (const sig of signatories) {
           if (sig.email) {
@@ -244,6 +266,9 @@ export class CompanyDbController {
     res.status(201).json(onboarding);
   }
 
+  /**
+   * Fetches a specific company onboarding request by ID.
+   */
   static async getCompanyOnboardingById(req: Request, res: Response) {
     const { id } = req.body;
     const onboarding = await prisma.companyOnboarding.findUnique({
@@ -252,6 +277,20 @@ export class CompanyDbController {
     res.json(onboarding);
   }
 
+  /**
+   * Processes the approval or rejection of a company onboarding request.
+   * This is one of the most critical transactions in the system.
+   * Approval logic:
+   * 1. Handles Group Creation: If a group code is provided and doesn't exist, it creates the Group.
+   * 2. Creates Company: Inserts the live production 'Company' record.
+   * 3. Links Company to Group: Creates a 'CompanyMapping' entry.
+   * 4. Initializes Hierarchy: Creates a 'ROOT' organization node for the new company.
+   * 5. Handles Signatories:
+   *    - Creates 'User' records (if they don't exist).
+   *    - Creates 'UserMapping' to link them to the new company.
+   *    - Grants 'isGlobalAccess' permissions at the ROOT node level.
+   * 6. Finalizes Onboarding: Updates request status to 'APPROVED' and logs history.
+   */
   static async handleCompanyOnboardingStatus(
     req: Request,
     res: Response,
@@ -260,7 +299,7 @@ export class CompanyDbController {
     try {
       const { id, action, approverId, remark } = req.body;
       const result = await prisma.$transaction(async (tx) => {
-        // 1. Fetch onboarding
+        // 1. Fetch onboarding record
         const onboarding = await tx.companyOnboarding.findUnique({
           where: { id },
         });
@@ -273,7 +312,7 @@ export class CompanyDbController {
           throw new AppError('Onboarding request already processed', 400);
         }
 
-        // ✅ PERMISSION CHECK
+        // Authorization check
         if (
           onboarding.eligibleApprovers &&
           onboarding.eligibleApprovers.length > 0 &&
@@ -282,9 +321,7 @@ export class CompanyDbController {
           throw new AppError('Unauthorized to process this request', 403);
         }
 
-        // =========================
-        // 🔴 REJECT FLOW
-        // =========================
+        // --- REJECT FLOW ---
         if (action === 'rejected') {
           await tx.companyOnboarding.update({
             where: { id },
@@ -303,7 +340,6 @@ export class CompanyDbController {
               },
             });
 
-            // Add history for each signatory
             const signatories = (onboarding.data as any)?.signatories || [];
             for (const sig of signatories) {
               if (sig.email) {
@@ -322,23 +358,19 @@ export class CompanyDbController {
           return { message: 'Onboarding rejected successfully' };
         }
 
-        // =========================
-        // 🟢 APPROVE FLOW
-        // =========================
-
+        // --- APPROVE FLOW ---
         const data = onboarding.data as any;
         const { group, company, signatories } = data;
 
         let groupId = '';
 
-        // 2. Handle group association or creation
+        // 1. Group Setup
         if (onboarding.groupCode) {
           let groupObj = await tx.groupCompany.findUnique({
             where: { groupCode: onboarding.groupCode },
           });
 
           if (!groupObj && group && group.name) {
-            // Create the new group if it doesn't exist
             groupObj = await tx.groupCompany.create({
               data: {
                 name: group.name,
@@ -353,7 +385,7 @@ export class CompanyDbController {
           }
         }
 
-        // 3. Create company
+        // 2. Company Creation
         let newCompany;
         try {
           newCompany = await tx.company.create({
@@ -381,7 +413,7 @@ export class CompanyDbController {
           throw error;
         }
 
-        // 4. Map company to group
+        // 3. Mapping to Group
         if (groupId) {
           await tx.companyMapping.create({
             data: {
@@ -391,7 +423,7 @@ export class CompanyDbController {
           });
         }
 
-        // 5. Create root org node
+        // 4. Hierarchical Root Node
         const nodePath = (onboarding.companyCode as string)
           .replace(/[^a-zA-Z0-9]/g, '')
           .toUpperCase();
@@ -406,7 +438,7 @@ export class CompanyDbController {
           },
         });
 
-        // 6. Handle signatories
+        // 5. Signatories Setup
         for (const sig of signatories) {
           let user = await tx.user.findUnique({
             where: { email: sig.email },
@@ -425,6 +457,7 @@ export class CompanyDbController {
             });
           }
 
+          // Map user to company
           await tx.userMapping.create({
             data: {
               userId: user.id,
@@ -435,6 +468,7 @@ export class CompanyDbController {
             },
           });
 
+          // Grant Global Access to Signatories
           await tx.userAccess.create({
             data: {
               userId: user.id,
@@ -446,7 +480,7 @@ export class CompanyDbController {
             },
           });
 
-          // 6.2 Add User History for signatory approval
+          // Log signatory approval history
           await tx.userHistory.create({
             data: {
               email: sig.email,
@@ -457,7 +491,7 @@ export class CompanyDbController {
           });
         }
 
-        // 7. Update onboarding status
+        // 6. Finalize request
         await tx.companyOnboarding.update({
           where: { id },
           data: {
@@ -466,7 +500,7 @@ export class CompanyDbController {
           },
         });
 
-        // 8. History
+        // 7. Log company-level history
         if (onboarding.companyCode) {
           await tx.companyHistory.create({
             data: {
@@ -489,6 +523,9 @@ export class CompanyDbController {
     }
   }
 
+  /**
+   * Fetches the audit trail for a specific company code.
+   */
   static async fetchCompanyHistory(
     req: Request,
     res: Response,
@@ -518,53 +555,40 @@ export class CompanyDbController {
     }
   }
 
+  /**
+   * Validates if a GST Number or IE Code is already in use.
+   * Scans both production records and pending onboarding requests.
+   */
   static async checkCompany(req: Request, res: Response, next: NextFunction) {
     try {
       const { gstNumber, ieCode } = req.body;
 
-      // 1. Check GST in master table
-      const masterCheck = await prisma.company.findUnique({
-        where: { gstNumber, ieCode },
+      // 1. Check master records
+      const masterCheck = await prisma.company.findFirst({
+        where: { OR: [{ gstNumber }, { ieCode }] },
       });
       if (masterCheck) {
         return res.status(200).json({
           exists: true,
-          message: 'GST Number already exists in master records',
+          message: 'GST Number or IE Code already exists in master records',
         });
       }
 
-      // 2. Check GST in onboarding table (pending requests)
+      // 2. Check pending onboarding requests
       const onboardingCheck = await prisma.companyOnboarding.findFirst({
         where: {
           status: 'PENDING',
-          data: {
-            path: ['company', 'gst'],
-            equals: gstNumber,
-          },
-        },
-      });
-
-      const onboardingCheckIECode = await prisma.companyOnboarding.findFirst({
-        where: {
-          status: 'PENDING',
-          data: {
-            path: ['company', 'ieCode'],
-            equals: ieCode,
-          },
+          OR: [
+            { data: { path: ['company', 'gst'], equals: gstNumber } },
+            { data: { path: ['company', 'ieCode'], equals: ieCode } },
+          ],
         },
       });
 
       if (onboardingCheck) {
         return res.status(200).json({
           exists: true,
-          message: 'GST Number already exists in pending onboarding',
-        });
-      }
-
-      if (onboardingCheckIECode) {
-        return res.status(200).json({
-          exists: true,
-          message: 'IE Code already exists in pending onboarding',
+          message: 'GST Number or IE Code already exists in pending onboarding',
         });
       }
 
@@ -574,6 +598,10 @@ export class CompanyDbController {
     }
   }
 
+  /**
+   * Checks if any of the provided signatory emails are already associated with a PENDING onboarding request.
+   * Prevents signatory collision across different company onboarding attempts.
+   */
   static async checkSignatories(
     req: Request,
     res: Response,

@@ -14,7 +14,6 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('Seeding database...');
 
-  // 1. Seed Roles
   const roles = [
     {
       roleCode: 'SAAS_ADMIN',

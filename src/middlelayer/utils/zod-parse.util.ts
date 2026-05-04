@@ -2,12 +2,13 @@ import { ZodSchema } from 'zod';
 import { AppError } from '../../shared/middlewares/error.middleware';
 
 /**
- * Parses and validates `data` against the provided Zod `schema`.
- * Throws an `AppError` with status 400 and a readable `details` field
- * if validation fails, so the global error middleware forwards it to
- * the frontend in a consistent shape:
- *
- *   { status: 'error', statusCode: 400, message: 'Validation failed', details: [...] }
+ * Zod Parse Utility:
+ * A wrapper around Zod's safeParse that standardizes how validation errors are handled.
+ * 
+ * Why we use it:
+ * - To convert complex Zod validation error objects into a flat, readable 'details' array.
+ * - To throw a standardized 'AppError' that the global error middleware can easily process.
+ * - It ensures that the frontend receives clear information about which specific fields failed validation.
  */
 export function zodParse<T>(schema: ZodSchema<T>, data: unknown): T {
   const result = schema.safeParse(data);

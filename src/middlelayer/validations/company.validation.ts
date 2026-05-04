@@ -1,3 +1,12 @@
+/**
+ * Company Validation:
+ * Centralizes validation logic for company-related requests.
+ * 
+ * Why we use it:
+ * - To ensure company onboarding data (GST, IE Code, Address) meets legal and system requirements.
+ * - To validate signatory details and enforce business rules (e.g., min/max number of signatories).
+ * - To provide strict typing for company actions (approve/reject) and history lookups.
+ */
 import { z } from 'zod';
 
 const phoneSchema = z

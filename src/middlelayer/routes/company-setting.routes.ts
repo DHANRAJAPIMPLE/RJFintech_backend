@@ -1,9 +1,22 @@
+/**
+ * Company Setting Routes:
+ * This module consolidates all routes related to company-specific configurations, 
+ * including User Management, Organizational Structure, Workflows, and Roles.
+ * 
+ * Why we use it:
+ * - To group related functional areas under a common /company-settings prefix.
+ * - It enforces a double-layered security check:
+ *   1. 'authMiddleware' for general session validity.
+ *   2. 'authorize' middleware for granular, module-specific permissions 
+ *      (e.g., 'initiate' permission for 'USER_ACC' module).
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import { OrgController } from '../controllers/org.controller';
 import { RoleController } from '../controllers/role.controller';
 import { UserController } from '../controllers/user.controller';
 import { WorkflowController } from '../controllers/workflow.controller';
+
 import { authorize } from '../middlewares/access.middleware';
 
 const router = Router();
@@ -60,16 +73,33 @@ router.post(
 );
 // ----------------------------------------------------------
 
+// --------------workflow routes------------------------------
+router.post(
+  '/workflow/initiate',
+  authorize('initiate', 'WORK_FLOW'),
+  WorkflowController.initiateWorkflow,
+);
+router.post(
+  '/workflow/action',
+  authorize('approve', 'WORK_FLOW'),
+  WorkflowController.actionWorkflow,
+);
+router.post(
+  '/workflow/fetch',
+  authorize('view', 'WORK_FLOW'),
+  WorkflowController.fetchAllWorkflows,
+);
+router.post(
+  '/workflow/fetch-history',
+  authorize('view', 'WORK_FLOW'),
+  WorkflowController.fetchWorkflowHistory,
+);
+
+// ----------------------------------------------------------
+
 // --------------roles routes--------------------------------
 router.post('/role/create', RoleController.createRoles);
 router.post('/role/fetch-all', RoleController.fetchAllRoles);
-// ----------------------------------------------------------
-
-// --------------workflow routes------------------------------
-router.post('/workflow/initiate', WorkflowController.initiateWorkflow);
-router.post('/workflow/action', WorkflowController.approveWorkflowAction);
-router.post('/workflow/fetch', WorkflowController.fetchWorkflows);
-router.post('/workflow/fetch-history', WorkflowController.fetchWorkflowHistory);
 // ----------------------------------------------------------
 
 export default router;

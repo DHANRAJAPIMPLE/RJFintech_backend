@@ -1,3 +1,13 @@
+/**
+ * Workflow Validation:
+ * Defines schemas for complex workflow configuration and processing.
+ * 
+ * Why we use it:
+ * - To validate multi-level approval hierarchies (L1 through L5).
+ * - To ensure that approver types (REPORTING_MANAGER, NODE_APPROVER, etc.) 
+ *   and logical operators (AND/OR) are correctly defined.
+ * - To strictly type workflow initiation, actions, and history lookups.
+ */
 import { z } from 'zod';
 
 const approverTypeEnum = z.enum([
@@ -9,12 +19,12 @@ const approvalTypeEnum = z.enum(['AND', 'OR']);
 
 const levelSchema = z
   .object({
-    approver1: approverTypeEnum.nullable().optional(),
-    type: approvalTypeEnum.nullable().optional(),
+    approver1: approverTypeEnum,
+    type: approvalTypeEnum.default('OR'),
     approver2: approverTypeEnum.nullable().optional(),
   })
-  .optional()
-  .nullable();
+  .nullable()
+  .optional();
 
 export const workflowOnboardingSchema = z
   .object({
@@ -23,16 +33,18 @@ export const workflowOnboardingSchema = z
       .string()
       .trim()
       .min(2, 'Workflow name must be at least 2 characters'),
-    alias: z.string().trim().min(2, 'Alias must be at least 2 characters'),
     module: z.string().trim().min(1, 'Module is required'),
+    nodePath: z.string().trim().min(1, 'Node path is required'),
     subModule: z.string().trim().min(1, 'Sub-module is required'),
-    levels: z.object({
-      l1: levelSchema,
-      l2: levelSchema,
-      l3: levelSchema,
-      l4: levelSchema,
-      l5: levelSchema,
-    }),
+    levels: z
+      .object({
+        l1: levelSchema,
+        l2: levelSchema,
+        l3: levelSchema,
+        l4: levelSchema,
+        l5: levelSchema,
+      })
+      .optional(),
   })
   .strict();
 
@@ -50,12 +62,18 @@ export const workflowActionSchema = z
 
 export const workflowHistorySchema = z
   .object({
-    alias: z.string().trim().min(1, 'Alias is required'),
+    workflowId: z.string().uuid('Invalid workflow ID').optional(),
   })
   .strict();
 
 export const companyCodeOnlySchema = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
+  })
+  .strict();
+
+export const workflowRequestsSchema = z
+  .object({
+    workflowId: z.string().uuid('Invalid workflow ID'),
   })
   .strict();

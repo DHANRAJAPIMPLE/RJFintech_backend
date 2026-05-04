@@ -1,3 +1,12 @@
+/**
+ * Org Validation:
+ * Defines schemas for managing organizational structure changes.
+ * 
+ * Why we use it:
+ * - To validate requests for creating new organizational nodes (type, name, parent context).
+ * - To ensure that approval/rejection actions on org changes include required metadata and remarks.
+ * - To enforce correct formatting for company-wide organizational history lookups.
+ */
 import { z } from 'zod';
 
 const phoneSchema = z

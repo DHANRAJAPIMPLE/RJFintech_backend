@@ -1,3 +1,15 @@
+/**
+ * UserController:
+ * Manages user-related operations and onboarding workflows.
+ * Core functionalities:
+ * - Fetching all users (active, pending, inactive) for a specific company.
+ * - Initiating user onboarding with detailed basic info and permission sets.
+ * - Validating reporting managers and existing user records across master and onboarding tables.
+ * - Processing user onboarding actions (approve/reject).
+ * - Toggling user active/inactive status.
+ * - Retrieving user action history.
+ * It coordinates between multiple backend endpoints to ensure data integrity and permission consistency.
+ */
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
@@ -303,24 +315,29 @@ export class UserController {
         }
       }
 
-      // 6. Logic: Get eligible approver IDs (Global Access + User Access Managers)
-      const [globalRes, mgrRes] = await Promise.all([
+      // 6. Logic: Get eligible approver IDs (Global Access + User Access Managers + SAAS_ADMIN)
+      const [globalRes, mgrRes, adminRes] = await Promise.all([
         internalPost<string[]>(
           `${config.backendUrl}/internal/onboarding/global-access-ids`,
           { companyCode },
         ),
         internalPost<string[]>(
-          `${config.backendUrl}/internal/onboarding/user-acc-mgr-ids`,
+          `${config.backendUrl}/internal/onboarding/approver-ids`,
+          { companyCode, roleCode: 'USER_ACC_MGR' },
+        ),
+        internalPost<string[]>(
+          `${config.backendUrl}/internal/onboarding/saas-admin-ids`,
           { companyCode },
         ),
       ]);
 
-      const globalAccessIds = globalRes.data || [];
-      const userAccMgrIds = mgrRes.data || [];
-
       // Combine and deduplicate
       const eligibleApprovers = Array.from(
-        new Set([...globalAccessIds, ...userAccMgrIds]),
+        new Set([
+          ...(globalRes.data || []),
+          ...(mgrRes.data || []),
+          ...(adminRes.data || []),
+        ]),
       );
 
       // 7. Call Backend to create the record

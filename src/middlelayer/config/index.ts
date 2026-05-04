@@ -1,6 +1,8 @@
 /**
  * MIDDLE LAYER CONFIGURATION:
  * Centralizes all environment-specific and policy constants.
+ * This is used to manage URLs for backend communication, cookie policies, 
+ * and token expiration times in a single location for easier maintenance.
  */
 export const config = {
   backendUrl: process.env.BACKEND_URL || 'http://localhost:5001',

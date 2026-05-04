@@ -1,3 +1,11 @@
+/**
+ * RoleController:
+ * Manages user roles and permissions within the system.
+ * It provides functionality to:
+ * - Create or update multiple roles (upsert) by communicating with the backend.
+ * - Fetch a complete list of all available roles for assignment and management.
+ * - Format role data for consistent presentation in the frontend.
+ */
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';

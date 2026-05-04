@@ -1,3 +1,14 @@
+/**
+ * AuthController:
+ * Manages user authentication and session lifecycle.
+ * Key responsibilities include:
+ * - User registration with password hashing in the middle layer.
+ * - User login with multi-device login detection and force-login logic.
+ * - Session maintenance via refresh tokens and versioning.
+ * - Secure logout by invalidating sessions in the backend.
+ * - Providing current user profile information ('me' endpoint).
+ * It uses internal fetch utilities to communicate with the backend auth services.
+ */
 import type { Request, Response, NextFunction } from 'express';
 import requestIp from 'request-ip';
 import { AppError } from '../../shared/middlewares/error.middleware';

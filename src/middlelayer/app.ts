@@ -1,3 +1,8 @@
+/**
+ * This file serves as the main entry point for the Middle Layer application.
+ * It initializes the Express app, sets up global middlewares (CORS, JSON parsing, Cookie parsing),
+ * defines the API routes, and configures global error handling.
+ */
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';

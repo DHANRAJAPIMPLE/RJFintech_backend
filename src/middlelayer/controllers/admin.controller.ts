@@ -1,3 +1,13 @@
+/**
+ * AdminController:
+ * This controller handles administrative tasks related to company management.
+ * It provides functionality for:
+ * - Fetching group-wise company lists (active, inactive, pending).
+ * - Initiating new company onboarding processes.
+ * - Approving or rejecting company onboarding requests.
+ * - Retrieving history of actions performed on a specific company.
+ * It interacts with the backend service through internal API calls.
+ */
 import type { AuthRequest } from '../middlewares/auth.middleware';
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';

@@ -208,6 +208,8 @@ model OrgStructure {
   children   OrgStructure[] @relation("ParentChild")
   userAccess UserAccess[]
 
+  workflows Workflow[]
+
   @@map("org_structure")
 }
 
@@ -248,56 +250,53 @@ model UserAccess {
 }
 
 model Workflow {
-  id           String       @id @default(uuid())
+  id           String        @id @default(uuid())
   name         String
-  alias        String       @unique
+  alias        String
+  nodeId       String        @map("node_id")
   module       String
-  subModule    String       @map("sub_module")
-  companyId    String       @map("company_id")
-  
-  l1Approver1  ApproverType? @map("l1_approver1")
-  l1Type       ApprovalType? @map("l1_type")
-  l1Approver2  ApproverType? @map("l1_approver2")
+  subModule    String        @map("sub_module")
+  companyId    String        @map("company_id")
 
-  l2Approver1  ApproverType? @map("l2_approver1")
-  l2Type       ApprovalType? @map("l2_type")
-  l2Approver2  ApproverType? @map("l2_approver2")
+  orgStructure OrgStructure  @relation(fields: [nodeId], references: [id])
+  company      Company       @relation(fields: [companyId], references: [id])
 
-  l3Approver1  ApproverType? @map("l3_approver1")
-  l3Type       ApprovalType? @map("l3_type")
-  l3Approver2  ApproverType? @map("l3_approver2")
-
-  l4Approver1  ApproverType? @map("l4_approver1")
-  l4Type       ApprovalType? @map("l4_type")
-  l4Approver2  ApproverType? @map("l4_approver2")
-
-  l5Approver1  ApproverType? @map("l5_approver1")
-  l5Type       ApprovalType? @map("l5_type")
-  l5Approver2  ApproverType? @map("l5_approver2")
+  workflowReqIds String[]      @default([]) @map("workflow_req_ids")
+  levels       WorkflowLevel[]
 
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
 
-  company            Company              @relation(fields: [companyId], references: [id])
-  workflowRequests   WorkflowReq[]
-
   @@map("workflow")
+}
+
+model WorkflowLevel {
+  id            String        @id @default(uuid())
+  workflowId    String        @map("workflow_id")
+  level         Int
+  approver1     ApproverType
+  approver2     ApproverType?
+  approverType  ApprovalType  @map("approver_type")
+
+  workflow      Workflow @relation(fields: [workflowId], references: [id])
+
+  @@unique([workflowId, level])
+  @@map("workflow_level")
 }
 
 model WorkflowReq {
   id             String           @id @default(uuid())
-  groupCode      String?          @map("group_code")
   companyId      String           @map("company_id")
-  workflowId     String?          @map("workflow_id")
+
   data           Json
   status         OnboardingStatus @default(PENDING)
   approvalRemark String?          @map("approval_remark")
-  eligibleApprovers   String[]         @default([]) @map("eligible_approvers")
+  eligibleApprovers String[]      @default([]) @map("eligible_approvers")
+
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
-  company          Company              @relation(fields: [companyId], references: [id])
-  workflow         Workflow?            @relation(fields: [workflowId], references: [id])
+  company        Company          @relation(fields: [companyId], references: [id])
 
   workflowHistories WorkflowReqHistory[] @relation("WorkflowRequestHistory")
 

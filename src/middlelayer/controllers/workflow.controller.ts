@@ -1,3 +1,14 @@
+/**
+ * WorkflowController:
+ * Manages the initiation and approval process of various business workflows.
+ * Key responsibilities:
+ * - Initiating new workflow requests for specific organizational nodes.
+ * - Validating company and node existence before initiation.
+ * - Determining eligible approvers based on organizational hierarchy and roles.
+ * - Processing workflow actions (approval/rejection) and updating request status.
+ * - Fetching active workflows and pending requests for a company.
+ * - Retrieving the history of actions taken on workflows.
+ */
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
@@ -7,19 +18,9 @@ import {
   workflowOnboardingSchema,
   workflowActionSchema,
   workflowHistorySchema,
-  companyCodeOnlySchema,
 } from '../validations/workflow.validation';
 
 export class WorkflowController {
-  private static formatDate(date: Date | string | null): string {
-    if (!date) return 'N/A';
-    const d = new Date(date);
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
-  }
-
   static async initiateWorkflow(
     req: Request & { user?: { id: string } },
     res: Response,
@@ -28,14 +29,13 @@ export class WorkflowController {
     try {
       const validatedData = zodParse(workflowOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { companyCode, name, alias, module, subModule, levels } =
-        validatedData;
+      const { companyCode, nodePath } = validatedData;
 
       if (!initiatorId) {
         throw new AppError('Unauthorized', 401);
       }
 
-      // 1. Get Company ID
+      // 1. Get Company ID from Backend
       const { data: company, ok: companyOk } = await internalPost<any>(
         `${config.backendUrl}/internal/company/get-by-code`,
         { companyCode },
@@ -48,108 +48,160 @@ export class WorkflowController {
         );
       }
 
-      // 2. Logic: Get eligible approver IDs (Global Access + Workflow Managers)
-      const [globalRes, mgrRes] = await Promise.all([
+      // 2. Check if Node Path exists
+      const { data: node, ok: nodeOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/workflow/get-node`,
+        { nodePath },
+      );
+
+      if (!nodeOk || !node) {
+        throw new AppError(`Node path '${nodePath}' not found`, 400);
+      }
+
+      // 3. Get eligible approver IDs (Global Access + Workflow Managers + SAAS_ADMIN)
+      const [globalRes, mgrRes, adminRes] = await Promise.all([
         internalPost<string[]>(
           `${config.backendUrl}/internal/onboarding/global-access-ids`,
           { companyCode },
         ),
         internalPost<string[]>(
-          `${config.backendUrl}/internal/onboarding/workflow-mgr-ids`,
+          `${config.backendUrl}/internal/onboarding/approver-ids`,
+          { companyCode, roleCode: 'WORK_FLOW_MGR' },
+        ),
+        internalPost<string[]>(
+          `${config.backendUrl}/internal/onboarding/saas-admin-ids`,
           { companyCode },
         ),
       ]);
 
-      const globalAccessIds = globalRes.data || [];
-      const workflowMgrIds = mgrRes.data || [];
-
       // Combine and deduplicate
       const eligibleApprovers = Array.from(
-        new Set([...globalAccessIds, ...workflowMgrIds]),
+        new Set([
+          ...(globalRes.data || []),
+          ...(mgrRes.data || []),
+          ...(adminRes.data || []),
+        ]),
       );
 
-      // 3. Create request in Backend
-      const { data, ok, status } = await internalPost(
+      // 4. Initiate Workflow Request in Backend
+      const {
+        data: createRes,
+        ok: createOk,
+        status: createStatus,
+      } = await internalPost(
         `${config.backendUrl}/internal/workflow/initiate`,
         {
           initiatorId,
-          companyId: company?.id,
-          data: {
-            companyCode,
-            name,
-            alias,
-            module,
-            subModule,
-            levels,
-          },
-          status: 'PENDING',
-          eligibleApprovers: eligibleApprovers,
+          companyId: company.id,
+          data: validatedData,
+          eligibleApprovers,
         },
       );
 
-      if (!ok) {
+      if (!createOk) {
         throw new AppError(
-          data?.message || data?.error || 'Failed to initiate workflow request',
-          status,
+          createRes?.message ||
+            createRes?.error ||
+            'Failed to initiate workflow request',
+          createStatus,
         );
       }
 
       res.status(201).json({
-        success: true,
-        message: 'Workflow onboarding request initiated',
-        requestId: data.id,
+        message: 'Workflow initiation request created successfully',
+        data: createRes,
       });
     } catch (error) {
       next(error);
     }
   }
 
-  static async approveWorkflowAction(
+  static async actionWorkflow(
     req: Request & { user?: { id: string } },
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { id, action, remark } = zodParse(workflowActionSchema, req.body);
+      const validatedData = zodParse(workflowActionSchema, req.body);
       const approverId = req.user?.id;
+      const { id, action, remark } = validatedData;
 
       if (!approverId) {
         throw new AppError('Unauthorized', 401);
       }
 
-      const { data, ok, status } = await internalPost(
-        `${config.backendUrl}/internal/workflow/action`,
-        {
-          id,
-          action,
-          approverId,
-          remark,
-        },
+      // 1. Fetch onboarding record
+      const { data: onboarding, ok: fetchOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/workflow/get-request`,
+        { id },
       );
 
-      if (!ok) {
+      if (!fetchOk || !onboarding) {
         throw new AppError(
-          data?.message || data?.error || 'Failed to process workflow action',
-          status,
+          onboarding?.message ||
+            onboarding?.error ||
+            'Workflow request not found',
+          404,
         );
       }
 
-      res.status(200).json({
-        success: true,
-        message: `Workflow request ${action}ed successfully`,
+      // 2. Validate status
+      if (onboarding.status !== 'PENDING') {
+        throw new AppError('Request already processed', 400);
+      }
+
+      // 3. Verify permissions
+      if (!onboarding.eligibleApprovers.includes(approverId)) {
+        throw new AppError(
+          'Unauthorized: You do not have permission to process this request',
+          403,
+        );
+      }
+
+      // 4. Handle approval / rejection
+      const {
+        data: commitRes,
+        ok: commitOk,
+        status: commitStatus,
+      } = await internalPost(`${config.backendUrl}/internal/workflow/action`, {
+        id,
+        approverId,
+        remark,
+        status: action,
       });
+
+      if (!commitOk) {
+        throw new AppError(
+          commitRes?.message ||
+            commitRes?.error ||
+            'Failed to process workflow action',
+          commitStatus,
+        );
+      }
+
+      res
+        .status(200)
+        .json({ message: `Workflow request ${action}ed successfully` });
     } catch (error) {
       next(error);
     }
   }
 
-  static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
+  static async fetchAllWorkflows(
+    req: Request & { user?: { id: string; companyId: string } },
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
-      const { companyCode } = zodParse(companyCodeOnlySchema, req.body);
+      const companyId = req.user?.companyId;
+
+      if (!companyId) {
+        throw new AppError('Unauthorized: Company information missing', 401);
+      }
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/workflow/fetch`,
-        { companyCode },
+        { companyId },
       );
 
       if (!ok) {
@@ -159,74 +211,49 @@ export class WorkflowController {
         );
       }
 
-      const formattedPending = (data.pendingRequests || []).map((req: any) => {
-        const onbData = req.data || {};
-        const initiatorHistory = req.workflowHistories?.find(
-          (h: any) => h.event === 'INITIATE',
-        );
-        return {
-          id: req.id,
-          name: onbData.name,
-          alias: onbData.alias,
-          module: onbData.module,
-          subModule: onbData.subModule,
-          initiatorName: initiatorHistory?.user?.name || 'N/A',
-          initiatorEmail: initiatorHistory?.user?.email || 'N/A',
-          initiatedDate: WorkflowController.formatDate(req.createdAt),
-          status: req.status,
-        };
-      });
-
       res.status(200).json({
-        success: true,
-        data: {
-          active: data.workflows || [],
-          pending: formattedPending,
-        },
+        message: 'Workflows fetched successfully!',
+        code: 200,
+        data: data,
       });
     } catch (error) {
       next(error);
     }
   }
-
   static async fetchWorkflowHistory(
-    req: Request,
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { alias } = zodParse(workflowHistorySchema, req.body);
+      const { workflowId } = zodParse(workflowHistorySchema, req.body);
+      const companyId = req.user?.companyId;
+
+      if (!companyId) {
+        throw new AppError('Unauthorized: Company information missing', 401);
+      }
 
       const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/workflow/fetch-history`,
-        { alias },
+        `${config.backendUrl}/internal/workflow/history`,
+        { companyId, workflowId },
       );
 
       if (!ok) {
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch workflow history',
+          data?.message || data?.error || 'Failed to fetch history',
           status,
         );
       }
 
-      const formattedHistory = (data || []).map((h: any) => ({
-        event: h.event,
-        userName: h.user?.name || 'N/A',
-        userEmail: h.user?.email || 'N/A',
-        date: WorkflowController.formatDate(h.createdAt),
-        remark: h.workflowReq?.approvalRemark || 'N/A',
-      }));
-
       res.status(200).json({
-        success: true,
-        message:
-          formattedHistory && formattedHistory.length > 0
-            ? 'Workflow history fetched successfully!'
-            : 'Workflow history not found',
-        data: formattedHistory,
+        message: 'History fetched successfully!',
+        code: 200,
+        data: data,
       });
     } catch (error) {
       next(error);
     }
   }
+
+  
 }

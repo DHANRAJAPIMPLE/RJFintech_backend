@@ -1,12 +1,14 @@
 import { AppError } from '../../shared/middlewares/error.middleware';
 
 /**
- * INTERNAL FETCH UTILITY:
- * Simplifies communication between the Middle Layer and the Backend DB Service.
- */
-/**
- * INTERNAL FETCH UTILITY:
- * Simplifies communication between the Middle Layer and the Backend DB Service.
+ * Internal Fetch Utility:
+ * Simplifies and standardizes service-to-service communication between the 
+ * Middle Layer and the Backend Service.
+ * 
+ * Why we use it:
+ * - To encapsulate common fetch logic (headers, body stringification, response parsing).
+ * - To provide a consistent return type { data, status, ok }.
+ * - To handle network failures gracefully by throwing a 503 'Service Unreachable' error.
  */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 

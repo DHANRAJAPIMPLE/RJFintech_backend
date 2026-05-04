@@ -19,8 +19,13 @@ interface UserMappingInfo {
 }
 
 /**
- * Helper to group companies by their groups for response formatting.
- * If a company has no group association, it's placed in an 'Independent' category.
+ * User Group Utility:
+ * Transforms raw user-company mapping data into a grouped structure for the frontend.
+ * 
+ * Why we use it:
+ * - To organize companies under their respective parent 'Groups' (e.g., Reliance Group).
+ * - To handle companies that don't belong to any group by categorizing them as 'Independent'.
+ * - It provides a clean, hierarchical view of user access for the UI.
  */
 export const formatUserGroups = (userMappings: UserMappingInfo[]) => {
   const groupsMap = new Map<string, Record<string, any>>();

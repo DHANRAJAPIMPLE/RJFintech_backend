@@ -4,8 +4,13 @@ import { authMiddleware } from '../middlewares/auth.middleware';
 import { adminMiddleware } from '../middlewares/admin.middleware';
 
 /**
- * ADMIN ROUTES LOGIC:
- * Defines endpoints for system-wide administrative tasks.
+ * Admin Routes:
+ * This module defines the API endpoints for system-level administrative actions.
+ * 
+ * Why we use it:
+ * - To provide a dedicated entry point for company management and onboarding.
+ * - It strictly applies both 'authMiddleware' and 'adminMiddleware' to ensure 
+ *   that only authenticated SAAS_ADMINs can access these powerful endpoints.
  */
 const router = Router();
 router.use(authMiddleware);

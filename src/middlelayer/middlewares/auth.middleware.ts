@@ -18,8 +18,22 @@ export interface AuthRequest extends Request {
 }
 
 /**
- * AUTH MIDDLEWARE LOGIC:
- * Refactored to forward verification to the Backend Database Service (5001).
+ * Auth Middleware:
+ * This is the primary security layer for the application.
+ * It is responsible for:
+ * - Extracting and validating JWT access tokens from cookies or headers.
+ * - Implementing "Sliding Sessions" by automatically refreshing expired access tokens 
+ *   if a valid refresh token and session version hash are present.
+ * - Session Hijacking Prevention: It verifies a 'versionHash' from the cookie against 
+ *    the session version in the database to detect and block multiple concurrent logins 
+ *    or outdated sessions.
+ * - Company Isolation: Ensures that the user belongs to the company they are trying to access.
+ * - Populating 'req.user' with verified user information for downstream controllers.
+ * 
+ * Why we use it:
+ * - To secure all private routes.
+ * - To manage session state seamlessly without requiring the user to re-login frequently.
+ * - To enforce multi-tenant data isolation at the middleware level.
  */
 
 export const authMiddleware = async (

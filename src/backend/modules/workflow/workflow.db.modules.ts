@@ -1,133 +1,205 @@
-import { PrismaClient, OnboardingStatus, EventType } from '@prisma/client';
 import type { Request, Response, NextFunction } from 'express';
+import { prisma } from '../../lib/prisma';
 
-const prisma = new PrismaClient();
-
+/**
+ * Controller for handling workflow-related database operations.
+ * Manages the lifecycle of workflow requests (initiation, approval/rejection)
+ * and the retrieval of active workflows and their histories.
+ */
 export class WorkflowDbController {
-  static async initiateRequest(
+  // --- Internal Atomic Operations ---
+
+  /**
+   * Fetches a single workflow request by its unique ID.
+   * Includes the associated company details for context.
+   */
+  static async getWorkflowRequestById(req: Request, res: Response) {
+    const { id } = req.body;
+    const request = await prisma.workflowReq.findUnique({
+      where: { id },
+      include: { company: true },
+    });
+    res.json(request);
+  }
+
+  // --- Transactional Commit Operations ---
+
+  /**
+   * Initiates a new workflow onboarding request.
+   * Performs an atomic transaction to:
+   * 1. Create a WorkflowReq entry with the provided payload and eligible approvers.
+   * 2. Log the 'INITIATE' event in the WorkflowReqHistory table.
+   */
+  static async initiateWorkflowRequest(
     req: Request,
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyId, data, status, eligibleApprovers } =
-        req.body;
+      const { initiatorId, companyId, data, eligibleApprovers } = req.body;
 
-      const request = await prisma.$transaction(async (tx) => {
-        const req = await tx.workflowReq.create({
+      const result = await prisma.$transaction(async (tx) => {
+        const request = await tx.workflowReq.create({
           data: {
             companyId,
-            workflowId: data.workflowId || '',
             data,
-            status,
+            status: 'PENDING',
             eligibleApprovers,
-            workflowId: data.workflowId || undefined, // This is tricky.
           },
+          include: { company: true },
         });
 
-        // Record history
+        // Record the initiation in history for auditing
         await tx.workflowReqHistory.create({
           data: {
-            workflowReqId: req.id,
-            companyCode: data.companyCode,
-            event: EventType.INITIATE,
+            workflowReqId: request.id,
+            companyCode: request.company.companyCode,
+            event: 'INITIATE',
             eventUserId: initiatorId,
           },
         });
 
-        return req;
+        return request;
       });
 
-      res.status(201).json(request);
+      res.status(201).json(result);
     } catch (error) {
       next(error);
     }
   }
 
-  // Since the user asked for "initiate", "action", "fetch", "fetch history"
-  // and gave me a schema with Workflow and WorkflowReq,
-  // I should probably implement the logic to create a NEW workflow via a WorkflowReq.
-
-  static async handleWorkflowStatus(
+  /**
+   * Processes an action (APPROVE/REJECT) on a pending workflow request.
+   * Uses an atomic transaction to ensure data integrity across multiple tables.
+   */
+  static async actionWorkflowRequest(
     req: Request,
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { id, action, approverId, remark } = req.body;
+      const { id, status, approverId, remark } = req.body;
 
       const result = await prisma.$transaction(async (tx) => {
-        const onboarding = await tx.workflowReq.findUnique({
+        // 1. Fetch the request to validate existence and get company info
+        const request = await tx.workflowReq.findUnique({
           where: { id },
           include: { company: true },
         });
 
-        if (!onboarding) throw new Error('Workflow request not found');
+        if (!request) throw new Error('Request not found');
 
-        // ✅ PERMISSION CHECK
-        if (
-          onboarding.eligibleApprovers &&
-          onboarding.eligibleApprovers.length > 0 &&
-          !onboarding.eligibleApprovers.includes(approverId)
-        ) {
-          throw new Error('Unauthorized to process this request');
-        }
-
-        const newStatus =
-          action === 'approve'
-            ? OnboardingStatus.APPROVED
-            : OnboardingStatus.REJECTED;
-
-        // Update request status
-        const updatedReq = await tx.workflowReq.update({
-          where: { id },
-          data: {
-            status: newStatus,
-            approvalRemark: remark,
-          },
-        });
-
-        // Record history
-        await tx.workflowReqHistory.create({
-          data: {
-            workflowReqId: id,
-            companyCode: onboarding.company.companyCode,
-            event:
-              action === 'approve' ? EventType.APPROVED : EventType.REJECTED,
-            eventUserId: approverId,
-          },
-        });
-
-        // If approved, create the actual Workflow record
-        if (action === 'approve') {
-          const onbData = onboarding.data as any;
-          await tx.workflow.create({
+        // --- REJECT FLOW ---
+        // Marks the request as REJECTED and logs the history.
+        if (status.toLowerCase() === 'reject') {
+          const updated = await tx.workflowReq.update({
+            where: { id },
             data: {
-              name: onbData.name,
-              alias: onbData.alias,
-              module: onbData.module,
-              subModule: onbData.subModule,
-              companyId: onboarding.companyId,
-              l1Approver1: onbData.levels.l1?.approver1,
-              l1Type: onbData.levels.l1?.type,
-              l1Approver2: onbData.levels.l1?.approver2,
-              l2Approver1: onbData.levels.l2?.approver1,
-              l2Type: onbData.levels.l2?.type,
-              l2Approver2: onbData.levels.l2?.approver2,
-              l3Approver1: onbData.levels.l3?.approver1,
-              l3Type: onbData.levels.l3?.type,
-              l3Approver2: onbData.levels.l3?.approver2,
-              l4Approver1: onbData.levels.l4?.approver1,
-              l4Type: onbData.levels.l4?.type,
-              l4Approver2: onbData.levels.l4?.approver2,
-              l5Approver1: onbData.levels.l5?.approver1,
-              l5Type: onbData.levels.l5?.type,
-              l5Approver2: onbData.levels.l5?.approver2,
+              status: 'REJECTED',
+              approvalRemark: remark,
             },
           });
+
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: id,
+              companyCode: request.company.companyCode,
+              event: 'REJECTED',
+              eventUserId: approverId,
+            },
+          });
+
+          return updated;
         }
 
-        return updatedReq;
+        // --- APPROVE FLOW ---
+        // Converts the request into an active Workflow and setup its approval levels.
+        if (status.toLowerCase() === 'approve') {
+          const data = request.data as any;
+          const { name, module, subModule, nodePath, levels } = data;
+
+          // 1. Resolve the organizational node from the path
+          const node = await tx.orgStructure.findUnique({
+            where: { nodePath },
+          });
+
+          if (!node) throw new Error(`Node path '${nodePath}' not found`);
+
+          // 2. Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels}
+          // logic: 'AND' levels with 2 approvers = 2, 'OR' or 1 approver = 1.
+          let totalApprovers = 0;
+          let totalLevels = 0;
+          if (levels) {
+            for (const level of Object.values(levels)) {
+              if (level) {
+                totalLevels++;
+                const l = level as any;
+                if (l.approver2 && l.type === 'AND') {
+                  totalApprovers += 2;
+                } else {
+                  totalApprovers += 1;
+                }
+              }
+            }
+          }
+          const generatedAlias = `1M_${totalApprovers}C_${totalLevels}`;
+
+          // 3. Create the production Workflow record
+          // workflowReqIds is a manual array tracking the requests that formed this workflow
+          const workflow = await tx.workflow.create({
+            data: {
+              name,
+              alias: generatedAlias,
+              module,
+              subModule,
+              companyId: request.companyId,
+              nodeId: node.id,
+              workflowReqIds: [id],
+            },
+          });
+
+          // 4. Create the specific Approval Levels for this workflow
+          if (levels) {
+            const levelData = [];
+            for (const [key, level] of Object.entries(levels)) {
+              if (level) {
+                const l = level as any;
+                levelData.push({
+                  workflowId: workflow.id,
+                  level: parseInt(key.replace('l', '')),
+                  approver1: l.approver1,
+                  approver2: l.approver2 || null,
+                  approverType: l.type || 'OR',
+                });
+              }
+            }
+            if (levelData.length > 0) {
+              await tx.workflowLevel.createMany({ data: levelData });
+            }
+          }
+
+          // 5. Finalize the request status and audit log
+          const updated = await tx.workflowReq.update({
+            where: { id },
+            data: {
+              status: 'APPROVED',
+              approvalRemark: remark,
+            },
+          });
+
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: id,
+              companyCode: request.company.companyCode,
+              event: 'APPROVED',
+              eventUserId: approverId,
+            },
+          });
+
+          return updated;
+        }
+
+        throw new Error('Invalid status');
       });
 
       res.status(200).json(result);
@@ -136,49 +208,106 @@ export class WorkflowDbController {
     }
   }
 
-  static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { companyCode } = req.body;
-      const workflows = await prisma.workflow.findMany({
-        where: { company: { companyCode } },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      const pendingRequests = await prisma.workflowReq.findMany({
-        where: { company: { companyCode }, status: OnboardingStatus.PENDING },
-        include: { workflowHistories: { include: { user: true } } },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      res.status(200).json({ workflows, pendingRequests });
-    } catch (error) {
-      next(error);
-    }
-  }
-
+  /**
+   * Retrieves the audit history for workflows.
+   * Can be filtered by a specific workflowId (resolves all associated requests)
+   * or by companyCode for a general company audit trail.
+   */
   static async fetchWorkflowHistory(
     req: Request,
     res: Response,
     next: NextFunction,
   ) {
     try {
-      const { alias } = req.body;
-      // History is tracked via WorkflowReqHistory linked to WorkflowReq
-      // We find the approved request for this alias
+      const { companyCode, workflowId } = req.body;
+      let whereCondition: any = {};
+
+      // If workflowId is provided, we fetch history for all requests linked to that workflow
+      if (workflowId) {
+        const workflow = await prisma.workflow.findUnique({
+          where: { id: workflowId },
+          select: { workflowReqIds: true },
+        });
+
+        if (!workflow) {
+          return res.status(404).json({ error: 'Workflow not found' });
+        }
+
+        whereCondition = {
+          workflowReqId: { in: workflow.workflowReqIds },
+        };
+      } else if (companyCode) {
+        // Fallback to company-wide history
+        whereCondition = { companyCode };
+      } else {
+        return res
+          .status(400)
+          .json({ error: 'companyCode or workflowId is required' });
+      }
+
       const histories = await prisma.workflowReqHistory.findMany({
-        where: {
-          workflowReq: {
-            data: {
-              path: ['alias'],
-              equals: alias,
-            },
-          },
+        where: whereCondition,
+        include: {
+          user: { select: { name: true, email: true } },
+          workflowReq: true,
         },
-        include: { user: true, workflowReq: true },
         orderBy: { createdAt: 'desc' },
       });
 
-      res.status(200).json(histories);
+      // Format the output for the UI
+      const formattedHistories = histories.map((h) => ({
+        companyCode: h.companyCode,
+        event: h.event,
+        createdAt: h.createdAt,
+        user: h.user,
+        workflowName: (h.workflowReq?.data as any)?.name || 'N/A',
+      }));
+
+      res.json(formattedHistories);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Fetches all workflow-related data for a company.
+   * Returns:
+   * 1. 'active': Fully approved workflows currently in use.
+   * 2. 'pending': Onboarding requests awaiting approval.
+   */
+  static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { companyId } = req.body;
+
+      // Active production workflows
+      const activeWorkflows = await prisma.workflow.findMany({
+        where: { companyId },
+        include: {
+          orgStructure: true,
+          levels: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Pending onboarding requests
+      const pendingRequests = await prisma.workflowReq.findMany({
+        where: {
+          companyId,
+          status: 'PENDING',
+        },
+        include: {
+          workflowHistories: {
+            where: { event: 'INITIATE' },
+            include: { user: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      res.status(200).json({
+        active: activeWorkflows,
+        pending: pendingRequests,
+      });
     } catch (error) {
       next(error);
     }

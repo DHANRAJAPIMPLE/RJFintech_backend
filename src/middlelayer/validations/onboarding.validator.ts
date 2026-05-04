@@ -1,3 +1,11 @@
+/**
+ * Onboarding Validator:
+ * Contains shared validation schemas used across various onboarding processes.
+ * 
+ * Why we use it:
+ * - To define reusable schemas like 'phoneSchema' and 'groupCodeSchema'.
+ * - It currently holds the 'roleUpsertSchema' for validating bulk role creation/updates.
+ */
 import { z } from 'zod';
 
 const phoneSchema = z

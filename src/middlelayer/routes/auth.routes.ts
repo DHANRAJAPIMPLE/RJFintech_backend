@@ -5,12 +5,13 @@ import { registerSchema, loginSchema } from '../validations/auth.validation';
 import { authMiddleware } from '../middlewares/auth.middleware';
 
 /**
- * AUTH ROUTES LOGIC:
- * Defines endpoints for session and account management.
- * Logic:
- * 1. Register/Login: Uses 'validate' middleware to ensure clean input.
- * 2. Refresh: Used for staying logged in without user interaction.
- * 3. Logout: Clears session data.
+ * Auth Routes:
+ * This module manages the entry points for user authentication and session management.
+ * 
+ * Why we use it:
+ * - To handle user-facing identity operations like Login, Registration, and Logout.
+ * - To implement the 'Sliding Session' mechanism via the /refresh endpoint.
+ * - To provide the /me endpoint for the frontend to retrieve the current user's profile and permissions.
  */
 const router = Router();
 

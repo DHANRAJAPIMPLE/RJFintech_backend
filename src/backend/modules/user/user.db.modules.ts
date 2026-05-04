@@ -1,16 +1,26 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
-
 import { AppError } from '../../middlewares/error.middleware';
 
+/**
+ * Controller for managing user accounts, mappings to companies, and onboarding workflows.
+ * Handles production user data and pending user requests.
+ */
 export class UserDbController {
+  /**
+   * Fetches all users associated with a company, including those with pending onboarding requests.
+   * This method performs several steps to provide a unified view:
+   * 1. Fetches 'active' and 'inactive' users from the production tables.
+   * 2. Fetches 'pending' users from the onboarding table.
+   * 3. Enhances pending user data with initiator and manager information for UI display.
+   */
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
-      // Logic: Fetch raw users with their related mappings, company, and access details
       const { companyCode } = req.body;
       let companyId: string | undefined;
 
+      // Resolve companyId for filtering production users
       if (companyCode) {
         const company = await prisma.company.findUnique({
           where: { companyCode: companyCode },
@@ -20,6 +30,7 @@ export class UserDbController {
         }
       }
 
+      // 1. Fetch production users with their full organizational context
       const users = await prisma.user.findMany({
         where: companyId
           ? {
@@ -46,13 +57,12 @@ export class UserDbController {
         },
       });
 
-      // Logic: Fetch raw pending user onboardings
+      // 2. Fetch pending onboarding requests
       const pendingOnboardings = await prisma.userOnboarding.findMany({
         where: { status: 'PENDING' },
-        // Relation fields were removed
       });
 
-      // Fetch history for these pending onboardings to get initiator/approver
+      // 3. Enhance pending records with audit trail and manager info
       const pendingEmails = pendingOnboardings
         .map((onb: any) => (onb.data as any)?.basicDetails?.email)
         .filter(Boolean);
@@ -67,7 +77,6 @@ export class UserDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Map history info for easy lookup
       const historyMap = new Map();
       histories.forEach((h) => {
         const key = `${h.email}_${h.event}`;
@@ -76,7 +85,6 @@ export class UserDbController {
         }
       });
 
-      // Fetch manager details for pending onboardings
       const managerEmails = pendingOnboardings
         .map((onb: any) => (onb.data as any)?.basicDetails?.reportingManager)
         .filter(Boolean);
@@ -122,6 +130,9 @@ export class UserDbController {
     }
   }
 
+  /**
+   * Updates the status (ACTIVE/INACTIVE) of a user mapping for a specific company.
+   */
   static async updateUserStatus(
     req: Request,
     res: Response,
@@ -139,6 +150,10 @@ export class UserDbController {
     }
   }
 
+  /**
+   * Creates a new user onboarding request in the database.
+   * Performs an atomic transaction to create the request and the initial history log.
+   */
   static async createUserOnboarding(req: Request, res: Response) {
     const { initiatorId, ...onboardingData } = req.body;
     const email = onboardingData.data?.basicDetails?.email;
@@ -162,8 +177,9 @@ export class UserDbController {
     res.status(201).json(onboarding);
   }
 
-  // --- Get Operations ---
-
+  /**
+   * Fetches a single user onboarding request by its ID.
+   */
   static async getUserOnboardingById(req: Request, res: Response) {
     const { id } = req.body;
     const onboarding = await prisma.userOnboarding.findUnique({
@@ -172,6 +188,14 @@ export class UserDbController {
     res.json(onboarding);
   }
 
+  /**
+   * Handles the approval or rejection of a user onboarding request.
+   * Approval Flow:
+   * 1. Checks if the user exists; if not, creates a new production 'User' record with a default password.
+   * 2. Creates a 'UserMapping' to link the user to the company with a reporting manager.
+   * 3. Iterates through requested permissions and creates 'UserAccess' records for each Role + Node pair.
+   * 4. Updates the request status to 'APPROVED' and logs the audit history.
+   */
   static async handleUserOnboardingStatus(
     req: Request,
     res: Response,
@@ -188,7 +212,7 @@ export class UserDbController {
         throw new AppError('User onboarding request not found', 404);
       }
 
-      // ✅ PERMISSION CHECK
+      // Authorization check for the approver
       if (
         onboarding.eligibleApprovers &&
         onboarding.eligibleApprovers.length > 0 &&
@@ -207,6 +231,7 @@ export class UserDbController {
         // ✅ APPROVED FLOW
         // =========================
         if (status === 'approve') {
+          // Resolve managers and company context
           const manager = await tx.user.findUnique({
             where: { id: approverId },
             include: {
@@ -242,8 +267,8 @@ export class UserDbController {
 
           if (!company) throw new AppError('Company not found', 404);
 
+          // 1. Production User Creation
           let user = await tx.user.findUnique({ where: { email } });
-
           if (!user) {
             const defaultPassword = await HashUtil.hash('Welcome@123');
             user = await tx.user.create({
@@ -256,17 +281,19 @@ export class UserDbController {
             });
           }
 
+          // 2. Map User to Company
           await tx.userMapping.create({
             data: {
               userId: user.id,
               companyId: company.id,
-              reportingManager: manager.id,
+              reportingManager: reportingManagerCheck.id,
               status: 'ACTIVE',
               designation,
               employeeId,
             },
           });
 
+          // 3. Setup Granular Access Permissions
           if (Array.isArray(permissions)) {
             for (const perm of permissions) {
               const { accessType, roleName, nodePath } = perm;
@@ -294,6 +321,7 @@ export class UserDbController {
             }
           }
 
+          // 4. Update request and log history
           await tx.userOnboarding.update({
             where: { id },
             data: {
@@ -356,6 +384,9 @@ export class UserDbController {
     }
   }
 
+  /**
+   * Fetches the audit trail for a specific user within a company.
+   */
   static async getUserHistory(req: Request, res: Response, next: NextFunction) {
     try {
       const { email, companyCode } = req.body;
@@ -383,6 +414,10 @@ export class UserDbController {
     }
   }
 
+  /**
+   * Utility to check if a user already has a pending onboarding request by email.
+   * Prevents multiple submissions for the same email.
+   */
   static async getPendingUsers(
     req: Request,
     res: Response,

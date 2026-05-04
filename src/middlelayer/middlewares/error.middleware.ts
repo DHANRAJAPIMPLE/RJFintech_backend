@@ -13,13 +13,14 @@ export class AppError extends Error {
 }
 
 /**
- * GLOBAL ERROR HANDLING LOGIC:
- * This middleare captures all errors thrown in the application (via next(error)).
- * Logic:
- * 1. Status Code: Defaults to 500 if no specific code is provided.
- * 2. Logging: Logs the error status and message to the console for server-side debugging.
- * 3. Standardization: Returns a consistent JSON object so the frontend always
- *    knows where to find the error message.
+ * Global Error Handling Middleware:
+ * This middleware captures all errors thrown throughout the application.
+ * 
+ * Why we use it:
+ * - To ensure a consistent error response format for the frontend.
+ * - To prevent sensitive stack traces from being exposed in production (by default).
+ * - To centralize logging of server-side errors for easier debugging.
+ * - It allows the use of a custom 'AppError' class to throw operational errors with status codes.
  */
 export const errorMiddleware = (
   err: Error & { statusCode?: number },

@@ -7,11 +7,13 @@ const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'access_secret';
 const _REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'refresh_secret';
 
 /**
- * TOKEN UTILITY LOGIC:
- * Handles the generation and verification of JSON Web Tokens (JWT).
- * Logic:
- * 1. Access Tokens: Short-lived (1m) tokens for authorizing API requests.
- * 2. Refresh Tokens: Long-lived session management handled via cookies/DB.
+ * Token Utility:
+ * Centralizes the management of JSON Web Tokens (JWT).
+ * 
+ * Why we use it:
+ * - To generate short-lived Access Tokens for stateless API authorization.
+ * - To cryptographically verify token integrity and expiration.
+ * - To safely decode token payloads (without verification) when handling expired tokens during silent refresh.
  */
 export class TokenUtil {
   /**

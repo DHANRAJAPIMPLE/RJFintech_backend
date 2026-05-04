@@ -1,8 +1,14 @@
 import { z } from 'zod';
 
 /**
- * AUTH VALIDATION LOGIC:
- * Defines strict Zod schemas to clean and validate incoming request data.
+ * Auth Validation:
+ * Defines strict Zod schemas for user registration and login.
+ * 
+ * Why we use it:
+ * - To enforce complex password policies (length, case, numbers, special characters).
+ * - To ensure email and phone formats are valid before hitting the database.
+ * - To handle conditional logic, such as requiring a 'forceLogToken' only when 'action' is set to force login.
+ * - It provides early rejection of invalid data, reducing load on the backend.
  */
 
 // Logic: Schema for user registration — ensures all required profile fields are present and valid

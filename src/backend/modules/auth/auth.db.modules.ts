@@ -2,7 +2,16 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { Status } from '@prisma/client';
 
+/**
+ * Controller for handling authentication and low-level authorization database operations.
+ * Manages user sessions, token activity, and permission validation.
+ */
 export class AuthDbController {
+  /**
+   * Fetches a user by ID or Email.
+   * Includes full mapping details, company info, and group associations.
+   * Used for initial login and token payload generation.
+   */
   static async getByUser(req: Request, res: Response, next: NextFunction) {
     try {
       const { userId, email } = req.body;
@@ -42,6 +51,10 @@ export class AuthDbController {
     }
   }
 
+  /**
+   * Retrieves active session activity for a user.
+   * Sessions are tracked per User + Company combination to support multi-tenancy.
+   */
   static async getActivity(req: Request, res: Response, next: NextFunction) {
     try {
       const { userId, refreshTokenHash, companyId } = req.body;
@@ -86,6 +99,10 @@ export class AuthDbController {
     }
   }
 
+  /**
+   * Updates or creates a session activity record.
+   * Used during login or token refresh to track the current active session.
+   */
   static async upsertActivity(req: Request, res: Response, next: NextFunction) {
     try {
       const { userId, data } = req.body;
@@ -118,6 +135,10 @@ export class AuthDbController {
     }
   }
 
+  /**
+   * Invalidates a session by clearing the refresh token data.
+   * Effectively logs the user out from a specific device/session.
+   */
   static async deleteActivity(req: Request, res: Response, next: NextFunction) {
     try {
       const { refreshTokenHash } = req.body;
@@ -131,6 +152,9 @@ export class AuthDbController {
     }
   }
 
+  /**
+   * Internal method to create a new production User record.
+   */
   static async createUser(req: Request, res: Response, next: NextFunction) {
     try {
       const { email, password, name, phone } = req.body;
@@ -149,6 +173,9 @@ export class AuthDbController {
     }
   }
 
+  /**
+   * Checks if a user possesses the 'SAAS_ADMIN' role in any active company mapping.
+   */
   static async getUserAdminRole(
     req: Request,
     res: Response,
@@ -176,6 +203,14 @@ export class AuthDbController {
     }
   }
 
+  /**
+   * Centralized permission validator.
+   * A user is authorized if they satisfy ANY of these conditions in the target company:
+   * 1. Have the 'SAAS_ADMIN' role.
+   * 2. Have 'isGlobalAccess' enabled.
+   * 3. Have a specific Role that grants the requested 'action' (view/modify/approve/initiate)
+   *    for the specified 'module'.
+   */
   static async getUserAccess(req: Request, res: Response, next: NextFunction) {
     try {
       const { userId, companyId, module, action } = req.body;
@@ -185,10 +220,11 @@ export class AuthDbController {
           .json({ error: 'userId, companyId, module and action are required' });
       }
 
-      const isAuthorized = await prisma.userAccess.findFirst({
+      const userAccess = await prisma.userAccess.findMany({
         where: {
           userId,
           companyId,
+          // Ensure the user is still ACTIVE in this company
           user: {
             userMappings: {
               some: {
@@ -210,7 +246,7 @@ export class AuthDbController {
         },
       });
 
-      res.status(200).json({ authorized: !!isAuthorized });
+      res.status(200).json({ authorized: userAccess.length > 0 });
     } catch (error) {
       next(error);
     }

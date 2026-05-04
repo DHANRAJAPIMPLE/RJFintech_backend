@@ -17,16 +17,7 @@ router.post(
   OnboardingDbController.getGlobalAccessUserIds,
 );
 
-router.post(
-  '/global-access-users',
-  OnboardingDbController.getGlobalAccessUsers,
-);
-
-router.post('/user-acc-mgr-ids', OnboardingDbController.getUserAccMgrIds);
-
-router.post('/org-str-mgr-ids', OnboardingDbController.getOrgStrMgrIds);
-
-router.post('/workflow-mgr-ids', OnboardingDbController.getWorkFlowMgrIds);
+router.post('/approver-ids', OnboardingDbController.getApproverIdsByRole);
 
 router.post('/saas-admin-ids', OnboardingDbController.getSaasAdminIds);
 

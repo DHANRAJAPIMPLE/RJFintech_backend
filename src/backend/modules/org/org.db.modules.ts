@@ -1,9 +1,16 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 
+/**
+ * Controller for managing the organizational hierarchy (nodes) for companies.
+ * Handles the creation, approval, and retrieval of organization units (Roots, Groups, Locations, etc.)
+ */
 export class OrgStructureDbController {
   // --- Internal Atomic Operations ---
 
+  /**
+   * Fetches a specific organization structure request by ID.
+   */
   static async getOrgRequestById(req: Request, res: Response) {
     const { id } = req.body;
     const request = await prisma.orgStructureReq.findUnique({
@@ -13,6 +20,9 @@ export class OrgStructureDbController {
     res.json(request);
   }
 
+  /**
+   * Fetches an active organization node by its unique nodePath.
+   */
   static async getOrgNodeByPath(req: Request, res: Response) {
     const { nodePath } = req.body;
     const node = await prisma.orgStructure.findUnique({
@@ -21,6 +31,9 @@ export class OrgStructureDbController {
     res.json(node);
   }
 
+  /**
+   * Fetches an active organization node by path and company context.
+   */
   static async getOrgNodeByPathCompanyId(req: Request, res: Response) {
     const { nodePath, companyId } = req.body;
     const node = await prisma.orgStructure.findUnique({
@@ -31,6 +44,13 @@ export class OrgStructureDbController {
 
   // --- Transactional Commit Operations ---
 
+  /**
+   * Processes the approval or rejection of an organization unit request.
+   * Logic:
+   * - Uses a transaction to ensure that if a node is approved, the production record
+   *   is created and the request status is updated simultaneously.
+   * - Includes an 'eligibleApprovers' check to enforce authorization.
+   */
   static async updateOrgRequestStatus(
     req: Request,
     res: Response,
@@ -60,7 +80,7 @@ export class OrgStructureDbController {
 
         if (!request) throw new Error('Request not found');
 
-        // ✅ PERMISSION CHECK
+        // Verify that the approver is authorized for this specific request
         if (
           request.eligibleApprovers &&
           request.eligibleApprovers.length > 0 &&
@@ -69,7 +89,7 @@ export class OrgStructureDbController {
           throw new Error('Unauthorized to process this request');
         }
 
-        // ✅ REJECT FLOW
+        // --- REJECT FLOW ---
         if (status.toUpperCase() === 'REJECTED') {
           const updated = await tx.orgStructureReq.update({
             where: { id },
@@ -93,14 +113,13 @@ export class OrgStructureDbController {
           return updated;
         }
 
-        // ✅ APPROVE FLOW
+        // --- APPROVE FLOW ---
         if (status.toUpperCase() === 'APPROVED') {
-          // validate required fields for approval
           if (!newNodePath || !newNodeName || !nodeType) {
             throw new Error('Missing node details for approval');
           }
 
-          // create org node
+          // 1. Create the actual node in the production organization structure
           await tx.orgStructure.create({
             data: {
               companyId: request.companyId,
@@ -111,7 +130,7 @@ export class OrgStructureDbController {
             },
           });
 
-          // update request
+          // 2. Update the onboarding request status
           const updated = await tx.orgStructureReq.update({
             where: { id },
             data: {
@@ -120,7 +139,7 @@ export class OrgStructureDbController {
             },
           });
 
-          // history
+          // 3. Log history for auditing
           await tx.orgHistory.create({
             data: {
               companyCode: request.company.companyCode,
@@ -149,6 +168,10 @@ export class OrgStructureDbController {
     }
   }
 
+  /**
+   * Initiates a request to add a new organization unit.
+   * Logs an 'INITIATE' event in the history for tracking.
+   */
   static async initiateRequest(
     req: Request,
     res: Response,
@@ -181,6 +204,11 @@ export class OrgStructureDbController {
     }
   }
 
+  /**
+   * Validates the feasibility of a new organization node request.
+   * - Checks if the parent node exists in production.
+   * - Checks for duplicate PENDING requests for the same node name to prevent collision.
+   */
   static async validateInitiation(
     req: Request,
     res: Response,
@@ -189,7 +217,7 @@ export class OrgStructureDbController {
     try {
       const { companyId, newNodeName, nodeType, parentNode } = req.body;
 
-      // 1. Check if Parent exists in master (if provided)
+      // 1. Verify Parent existence for hierarchical integrity
       if (parentNode && parentNode.nodePath) {
         const parentRecord = await prisma.orgStructure.findFirst({
           where: {
@@ -206,21 +234,15 @@ export class OrgStructureDbController {
         }
       }
 
-      // 3. Check if node request is pending
+      // 2. Prevent overlapping pending requests for the same node name
       const pendingCheck = await prisma.orgStructureReq.findFirst({
         where: {
           companyId,
           status: 'PENDING',
-          AND: [
-            { data: { path: ['newNodeName'], equals: newNodeName } },
-            { data: { path: ['nodeType'], equals: nodeType } },
-            {
-              data: {
-                path: ['parentNode', 'nodePath'],
-                equals: parentNode?.nodePath || null,
-              },
-            },
-          ],
+          data: {
+            path: ['newNodeName'],
+            equals: newNodeName,
+          },
         },
       });
 
@@ -237,6 +259,9 @@ export class OrgStructureDbController {
     }
   }
 
+  /**
+   * Retrieves the audit history for organization structure changes within a company.
+   */
   static async fetchOrgHistory(
     req: Request,
     res: Response,
@@ -254,6 +279,7 @@ export class OrgStructureDbController {
         orderBy: { createdAt: 'desc' },
       });
 
+      // Format history for easy display
       const formattedHistories = histories.map((h) => ({
         companyCode: h.companyCode,
         event: h.event,
@@ -268,6 +294,10 @@ export class OrgStructureDbController {
     }
   }
 
+  /**
+   * Fetches the complete organization structure and pending requests for a company.
+   * Used to build the tree view in the UI.
+   */
   static async fetchStructure(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode } = req.body;
@@ -282,12 +312,13 @@ export class OrgStructureDbController {
           .json({ success: false, message: 'Company not found' });
       }
 
+      // 1. Fetch active nodes in the hierarchy
       const nodes = await prisma.orgStructure.findMany({
         where: { companyId: company.id },
         orderBy: { nodePath: 'asc' },
       });
 
-      // Fetch pending requests for this company
+      // 2. Fetch pending requests for parallel tracking
       const pendingRequests = await prisma.orgStructureReq.findMany({
         where: {
           companyId: company.id,
@@ -301,7 +332,7 @@ export class OrgStructureDbController {
         },
       });
 
-      // Map to remove internal IDs and match user's desired format
+      // 3. Remove internal UUIDs and format for the tree UI
       const safeNodes = nodes.map((node) => ({
         nodeName: node.nodeName,
         nodeType: node.nodeType,

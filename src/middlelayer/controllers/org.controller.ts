@@ -1,3 +1,14 @@
+/**
+ * OrgController:
+ * Handles the management of the organizational hierarchy and node structures.
+ * Features include:
+ * - Initiating requests for new organizational nodes (ROOT, DEPARTMENT, etc.).
+ * - Validating node initiation against existing structures.
+ * - Approving or rejecting organizational structure changes.
+ * - Generating unique node paths for hierarchical representation.
+ * - Fetching active organizational structures and pending requests.
+ * - Retrieving history of organizational changes.
+ */
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
@@ -49,25 +60,29 @@ export class OrgController {
         );
       }
 
-      // 2. Logic: Get eligible approver IDs (Global Access + Org Structure Managers)
-      const [globalRes, mgrRes] = await Promise.all([
+      // 2. Logic: Get eligible approver IDs (Global Access + Org Structure Managers + SAAS_ADMIN)
+      const [globalRes, mgrRes, adminRes] = await Promise.all([
         internalPost<string[]>(
           `${config.backendUrl}/internal/onboarding/global-access-ids`,
           { companyCode },
         ),
         internalPost<string[]>(
-          `${config.backendUrl}/internal/onboarding/org-str-mgr-ids`,
+          `${config.backendUrl}/internal/onboarding/approver-ids`,
+          { companyCode, roleCode: 'ORG_STR_MGR' },
+        ),
+        internalPost<string[]>(
+          `${config.backendUrl}/internal/onboarding/saas-admin-ids`,
           { companyCode },
         ),
       ]);
 
-      const globalAccessIds = globalRes.data || [];
-      const orgStrMgrIds = mgrRes.data || [];
-
-      // Combine and deduplicate
-      const eligibleApprovers = Array.from(
-        new Set([...globalAccessIds, ...orgStrMgrIds]),
-      );
+      const eligibleApprovers = [
+        ...new Set([
+          ...(globalRes.data || []),
+          ...(mgrRes.data || []),
+          ...(adminRes.data || []),
+        ]),
+      ];
 
       // 3. Validate Node Initiation (Check for duplicates and parent existence)
       const { data: validationRes, ok: validationOk } = await internalPost<any>(
