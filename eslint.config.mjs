@@ -26,6 +26,7 @@ export default tseslint.config(
         {
           selector: 'variableLike',
           format: ['camelCase'],
+          leadingUnderscore: 'allow',
         },
 
         // constants

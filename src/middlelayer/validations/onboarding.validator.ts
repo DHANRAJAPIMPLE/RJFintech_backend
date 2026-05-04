@@ -1,25 +1,12 @@
 /**
  * Onboarding Validator:
  * Contains shared validation schemas used across various onboarding processes.
- * 
+ *
  * Why we use it:
  * - To define reusable schemas like 'phoneSchema' and 'groupCodeSchema'.
  * - It currently holds the 'roleUpsertSchema' for validating bulk role creation/updates.
  */
 import { z } from 'zod';
-
-const phoneSchema = z
-  .string()
-  .trim()
-  .regex(/^\d{10,15}$/, 'Phone number must be between 10 and 15 digits');
-
-const groupCodeSchema = z
-  .string()
-  .trim()
-  .min(3, 'Group code must be at least 3 characters')
-  .max(20, 'Group code too long')
-  .nullable()
-  .optional();
 
 export const roleUpsertSchema = z.array(
   z

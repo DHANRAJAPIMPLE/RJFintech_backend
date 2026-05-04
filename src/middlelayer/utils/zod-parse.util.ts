@@ -4,7 +4,7 @@ import { AppError } from '../../shared/middlewares/error.middleware';
 /**
  * Zod Parse Utility:
  * A wrapper around Zod's safeParse that standardizes how validation errors are handled.
- * 
+ *
  * Why we use it:
  * - To convert complex Zod validation error objects into a flat, readable 'details' array.
  * - To throw a standardized 'AppError' that the global error middleware can easily process.

@@ -7,9 +7,9 @@ import { internalPost } from '../utils/internal-fetch.util';
 
 /**
  * Admin Middleware:
- * This middleware restricts access to specific routes to only those users 
+ * This middleware restricts access to specific routes to only those users
  * who have the 'SAAS_ADMIN' role.
- * 
+ *
  * Why we use it:
  * - To protect super-admin level operations (like system-wide configuration or global company management).
  * - It ensures a high level of security by verifying the user's role against the backend authority.

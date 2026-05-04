@@ -1,26 +1,13 @@
 /**
  * Org Validation:
  * Defines schemas for managing organizational structure changes.
- * 
+ *
  * Why we use it:
  * - To validate requests for creating new organizational nodes (type, name, parent context).
  * - To ensure that approval/rejection actions on org changes include required metadata and remarks.
  * - To enforce correct formatting for company-wide organizational history lookups.
  */
 import { z } from 'zod';
-
-const phoneSchema = z
-  .string()
-  .trim()
-  .regex(/^\d{10,15}$/, 'Phone number must be between 10 and 15 digits');
-
-const groupCodeSchema = z
-  .string()
-  .trim()
-  .min(3, 'Group code must be at least 3 characters')
-  .max(20, 'Group code too long')
-  .nullable()
-  .optional();
 
 export const orgOnboardingSchema = z
   .object({

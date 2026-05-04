@@ -215,7 +215,7 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyId, newNodeName, nodeType, parentNode } = req.body;
+      const { companyId, newNodeName, _nodeType, parentNode } = req.body;
 
       // 1. Verify Parent existence for hierarchical integrity
       if (parentNode && parentNode.nodePath) {

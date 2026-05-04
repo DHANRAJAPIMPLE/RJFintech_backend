@@ -57,8 +57,8 @@ export class AuthController {
 
       // 4. Logic: Strip ID/Password from user object before sending to frontend
       const {
-        id: _,
-        password: _pw,
+        id: _id,
+        password: _password,
         ...userWithoutSensitiveData
       } = createRes.data;
 
@@ -79,7 +79,7 @@ export class AuthController {
         password,
         action,
         forceLogToken: providedForceLogToken,
-        companyCode,
+        companyCode: _companyCode,
       } = validatedData.body;
       const ip = requestIp.getClientIp(req) || 'unknown';
       const userAgent = req.headers['user-agent'] || 'unknown';
@@ -95,7 +95,7 @@ export class AuthController {
         throw new AppError('Invalid credentials', 401);
       }
 
-      const company_id = user.userMappings[0].companyId;
+      const companyId = user.userMappings[0].companyId;
 
       // 2. Validate password
       const isPasswordValid = await HashUtil.verify(user.password, password);
@@ -161,7 +161,7 @@ export class AuthController {
         data: {
           refreshToken: refreshTokenHash,
           version: nextVersion,
-          companyId: company_id,
+          companyId: companyId,
           ipAddress: ip,
           userAgent: userAgent,
           expiryAt: expiryAt,
@@ -172,7 +172,7 @@ export class AuthController {
       // 7. Generate Access Token
       const accessToken = TokenUtil.generateAccessToken({
         userId: user.id,
-        companyId: company_id,
+        companyId: companyId,
       });
 
       // 8. Set Cookies

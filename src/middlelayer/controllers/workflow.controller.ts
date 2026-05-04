@@ -254,6 +254,4 @@ export class WorkflowController {
       next(error);
     }
   }
-
-  
 }

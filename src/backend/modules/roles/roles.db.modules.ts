@@ -10,7 +10,7 @@ export class RolesDbController {
    * Creates or updates a role definition.
    * Logic:
    * - Uses 'upsert' to ensure that roleCode remains unique.
-   * - Maps the 'capabilities' object from the UI to discrete boolean flags 
+   * - Maps the 'capabilities' object from the UI to discrete boolean flags
    *   (view, modify, approve, initiate) in the database for high-performance querying.
    */
   static async upsertRole(req: Request, res: Response, next: NextFunction) {

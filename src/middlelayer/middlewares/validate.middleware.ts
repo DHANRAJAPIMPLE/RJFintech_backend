@@ -5,7 +5,7 @@ import { AppError } from '../../shared/middlewares/error.middleware';
 /**
  * Validation Middleware:
  * This middleware uses the Zod library to enforce strict data schemas for incoming requests.
- * 
+ *
  * Why we use it:
  * - To ensure that only properly formatted data reaches our controllers.
  * - To provide clear, automated error messages back to the client when validation fails.

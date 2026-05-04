@@ -1,7 +1,7 @@
 /**
  * Code Generator Utility:
  * Responsible for generating unique identifiers for Companies and Groups.
- * 
+ *
  * Why we use it:
  * - To ensure that every Company and Group has a human-readable but unique 'Code'.
  * - It combines the entity name (normalized) and the creation date to form a base code.

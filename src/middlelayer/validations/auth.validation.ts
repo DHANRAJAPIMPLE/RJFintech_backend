@@ -3,7 +3,7 @@ import { z } from 'zod';
 /**
  * Auth Validation:
  * Defines strict Zod schemas for user registration and login.
- * 
+ *
  * Why we use it:
  * - To enforce complex password policies (length, case, numbers, special characters).
  * - To ensure email and phone formats are valid before hitting the database.

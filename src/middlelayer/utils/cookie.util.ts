@@ -4,7 +4,7 @@ import { config } from '../config';
 /**
  * Cookie Utility:
  * Standardizes the setting and clearing of authentication cookies.
- * 
+ *
  * Why we use it:
  * - To ensure security policies (httpOnly, secure, sameSite) are applied consistently.
  * - To manage the lifecycle of Access, Refresh, and Versioning cookies in a single place.

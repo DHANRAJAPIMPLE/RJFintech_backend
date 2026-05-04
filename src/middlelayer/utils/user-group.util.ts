@@ -21,7 +21,7 @@ interface UserMappingInfo {
 /**
  * User Group Utility:
  * Transforms raw user-company mapping data into a grouped structure for the frontend.
- * 
+ *
  * Why we use it:
  * - To organize companies under their respective parent 'Groups' (e.g., Reliance Group).
  * - To handle companies that don't belong to any group by categorizing them as 'Independent'.

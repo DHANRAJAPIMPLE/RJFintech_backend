@@ -1,13 +1,13 @@
 /**
  * Company Setting Routes:
- * This module consolidates all routes related to company-specific configurations, 
+ * This module consolidates all routes related to company-specific configurations,
  * including User Management, Organizational Structure, Workflows, and Roles.
- * 
+ *
  * Why we use it:
  * - To group related functional areas under a common /company-settings prefix.
  * - It enforces a double-layered security check:
  *   1. 'authMiddleware' for general session validity.
- *   2. 'authorize' middleware for granular, module-specific permissions 
+ *   2. 'authorize' middleware for granular, module-specific permissions
  *      (e.g., 'initiate' permission for 'USER_ACC' module).
  */
 import { Router } from 'express';

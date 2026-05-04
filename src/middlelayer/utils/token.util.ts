@@ -4,12 +4,11 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'access_secret';
-const _REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'refresh_secret';
 
 /**
  * Token Utility:
  * Centralizes the management of JSON Web Tokens (JWT).
- * 
+ *
  * Why we use it:
  * - To generate short-lived Access Tokens for stateless API authorization.
  * - To cryptographically verify token integrity and expiration.

@@ -258,7 +258,6 @@ export class WorkflowDbController {
       const formattedHistories = histories.map((h) => ({
         companyCode: h.companyCode,
         event: h.event,
-        createdAt: h.createdAt,
         user: h.user,
         workflowName: (h.workflowReq?.data as any)?.name || 'N/A',
       }));
@@ -282,9 +281,27 @@ export class WorkflowDbController {
       // Active production workflows
       const activeWorkflows = await prisma.workflow.findMany({
         where: { companyId },
-        include: {
-          orgStructure: true,
-          levels: true,
+        select: {
+          id: true,
+          name: true,
+          alias: true,
+          module: true,
+          subModule: true,
+          orgStructure: {
+            select: {
+              nodePath: true,
+              nodeName: true,
+              nodeType: true, 
+            },
+          },
+          levels: {
+            select: {
+              level: true,
+              approver1: true,
+              approver2: true,
+              approverType: true,
+            },
+          },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -295,11 +312,11 @@ export class WorkflowDbController {
           companyId,
           status: 'PENDING',
         },
-        include: {
-          workflowHistories: {
-            where: { event: 'INITIATE' },
-            include: { user: true },
-          },
+        select: {
+          id: true,
+          data: true,
+          status: true,
+          approvalRemark: true,
         },
         orderBy: { createdAt: 'desc' },
       });

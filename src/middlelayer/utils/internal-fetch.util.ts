@@ -2,9 +2,9 @@ import { AppError } from '../../shared/middlewares/error.middleware';
 
 /**
  * Internal Fetch Utility:
- * Simplifies and standardizes service-to-service communication between the 
+ * Simplifies and standardizes service-to-service communication between the
  * Middle Layer and the Backend Service.
- * 
+ *
  * Why we use it:
  * - To encapsulate common fetch logic (headers, body stringification, response parsing).
  * - To provide a consistent return type { data, status, ok }.

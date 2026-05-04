@@ -1,7 +1,7 @@
 /**
  * User Validation:
  * Handles data validation for user onboarding and management.
- * 
+ *
  * Why we use it:
  * - To validate complex nested objects containing user profile info and multi-dimensional permissions.
  * - To enforce business rules like "Exactly one PRIMARY permission is required" using Zod refinements.

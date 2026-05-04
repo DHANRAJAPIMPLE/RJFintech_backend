@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { internalPost } from '../utils/internal-fetch.util';
 import { config } from '../config';
@@ -7,9 +7,9 @@ import type { AuthRequest } from './auth.middleware';
 /**
  * Access Engine Middleware:
  * This middleware is used to enforce granular role-based access control (RBAC).
- * It validates if a user has the necessary permissions (view, modify, approve, initiate) 
+ * It validates if a user has the necessary permissions (view, modify, approve, initiate)
  * for a specific functional module within a company.
- * 
+ *
  * Why we use it:
  * - To centralize permission checks.
  * - To ensure that users can only perform actions they are authorized for.

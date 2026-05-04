@@ -1,9 +1,9 @@
 /**
  * Error Mapper Utility:
  * Used to mask sensitive internal errors with generic user-friendly messages.
- * 
+ *
  * Why we use it:
- * - Security (Anti-Enumeration): To prevent attackers from guessing valid emails or 
+ * - Security (Anti-Enumeration): To prevent attackers from guessing valid emails or
  *   session states by observing differences in error messages (e.g., "User not found" vs "Invalid password").
  * - Consistency: To provide a uniform 'Invalid credentials' message for all authentication failures.
  */

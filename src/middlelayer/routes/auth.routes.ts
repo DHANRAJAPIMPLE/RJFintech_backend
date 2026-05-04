@@ -7,7 +7,7 @@ import { authMiddleware } from '../middlewares/auth.middleware';
 /**
  * Auth Routes:
  * This module manages the entry points for user authentication and session management.
- * 
+ *
  * Why we use it:
  * - To handle user-facing identity operations like Login, Registration, and Logout.
  * - To implement the 'Sliding Session' mechanism via the /refresh endpoint.

@@ -15,7 +15,7 @@ export class AppError extends Error {
 /**
  * Global Error Handling Middleware:
  * This middleware captures all errors thrown throughout the application.
- * 
+ *
  * Why we use it:
  * - To ensure a consistent error response format for the frontend.
  * - To prevent sensitive stack traces from being exposed in production (by default).

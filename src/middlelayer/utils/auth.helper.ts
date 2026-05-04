@@ -1,7 +1,7 @@
 /**
  * Auth Helper:
  * Provides utility functions for authentication-related calculations.
- * 
+ *
  * Why we use it:
  * - 'bumpVersion': To increment session version numbers for session tracking and invalidation.
  * - 'getExpiryDate': To calculate token or session expiration timestamps consistently.

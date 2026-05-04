@@ -8,7 +8,7 @@ import { Status } from '@prisma/client';
 export class AccessUtil {
   /**
    * Fetches all user IDs that have 'Global Access' enabled for a specific company.
-   * Logic: 
+   * Logic:
    * - userAccess record must have isGlobalAccess = true.
    * - User must have an ACTIVE mapping to the specified company.
    */

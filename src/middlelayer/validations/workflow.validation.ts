@@ -1,10 +1,10 @@
 /**
  * Workflow Validation:
  * Defines schemas for complex workflow configuration and processing.
- * 
+ *
  * Why we use it:
  * - To validate multi-level approval hierarchies (L1 through L5).
- * - To ensure that approver types (REPORTING_MANAGER, NODE_APPROVER, etc.) 
+ * - To ensure that approver types (REPORTING_MANAGER, NODE_APPROVER, etc.)
  *   and logical operators (AND/OR) are correctly defined.
  * - To strictly type workflow initiation, actions, and history lookups.
  */

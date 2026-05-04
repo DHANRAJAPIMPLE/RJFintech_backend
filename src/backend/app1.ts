@@ -1,12 +1,12 @@
 /**
  * Backend Database Service (Port: 5001)
- * 
+ *
  * This service acts as the primary data access layer for the application.
  * Key Responsibilities:
  * - Direct interaction with the database via Prisma ORM.
  * - Atomic transactional logic for complex onboarding workflows.
  * - Centralized RBAC logic (AccessUtil).
- * 
+ *
  * Security Note:
  * This service is designed to be 'Internal-Only'. It should not be exposed to the public internet.
  * The Middle-Layer Service (Port: 5000) acts as the gateway, handling authentication (JWT),

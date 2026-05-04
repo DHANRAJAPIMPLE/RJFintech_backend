@@ -274,7 +274,7 @@ export class AdminController {
       }
 
       // 2. Check if Signatories already exist
-      let existingEmails: string[] = [];
+      const existingEmails: string[] = [];
       for (const signatory of signatories) {
         // Check in master user table
         const existingUserRes = await internalPost<any>(
