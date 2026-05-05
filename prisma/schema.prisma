@@ -257,7 +257,7 @@ model Workflow {
   module       String
   subModule    String        @map("sub_module")
   companyId    String        @map("company_id")
-
+  levelsHash   String        @map("levels_hash")
   orgStructure OrgStructure  @relation(fields: [nodeId], references: [id])
   company      Company       @relation(fields: [companyId], references: [id])
 
@@ -266,7 +266,7 @@ model Workflow {
 
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
-
+  @@unique([companyId, nodeId, module, subModule, levelsHash])
   @@map("workflow")
 }
 

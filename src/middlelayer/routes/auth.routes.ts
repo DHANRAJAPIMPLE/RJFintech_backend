@@ -15,14 +15,14 @@ import { authMiddleware } from '../middlewares/auth.middleware';
  */
 const router = Router();
 
-// Logic: Public route — Create a new user account
-router.post('/register', validate(registerSchema), AuthController.register);
+// // Logic: Public route — Create a new user account
+// router.post('/register', validate(registerSchema), AuthController.register);
 
 // Logic: Public route — Authenticate and start a session
 router.post('/login', validate(loginSchema), AuthController.login);
 
-// Logic: Semi-public — Refresh expired access tokens using the Refresh cookie
-router.post('/refresh', AuthController.refreshToken);
+// // Logic: Semi-public — Refresh expired access tokens using the Refresh cookie
+// router.post('/refresh', AuthController.refreshToken);
 
 // Logic: Protected route — Fetches the authenticated user's profile and groups
 router.post('/me', authMiddleware, AuthController.me);

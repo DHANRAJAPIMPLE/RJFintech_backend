@@ -38,11 +38,11 @@ router.post(
   authorize('view', 'USER_ACC'),
   UserController.fetchAllUsers,
 );
-router.post(
-  '/user/update-status',
-  authorize('modify', 'USER_ACC'),
-  UserController.updateUserStatus,
-);
+// router.post(
+//   '/user/update-status',
+//   authorize('modify', 'USER_ACC'),
+//   UserController.updateUserStatus,
+// );
 router.post(
   '/user/fetch-history',
   authorize('view', 'USER_ACC'),
@@ -98,7 +98,7 @@ router.post(
 // ----------------------------------------------------------
 
 // --------------roles routes--------------------------------
-router.post('/role/create', RoleController.createRoles);
+// router.post('/role/create', RoleController.createRoles);
 router.post('/role/fetch-all', RoleController.fetchAllRoles);
 // ----------------------------------------------------------
 
