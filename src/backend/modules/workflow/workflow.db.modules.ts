@@ -1,5 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
+import { createHash } from 'crypto';
 import { prisma } from '../../lib/prisma';
+import { AppError } from '../../../shared/middlewares/error.middleware';
 
 /**
  * Controller for handling workflow-related database operations.
@@ -7,6 +9,18 @@ import { prisma } from '../../lib/prisma';
  * and the retrieval of active workflows and their histories.
  */
 export class WorkflowDbController {
+  private static buildLevelsHash(levels: any): string {
+    const normalized = Object.keys(levels)
+      .sort()
+      .map((key) => ({
+        approvers: [levels[key].approver1, levels[key].approver2 ?? null]
+          .filter(Boolean)
+          .sort(),
+        type: levels[key].type ?? 'OR',
+      }));
+    return createHash('md5').update(JSON.stringify(normalized)).digest('hex');
+  }
+
   // --- Internal Atomic Operations ---
 
   /**
@@ -37,11 +51,56 @@ export class WorkflowDbController {
   ) {
     try {
       const { initiatorId, companyId, data, eligibleApprovers } = req.body;
+      const { module, subModule, nodePath, levels } = data;
+
+      // 1. Resolve Node ID
+      const node = await prisma.orgStructure.findUnique({
+        where: { nodePath },
+      });
+      if (!node) throw new Error(`Node path '${nodePath}' not found`);
+
+      const nodeId = node.id;
+      const levelsHash = WorkflowDbController.buildLevelsHash(levels);
+
+      // 2. Block if ACTIVE duplicate exists
+      const alreadyActive = await prisma.workflow.findUnique({
+        where: {
+          companyId_nodeId_module_subModule_levelsHash: {
+            companyId,
+            nodeId,
+            module,
+            subModule,
+            levelsHash,
+          },
+        },
+      });
+      if (alreadyActive) {
+        throw new AppError(`Already active: "${alreadyActive.name}"`, 409);
+      }
+
+      // 3. Block if PENDING duplicate exists
+      const alreadyPending = await prisma.workflowReq.findFirst({
+        where: {
+          companyId,
+          nodeId,
+          module,
+          subModule,
+          levelsHash,
+          status: 'PENDING',
+        },
+      });
+      if (alreadyPending) {
+        throw new AppError(`Already pending: ${alreadyPending.id}`, 409);
+      }
 
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.workflowReq.create({
           data: {
             companyId,
+            nodeId,
+            module,
+            subModule,
+            levelsHash,
             data,
             status: 'PENDING',
             eligibleApprovers,
@@ -88,6 +147,43 @@ export class WorkflowDbController {
         });
 
         if (!request) throw new Error('Request not found');
+
+        // --- DUPLICATE CHECKS (only for APPROVE) ---
+        if (status.toLowerCase() === 'approve') {
+          const { companyId, nodeId, module, subModule, levelsHash } = request;
+
+          // 1. Block if ACTIVE duplicate exists
+          const alreadyActive = await tx.workflow.findUnique({
+            where: {
+              companyId_nodeId_module_subModule_levelsHash: {
+                companyId,
+                nodeId,
+                module,
+                subModule,
+                levelsHash,
+              },
+            },
+          });
+          if (alreadyActive) {
+            throw new AppError(`Already active: "${alreadyActive.name}"`, 409);
+          }
+
+          // 2. Block if OTHER PENDING duplicates exist
+          const alreadyPending = await tx.workflowReq.findFirst({
+            where: {
+              companyId,
+              nodeId,
+              module,
+              subModule,
+              levelsHash,
+              status: 'PENDING',
+              id: { not: id },
+            },
+          });
+          if (alreadyPending) {
+            throw new AppError(`Already pending: ${alreadyPending.id}`, 409);
+          }
+        }
 
         // --- REJECT FLOW ---
         // Marks the request as REJECTED and logs the history.
@@ -154,6 +250,7 @@ export class WorkflowDbController {
               subModule,
               companyId: request.companyId,
               nodeId: node.id,
+              levelsHash: request.levelsHash,
               workflowReqIds: [id],
             },
           });

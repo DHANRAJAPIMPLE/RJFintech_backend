@@ -287,6 +287,10 @@ model WorkflowLevel {
 model WorkflowReq {
   id             String           @id @default(uuid())
   companyId      String           @map("company_id")
+  nodeId         String           @map("node_id")
+  module         String
+  subModule      String           @map("sub_module")
+  levelsHash     String           @map("levels_hash")
 
   data           Json
   status         OnboardingStatus @default(PENDING)
