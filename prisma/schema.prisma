@@ -325,6 +325,7 @@ model WorkflowReqHistory {
 
 enum NodeType {
   ROOT
+  DIVISION
   DEPARTMENT
   TEAM
   PLANT
