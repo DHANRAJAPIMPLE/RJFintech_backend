@@ -301,7 +301,7 @@ export class OrgController {
           parentNode: reqData.parentNode,
           initiatorName: initiatorHistory?.user?.name || null,
           initiatorEmail: initiatorHistory?.user?.email || null,
-          initiatedDate: OrgController.formatDate(req.createdAt),
+          initiatedDate: req.createdAt,
           approverName: null,
           approverEmail: null,
           approvedDate: null,

@@ -59,11 +59,15 @@ export class RolesDbController {
   }
 
   /**
-   * Fetches all active roles defined in the system.
+   * Fetches all roles defined in the system, excluding system-level administrative roles.
    */
   static async fetchAllRoles(req: Request, res: Response, next: NextFunction) {
     try {
-      const roles = await prisma.roles.findMany({ where: { isActive: true } });
+      const roles = await prisma.roles.findMany({
+        where: {
+          roleCode: { not: 'SAAS_ADMIN' },
+        },
+      });
       res.status(200).json(roles);
     } catch (error) {
       next(error);
