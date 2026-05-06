@@ -36,7 +36,8 @@ export class OrgStructureDbController {
    */
   static async getOrgNodeByPathCompanyId(req: Request, res: Response) {
     const { nodePath, companyId } = req.body;
-    const node = await prisma.orgStructure.findUnique({
+    console.log(req.body);
+    const node = await prisma.orgStructure.findFirst({
       where: { nodePath, companyId },
     });
     res.json(node);
@@ -102,7 +103,7 @@ export class OrgStructureDbController {
           if (approverId) {
             await tx.orgHistory.create({
               data: {
-                companyCode: request.company.companyCode,
+                companyId: request.companyId,
                 event: 'REJECTED',
                 eventUserId: approverId,
                 orgReqId: id,
@@ -142,7 +143,7 @@ export class OrgStructureDbController {
           // 3. Log history for auditing
           await tx.orgHistory.create({
             data: {
-              companyCode: request.company.companyCode,
+              companyId: request.companyId,
               event: 'APPROVED',
               eventUserId: approverId,
               orgReqId: id,
@@ -178,19 +179,32 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyId, ...rest } = req.body;
+      const { initiatorId, companyCode, companyId, ...rest } = req.body;
+      let resolvedCompanyId = companyId;
+
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
+
       const request = await prisma.$transaction(async (tx) => {
         const reqRecord = await tx.orgStructureReq.create({
           data: {
             ...rest,
-            companyId: companyId,
+            companyId: resolvedCompanyId,
           },
           include: { company: true },
         });
 
         await tx.orgHistory.create({
           data: {
-            companyCode: reqRecord.company.companyCode,
+            companyId: resolvedCompanyId,
             event: 'INITIATE',
             eventUserId: initiatorId,
             orgReqId: reqRecord.id,
@@ -215,7 +229,20 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyId, newNodeName, _nodeType, parentNode } = req.body;
+      const { companyCode, companyId, newNodeName, _nodeType, parentNode } = req.body;
+      let resolvedCompanyId = companyId;
+
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          return res.status(400).json({ error: 'companyCode or companyId is required' });
+        }
+
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) return res.status(404).json({ error: 'Company not found' });
+        resolvedCompanyId = company.id;
+      }
 
       // 1. Verify Parent existence for hierarchical integrity
       if (parentNode && parentNode.nodePath) {
@@ -268,20 +295,45 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode, companyId, nodeName } = req.body;
+      let resolvedCompanyId = companyId;
+
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
 
       const histories = await prisma.orgHistory.findMany({
-        where: { companyCode },
+        where: {
+          companyId: resolvedCompanyId,
+          ...(nodeName
+            ? {
+                orgReq: {
+                  data: {
+                    path: ['newNodeName'],
+                    equals: nodeName,
+                  },
+                },
+              }
+            : {}),
+        },
         include: {
           user: { select: { name: true, email: true } },
           orgReq: true,
+          company: { select: { companyCode: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
 
       // Format history for easy display
       const formattedHistories = histories.map((h) => ({
-        companyCode: h.companyCode,
+        companyCode: h.company.companyCode,
         event: h.event,
         createdAt: h.createdAt,
         user: h.user,
@@ -300,28 +352,37 @@ export class OrgStructureDbController {
    */
   static async fetchStructure(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode, companyId } = req.body;
+      let resolvedCompanyId = companyId;
 
-      const company = await prisma.company.findUnique({
-        where: { companyCode: companyCode },
-      });
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          return res
+            .status(400)
+            .json({ success: false, message: 'companyCode or companyId is required' });
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode: companyCode },
+        });
 
-      if (!company) {
-        return res
-          .status(404)
-          .json({ success: false, message: 'Company not found' });
+        if (!company) {
+          return res
+            .status(404)
+            .json({ success: false, message: 'Company not found' });
+        }
+        resolvedCompanyId = company.id;
       }
 
       // 1. Fetch active nodes in the hierarchy
       const nodes = await prisma.orgStructure.findMany({
-        where: { companyId: company.id },
+        where: { companyId: resolvedCompanyId },
         orderBy: { nodePath: 'asc' },
       });
 
       // 2. Fetch pending requests for parallel tracking
       const pendingRequests = await prisma.orgStructureReq.findMany({
         where: {
-          companyId: company.id,
+          companyId: resolvedCompanyId,
           status: 'PENDING',
         },
         include: {

@@ -17,30 +17,30 @@ export class UserDbController {
    */
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode } = req.body;
-      let companyId: string | undefined;
+      const { companyCode, companyId } = req.body;
+      let resolvedCompanyId = companyId;
 
       // Resolve companyId for filtering production users
-      if (companyCode) {
-        const company = await prisma.company.findUnique({
-          where: { companyCode: companyCode },
-        });
-        if (company) {
-          companyId = company.id;
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('Company code or companyId is required', 400);
         }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
       }
 
       // 1. Fetch production users with their full organizational context
       const users = await prisma.user.findMany({
-        where: companyId
-          ? {
-              userMappings: {
-                some: {
-                  companyId: companyId,
-                },
-              },
-            }
-          : {},
+        where: {
+          userMappings: {
+            some: {
+              companyId: resolvedCompanyId,
+            },
+          },
+        },
         include: {
           userMappings: {
             include: {
@@ -59,7 +59,10 @@ export class UserDbController {
 
       // 2. Fetch pending onboarding requests
       const pendingOnboardings = await prisma.userOnboarding.findMany({
-        where: { status: 'PENDING' },
+        where: {
+          status: 'PENDING',
+          companyId: resolvedCompanyId,
+        },
       });
 
       // 3. Enhance pending records with audit trail and manager info
@@ -70,6 +73,7 @@ export class UserDbController {
       const histories = await prisma.userHistory.findMany({
         where: {
           email: { in: pendingEmails },
+          companyId: resolvedCompanyId,
         },
         include: {
           user: { select: { name: true, email: true } },
@@ -155,12 +159,41 @@ export class UserDbController {
    * Performs an atomic transaction to create the request and the initial history log.
    */
   static async createUserOnboarding(req: Request, res: Response) {
-    const { initiatorId, ...onboardingData } = req.body;
+    const { initiatorId, companyCode, companyId, groupCode, ...onboardingData } = req.body;
+    let resolvedCompanyId = companyId;
+
+    if (!resolvedCompanyId) {
+      if (!companyCode) {
+        throw new AppError('companyCode or companyId is required', 400);
+      }
+      const company = await prisma.company.findUnique({
+        where: { companyCode },
+      });
+      if (!company) {
+        throw new AppError('Company not found', 404);
+      }
+      resolvedCompanyId = company.id;
+    }
+
     const email = onboardingData.data?.basicDetails?.email;
 
     const onboarding = await prisma.$transaction(async (tx) => {
+      let groupId: string | null = null;
+      if (groupCode) {
+        const group = await tx.groupCompany.findUnique({
+          where: { groupCode },
+        });
+        if (group) {
+          groupId = group.id;
+        }
+      }
+
       const onb = await tx.userOnboarding.create({
-        data: onboardingData,
+        data: {
+          ...onboardingData,
+          companyId: resolvedCompanyId,
+          groupId: groupId,
+        },
       });
       if (initiatorId && email) {
         await tx.userHistory.create({
@@ -168,7 +201,7 @@ export class UserDbController {
             email,
             event: 'INITIATE',
             eventUserId: initiatorId,
-            companyCode: onboardingData.companyCode,
+            companyId: resolvedCompanyId,
           },
         });
       }
@@ -176,6 +209,7 @@ export class UserDbController {
     });
     res.status(201).json(onboarding);
   }
+  
 
   /**
    * Fetches a single user onboarding request by its ID.
@@ -254,16 +288,9 @@ export class UserDbController {
             throw new AppError('Reporting Manager not found', 404);
           if (!manager) throw new AppError('Manager not found', 404);
 
-          let company;
-          if (onboarding.companyCode) {
-            company = await tx.company.findUnique({
-              where: { companyCode: onboarding.companyCode },
-            });
-          }
-
-          if (!company && manager.userMappings[0]) {
-            company = manager.userMappings[0].company;
-          }
+          const company = await tx.company.findUnique({
+            where: { id: onboarding.companyId },
+          });
 
           if (!company) throw new AppError('Company not found', 404);
 
@@ -336,7 +363,7 @@ export class UserDbController {
                 email,
                 event: 'APPROVED',
                 eventUserId: approverId,
-                companyCode: onboarding.companyCode || '',
+                companyId: company.id,
               },
             });
           }
@@ -362,7 +389,7 @@ export class UserDbController {
                 email: userEmail,
                 event: 'REJECTED',
                 eventUserId: approverId,
-                companyCode: onboarding.companyCode || '',
+                companyId: onboarding.companyId,
               },
             });
           }
@@ -389,20 +416,35 @@ export class UserDbController {
    */
   static async getUserHistory(req: Request, res: Response, next: NextFunction) {
     try {
-      const { email, companyCode } = req.body;
+      const { email, companyCode, companyId } = req.body;
+      let resolvedCompanyId = companyId;
+
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
+
       const history = await prisma.userHistory.findMany({
         where: {
           email,
-          companyCode,
+          companyId: resolvedCompanyId,
         },
         include: {
           user: { select: { name: true, email: true } },
+          company: { select: { companyCode: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
+
       const formattedHistory = history.map((h) => ({
         email: h.email,
-        companyCode: h.companyCode,
+        companyCode: h.company.companyCode,
         event: h.event,
         createdAt: h.createdAt,
         user: h.user,
@@ -413,6 +455,7 @@ export class UserDbController {
       next(error);
     }
   }
+
 
   /**
    * Utility to check if a user already has a pending onboarding request by email.

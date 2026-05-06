@@ -36,5 +36,6 @@ export const orgOnboardingAction = z
 export const orgHistory = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
+    nodeName: z.string().trim().optional(),
   })
   .strict();

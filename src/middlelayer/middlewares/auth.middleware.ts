@@ -154,18 +154,18 @@ export const authMiddleware = async (
         req.body?.companyCode || req.query?.companyCode;
 
       if (requestedCompanyCode) {
-        const belongsToCompany = activity.user?.userMappings?.some(
-          (m: any) =>
-            m?.company?.companyCode === requestedCompanyCode &&
-            m?.companyId === companyId,
+        const mapping = activity.user?.userMappings?.find(
+          (m: any) => m?.company?.companyCode === requestedCompanyCode
         );
 
-        if (!belongsToCompany) {
+        if (!mapping) {
           throw new AppError(
             'Unauthorized - You do not belong to this company',
             403,
           );
         }
+        // Switch context to the requested company
+        companyId = mapping.companyId;
       }
     }
 

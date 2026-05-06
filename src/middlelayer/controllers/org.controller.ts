@@ -110,6 +110,7 @@ export class OrgController {
           initiatorId,
           companyId: company?.id,
           data: {
+            
             newNodeName,
             nodeType,
             parentNode,
@@ -324,13 +325,13 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = zodParse(orgHistory, req.body);
+      const { companyCode, nodeName } = zodParse(orgHistory, req.body);
       const userId = req.user?.id;
 
       // Forward to Backend (5001)
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/org/fetch-history`,
-        { companyCode, userId },
+        { companyCode, nodeName, userId },
       );
 
       if (!ok) {

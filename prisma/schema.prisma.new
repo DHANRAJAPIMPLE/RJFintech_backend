@@ -82,8 +82,8 @@ model user_mapping {
   updated_at        DateTime @updatedAt
 
   // FK Relations
-  user              user     @relation("UserMappings", fields: [user_id], references: [id])
-  company           company  @relation(fields: [company_id], references: [id])
+  user              user     @relation("UserMappings", fields: [userId], references: [id])
+  company           company  @relation(fields: [companyId], references: [id])
   manager           user?    @relation("ReportingManager", fields: [reporting_manager], references: [id])
 }
 
@@ -95,8 +95,8 @@ model company_mapping {
   updated_at   DateTime @updatedAt
 
   // FK Relations
-  company      company       @relation(fields: [company_id], references: [id])
-  group        group_company @relation(fields: [group_id], references: [id])
+  company      company       @relation(fields: [companyId], references: [id])
+  group        group_company @relation(fields: [groupId], references: [id])
 }
 
 model user_activity {
@@ -113,7 +113,7 @@ model user_activity {
   updated_at      DateTime  @updatedAt
 
   // FK Relation
-  user          user      @relation(fields: [user_id], references: [id])
+  user          user      @relation(fields: [userId], references: [id])
 }
 
 enum OnboardingStatus {
@@ -136,8 +136,8 @@ model user_onboarding {
   updated_at   DateTime         @updatedAt
   approvalRemark String?  @map("approval_remark")
   // Relations
-  initiator user  @relation("UserOnboardingInitiator", fields: [initiator_id], references: [id])
-  approver  user? @relation("UserOnboardingApprover", fields: [approver_id], references: [id])
+  initiator user  @relation("UserOnboardingInitiator", fields: [initiatorId], references: [id])
+  approver  user? @relation("UserOnboardingApprover", fields: [approverId], references: [id])
 }
 
 enum OnboardedType {
@@ -159,8 +159,8 @@ model company_onboarding {
   updated_at     DateTime         @updatedAt
   approvalRemark String?  @map("approval_remark")
   // Relations
-  initiator user  @relation("CompanyOnboardingInitiator", fields: [initiator_id], references: [id])
-  approver  user? @relation("CompanyOnboardingApprover", fields: [approver_id], references: [id])
+  initiator user  @relation("CompanyOnboardingInitiator", fields: [initiatorId], references: [id])
+  approver  user? @relation("CompanyOnboardingApprover", fields: [approverId], references: [id])
 }
 
 
@@ -177,9 +177,9 @@ model org_structure_req {
   updated_at   DateTime         @updatedAt
 
   // Relations
-  initiator user     @relation("OrgReqInitiator", fields: [initiator_id], references: [id])
-  approver  user?    @relation("OrgReqApprover", fields: [approver_id], references: [id])
-  company   company  @relation(fields: [company_id], references: [id])
+  initiator user     @relation("OrgReqInitiator", fields: [initiatorId], references: [id])
+  approver  user?    @relation("OrgReqApprover", fields: [approverId], references: [id])
+  company   company  @relation(fields: [companyId], references: [id])
 }
 
 model org_structure {
@@ -192,8 +192,8 @@ model org_structure {
   create_at  DateTime @default(now())
 
   // Relations
-  company    company         @relation(fields: [company_id], references: [id])
-  parent     org_structure?  @relation("ParentChild", fields: [parent_id], references: [id])
+  company    company         @relation(fields: [companyId], references: [id])
+  parent     org_structure?  @relation("ParentChild", fields: [parentId], references: [id])
   children   org_structure[] @relation("ParentChild")
   user_access user_access[]
 }
@@ -228,9 +228,9 @@ model user_access {
   updated_at      DateTime @updatedAt
 
   // Relations
-  user          user          @relation(fields: [user_id], references: [id])
-  role          roles?         @relation(fields: [role_code], references: [role_code])
+  user          user          @relation(fields: [userId], references: [id])
+  role          roles?         @relation(fields: [roleCode], references: [role_code])
 
-  org_structure org_structure @relation(fields: [node_id], references: [id])
-  company       company       @relation(fields: [company_id], references: [id])
+  org_structure org_structure @relation(fields: [nodeId], references: [id])
+  company       company       @relation(fields: [companyId], references: [id])
 }

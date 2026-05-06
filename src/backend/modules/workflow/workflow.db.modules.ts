@@ -18,6 +18,7 @@ export class WorkflowDbController {
           .sort(),
         type: levels[key].type ?? 'OR',
       }));
+   
     return createHash('md5').update(JSON.stringify(normalized)).digest('hex');
   }
 
@@ -50,14 +51,28 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyId, data, eligibleApprovers } = req.body;
+      const { initiatorId, companyCode, companyId, data, eligibleApprovers } = req.body;
       const { module, subModule, nodePath, levels } = data;
 
+      let resolvedCompanyId = companyId;
+
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        // Resolve Company ID
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
+
       // 1. Resolve Node ID
-      const node = await prisma.orgStructure.findUnique({
-        where: { nodePath },
+      const node = await prisma.orgStructure.findFirst({
+        where: { nodePath, companyId },
       });
-      if (!node) throw new Error(`Node path '${nodePath}' not found`);
+      if (!node) throw new Error(`Node path '${nodePath}' not found for this company`);
 
       const nodeId = node.id;
       const levelsHash = WorkflowDbController.buildLevelsHash(levels);
@@ -96,7 +111,7 @@ export class WorkflowDbController {
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.workflowReq.create({
           data: {
-            companyId,
+            companyId: resolvedCompanyId,
             nodeId,
             module,
             subModule,
@@ -112,7 +127,7 @@ export class WorkflowDbController {
         await tx.workflowReqHistory.create({
           data: {
             workflowReqId: request.id,
-            companyCode: request.company.companyCode,
+            companyId: resolvedCompanyId,
             event: 'INITIATE',
             eventUserId: initiatorId,
           },
@@ -199,7 +214,7 @@ export class WorkflowDbController {
           await tx.workflowReqHistory.create({
             data: {
               workflowReqId: id,
-              companyCode: request.company.companyCode,
+              companyId: request.companyId,
               event: 'REJECTED',
               eventUserId: approverId,
             },
@@ -287,7 +302,7 @@ export class WorkflowDbController {
           await tx.workflowReqHistory.create({
             data: {
               workflowReqId: id,
-              companyCode: request.company.companyCode,
+              companyId: request.companyId,
               event: 'APPROVED',
               eventUserId: approverId,
             },
@@ -333,9 +348,19 @@ export class WorkflowDbController {
         whereCondition = {
           workflowReqId: { in: workflow.workflowReqIds },
         };
-      } else if (companyCode) {
+      } else if (companyCode || companyId) {
         // Fallback to company-wide history
-        whereCondition = { companyCode };
+        let resolvedCompanyId = companyId;
+
+        if (!resolvedCompanyId) {
+          const company = await prisma.company.findUnique({
+            where: { companyCode },
+          });
+          if (!company) throw new AppError('Company not found', 404);
+          resolvedCompanyId = company.id;
+        }
+
+        whereCondition = { companyId: resolvedCompanyId };
       } else {
         return res
           .status(400)
@@ -347,13 +372,14 @@ export class WorkflowDbController {
         include: {
           user: { select: { name: true, email: true } },
           workflowReq: true,
+          company: { select: { companyCode: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
 
       // Format the output for the UI
       const formattedHistories = histories.map((h) => ({
-        companyCode: h.companyCode,
+        companyCode: h.company.companyCode,
         event: h.event,
         user: h.user,
         workflowName: (h.workflowReq?.data as any)?.name || 'N/A',
@@ -373,11 +399,24 @@ export class WorkflowDbController {
    */
   static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyId } = req.body;
+      const { companyCode, companyId } = req.body;
+
+      let resolvedCompanyId = companyId;
+
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
 
       // Active production workflows
       const activeWorkflows = await prisma.workflow.findMany({
-        where: { companyId },
+        where: { companyId: resolvedCompanyId },
         select: {
           name: true,
           alias: true,
@@ -405,7 +444,7 @@ export class WorkflowDbController {
       // Pending onboarding requests
       const pendingRequests = await prisma.workflowReq.findMany({
         where: {
-          companyId,
+          companyId: resolvedCompanyId,
           status: 'PENDING',
         },
         select: {

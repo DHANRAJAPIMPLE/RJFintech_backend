@@ -15,6 +15,7 @@ model User {
   phone          String
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
+
   companyHistory CompanyHistory[] @relation("CompanyHistoryRel")
   orgHistory     OrgHistory[]     @relation("OrgHistoryRel")
   userAccesses   UserAccess[]
@@ -30,16 +31,17 @@ model User {
 
 model Company {
   id               String            @id @default(uuid())
-  gstNumber        String            @unique @map("gst_number")
+  gstNumber        String?           @map("gst_number")
   legalName        String            @map("legal_name")
   address          String
   status           Status
   registrationDate DateTime          @map("registration_date")
-  brandName        String            @map("brand_name")
-  ieCode           String            @unique @map("ie_code")
+  brandName        String?           @map("brand_name")
+  ieCode           String?           @map("ie_code")
   companyCode      String            @unique @map("company_code")
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
+
   companyMappings  CompanyMapping[]
   orgStructures    OrgStructure[]
   orgStructureReqs OrgStructureReq[]
@@ -47,6 +49,10 @@ model Company {
   userMappings     UserMapping[]
   workflows         Workflow[]
   workflowReqs      WorkflowReq[]
+  userHistories    UserHistory[]    @relation("CompanyHistoryRel")
+  userOnboardings  UserOnboarding[] @relation("UserOnboardingRel")
+  orgHistories    OrgHistory[]     @relation("OrgHistoryRel")
+  workflowReqHistories WorkflowReqHistory[] @relation("WorkflowRequestHistory")
 
 
   @@map("company")
@@ -60,7 +66,9 @@ model GroupCompany {
   remarks         String?
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
+
   companyMappings CompanyMapping[]
+  userOnboardings UserOnboarding[] @relation("UserOnboardingRel")
 
   @@map("group_company")
 }
@@ -68,11 +76,12 @@ model GroupCompany {
 model UserHistory {
   id          String    @id @default(uuid())
   email       String
-  companyCode String    @map("company_code")
+  companyId String    @map("company_id")
   event       EventType
   eventUserId String    @map("event_user_id")
   createdAt   DateTime  @default(now()) @map("created_at")
   user        User      @relation("UserHistoryRel", fields: [eventUserId], references: [id])
+  company     Company   @relation("CompanyHistoryRel", fields: [companyId], references: [id])
 
   @@map("user_history")
 }
@@ -112,6 +121,7 @@ model CompanyMapping {
   groupId   String       @map("group_id")
   createdAt DateTime     @default(now()) @map("created_at")
   updatedAt DateTime     @updatedAt @map("updated_at")
+
   company   Company      @relation(fields: [companyId], references: [id])
   group     GroupCompany @relation(fields: [groupId], references: [id])
 
@@ -140,14 +150,16 @@ model UserActivity {
 
 model UserOnboarding {
   id             String           @id @default(uuid())
-  groupCode      String?          @map("group_code")
-  companyCode    String           @map("company_code")
+  groupId        String?          @map("group_id")
+  companyId      String           @map("company_id")
   data           Json
   status         OnboardingStatus @default(PENDING)
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
   approvalRemark String?          @map("approval_remark")
   eligibleApprovers   String[]         @default([]) @map("eligible_approvers")
+  company        Company          @relation("UserOnboardingRel", fields: [companyId], references: [id])
+  group          GroupCompany?    @relation("UserOnboardingRel", fields: [groupId], references: [id])
 
   @@map("user_onboarding")
 }
@@ -185,12 +197,13 @@ model OrgStructureReq {
 model OrgHistory {
   id          String          @id @default(uuid())
   orgReqId    String          @map("org_req_id")
-  companyCode String          @map("company_code")
+  companyId   String          @map("company_id")
   event       EventType
   eventUserId String          @map("event_user_id")
   createdAt   DateTime        @default(now()) @map("created_at")
   user        User            @relation("OrgHistoryRel", fields: [eventUserId], references: [id])
   orgReq      OrgStructureReq @relation("OrgRequestHistory", fields: [orgReqId], references: [id])
+  company     Company         @relation("OrgHistoryRel", fields: [companyId], references: [id])
 
   @@map("org_history")
 }
@@ -245,7 +258,7 @@ model UserAccess {
   orgStructure   OrgStructure @relation(fields: [nodeId], references: [id])
   role           Roles?       @relation(fields: [roleCode], references: [roleCode])
   user           User         @relation(fields: [userId], references: [id])
-
+  @@unique([userId, roleCode, companyId, nodeId])
   @@map("user_access")
 }
 
@@ -310,13 +323,14 @@ model WorkflowReq {
 model WorkflowReqHistory {
   id            String      @id @default(uuid())
   workflowReqId String      @map("workflow_req_id")
-  companyCode   String      @map("company_code")
+  companyId   String      @map("company_id")
   event         EventType
   eventUserId   String      @map("event_user_id")
   createdAt     DateTime    @default(now()) @map("created_at")
 
   user        User        @relation("WorkflowHistoryRel", fields: [eventUserId], references: [id])
   workflowReq WorkflowReq @relation("WorkflowRequestHistory", fields: [workflowReqId], references: [id])
+  company     Company     @relation("WorkflowRequestHistory", fields: [companyId], references: [id])
 
   @@map("workflow_req_history")
 }
