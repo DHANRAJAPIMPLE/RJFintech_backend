@@ -297,7 +297,7 @@ export class OrgStructureDbController {
     try {
       const { companyCode, companyId, nodeName } = req.body;
       let resolvedCompanyId = companyId;
-
+      console.log(req.body, "orgbody")
       if (!resolvedCompanyId) {
         if (!companyCode) {
           throw new AppError('companyCode or companyId is required', 400);
@@ -309,36 +309,49 @@ export class OrgStructureDbController {
         resolvedCompanyId = company.id;
       }
 
+      let whereCondition: any = { companyId: resolvedCompanyId };
+
+      if (nodeName) {
+        // 1. Find all matching OrgStructureReq IDs first
+        const matchingReqs = await prisma.orgStructureReq.findMany({
+          where: {
+            companyId: resolvedCompanyId,
+            data: {
+              path: ['nodePath'],
+              equals: nodeName,
+            },
+          },
+          select: { id: true },
+        });
+        console.log(matchingReqs, "matchingReqs")
+        const reqIds = matchingReqs.map((r) => r.id);
+        whereCondition.orgReqId = { in: reqIds };
+      }
+      
       const histories = await prisma.orgHistory.findMany({
-        where: {
-          companyId: resolvedCompanyId,
-          ...(nodeName
-            ? {
-                orgReq: {
-                  data: {
-                    path: ['newNodeName'],
-                    equals: nodeName,
-                  },
-                },
-              }
-            : {}),
-        },
+        where: whereCondition,
         include: {
           user: { select: { name: true, email: true } },
           orgReq: true,
-          company: { select: { companyCode: true } },
+          company: { select: { companyCode: true, id: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
-
+      console.log(histories, "histories")
       // Format history for easy display
-      const formattedHistories = histories.map((h) => ({
-        companyCode: h.company.companyCode,
-        event: h.event,
-        createdAt: h.createdAt,
-        user: h.user,
-        newNodeName: (h.orgReq?.data as any)?.newNodeName || 'N/A',
-      }));
+      const formattedHistories = histories.map((h) => {
+        const data = h.orgReq?.data as any;
+        return {
+          companyCode: h.company.companyCode,
+          event: h.event,
+          createdAt: h.createdAt,
+          user: h.user,
+          newNodeName: data?.newNodeName || 'N/A',
+          nodeType: data?._nodeType || data?.nodeType || 'N/A',
+          parentNodePath: data?.parentNode?.nodePath || 'ROOT',
+          parentNodeName: data?.parentNode?.nodeName || 'ROOT',
+        };
+      });
 
       res.json(formattedHistories);
     } catch (error) {
