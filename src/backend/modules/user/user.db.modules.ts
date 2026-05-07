@@ -334,6 +334,25 @@ export class UserDbController {
               });
 
               if (role && node) {
+                // Check if this specific access already exists to enforce uniqueness
+                const existingAccess = await tx.userAccess.findUnique({
+                  where: {
+                    userId_roleCode_companyId_nodeId: {
+                      userId: user.id,
+                      roleCode: role.roleCode,
+                      companyId: company.id,
+                      nodeId: node.id,
+                    },
+                  },
+                });
+
+                if (existingAccess) {
+                  throw new AppError(
+                    `User already has role '${role.roleName}' assigned for this node`,
+                    400,
+                  );
+                }
+
                 await tx.userAccess.create({
                   data: {
                     userId: user.id,

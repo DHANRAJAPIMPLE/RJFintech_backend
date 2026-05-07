@@ -521,6 +521,22 @@ export class CompanyDbController {
           });
 
           // Grant Global Access to Signatories
+          const existingAccess = await tx.userAccess.findFirst({
+            where: {
+              userId: user.id,
+              roleCode: null,
+              companyId: newCompany.id,
+              nodeId: rootNode.id,
+            },
+          });
+
+          if (existingAccess) {
+            throw new AppError(
+              `User '${sig.email}' already has global access assigned for this company`,
+              400,
+            );
+          }
+
           await tx.userAccess.create({
             data: {
               userId: user.id,
