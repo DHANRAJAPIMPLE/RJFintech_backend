@@ -226,7 +226,7 @@ export class UserController {
         `${config.backendUrl}/internal/onboarding/user/check-manager`,
         { email: reportingManager },
       );
-      console.log(manager, managerOk);
+     
       if (!managerOk || !manager) {
         throw new AppError(
           manager?.message ||
@@ -241,7 +241,7 @@ export class UserController {
         `${config.backendUrl}/internal/onboarding/user/check-exists`,
         { email },
       );
-      console.log(existingUser, existsOk);
+    
       if (existsOk && existingUser) {
         throw new AppError('User already exists in master table', 400);
       }
@@ -250,7 +250,7 @@ export class UserController {
         `${config.backendUrl}/internal/user/get-pending-users`,
         { email },
       );
-      console.log(pendingUsers, pendingOk, "pending");
+    
       if (pendingOk && pendingUsers) {
         throw new AppError('User already exists in pending onboarding', 400);
       }
@@ -261,7 +261,7 @@ export class UserController {
           `${config.backendUrl}/internal/company/check-signatories`,
           { emails: [email] },
         );
-        console.log(signatoryCheck, signatoryCheckOk, "signature");
+      
       if (signatoryCheckOk && signatoryCheck.exists) {
         throw new AppError(
           signatoryCheck.message ||
@@ -281,7 +281,7 @@ export class UserController {
             roleSubCategory: permission.roleSubCategory,
           },
         );
-        console.log(roles, rolesOk, "roles");
+       
         if (!rolesOk || !Array.isArray(roles) || roles.length === 0) {
           throw new AppError(`Role '${permission.roleName}' not found`, 400);
         }
@@ -293,7 +293,7 @@ export class UserController {
             companyId: manager?.userMappings?.[0]?.companyId,
           },
         );
-        console.log(node, nodeOk, "node");
+       
         if (!nodeOk || !node) {
           throw new AppError(`Node '${permission.nodePath}' not found`, 400);
         }

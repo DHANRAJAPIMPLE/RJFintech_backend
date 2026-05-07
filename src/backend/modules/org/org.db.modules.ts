@@ -36,7 +36,7 @@ export class OrgStructureDbController {
    */
   static async getOrgNodeByPathCompanyId(req: Request, res: Response) {
     const { nodePath, companyId } = req.body;
-    console.log(req.body);
+   
     const node = await prisma.orgStructure.findFirst({
       where: { nodePath, companyId },
     });
@@ -297,7 +297,7 @@ export class OrgStructureDbController {
     try {
       const { companyCode, companyId, nodeName } = req.body;
       let resolvedCompanyId = companyId;
-      console.log(req.body, "orgbody")
+      
       if (!resolvedCompanyId) {
         if (!companyCode) {
           throw new AppError('companyCode or companyId is required', 400);
@@ -317,17 +317,17 @@ export class OrgStructureDbController {
           where: {
             companyId: resolvedCompanyId,
             data: {
-              path: ['nodePath'],
+              path: ['newNodeName'],
               equals: nodeName,
             },
           },
           select: { id: true },
         });
-        console.log(matchingReqs, "matchingReqs")
+      
         const reqIds = matchingReqs.map((r) => r.id);
         whereCondition.orgReqId = { in: reqIds };
       }
-      
+
       const histories = await prisma.orgHistory.findMany({
         where: whereCondition,
         include: {
@@ -337,7 +337,7 @@ export class OrgStructureDbController {
         },
         orderBy: { createdAt: 'desc' },
       });
-      console.log(histories, "histories")
+ 
       // Format history for easy display
       const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;

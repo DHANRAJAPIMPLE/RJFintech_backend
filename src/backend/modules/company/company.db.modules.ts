@@ -50,6 +50,15 @@ export class CompanyDbController {
               company: {
                 include: {
                   userMappings: {
+                    where: {
+                      user: {
+                        userAccesses: {
+                          some: {
+                            isGlobalAccess: true,
+                          },
+                        },
+                      },
+                    },
                     include: {
                       user: {
                         include: {
@@ -78,6 +87,15 @@ export class CompanyDbController {
         },
         include: {
           userMappings: {
+            where: {
+              user: {
+                userAccesses: {
+                  some: {
+                    isGlobalAccess: true,
+                  },
+                },
+              },
+            },
             include: {
               user: {
                 include: {
