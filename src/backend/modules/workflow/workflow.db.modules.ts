@@ -418,6 +418,7 @@ export class WorkflowDbController {
       const activeWorkflows = await prisma.workflow.findMany({
         where: { companyId: resolvedCompanyId },
         select: {
+          id: true,
           name: true,
           alias: true,
           module: true,
@@ -426,7 +427,7 @@ export class WorkflowDbController {
             select: {
               nodePath: true,
               nodeName: true,
-              nodeType: true, 
+              nodeType: true,
             },
           },
           levels: {
