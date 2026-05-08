@@ -220,7 +220,7 @@ Table user_access {
   roleCode String
   nodeId String [not null]
   accessType AccessType
-  userCategory UserCategory [not null]
+  accessCategory UserCategory [not null, default: 'NODE']
   companyId String [not null]
   isGlobalAccess Boolean [not null, default: false]
   createdAt DateTime [default: `now()`, not null]

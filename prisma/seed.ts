@@ -342,12 +342,23 @@ async function main() {
     },
   });
 
-  await prisma.companyMapping.create({
-    data: {
-      companyId: company.id,
-      groupId: group.id,
+  const mappingExists = await prisma.companyMapping.findUnique({
+    where: {
+      groupId_companyId: {
+        groupId: group.id,
+        companyId: company.id,
+      },
     },
   });
+
+  if (!mappingExists) {
+    await prisma.companyMapping.create({
+      data: {
+        companyId: company.id,
+        groupId: group.id,
+      },
+    });
+  }
   console.log('Initial Group and Company seeded.');
 
   // 4. Create Root Org Structure Node
@@ -364,27 +375,51 @@ async function main() {
   console.log('Root Org Structure node created.');
 
   // 5. Map Super Admin to Company and give Global Access
-  await prisma.userMapping.create({
-    data: {
-      userId: superAdmin.id,
-      companyId: company.id,
-      status: 'ACTIVE',
-      designation: 'CTO',
-      employeeId: 'EMP001',
+  const superAdminMappingExists = await prisma.userMapping.findUnique({
+    where: {
+      userId_companyId: {
+        userId: superAdmin.id,
+        companyId: company.id,
+      },
     },
   });
 
-  await prisma.userAccess.create({
-    data: {
-      userId: superAdmin.id,
-      roleCode: "SAAS_ADMIN",
-      nodeId: rootNode.id,
-      accessType: null,
-      companyId: company.id,
-      isGlobalAccess: true,
-      userCategory: 'ALL_CHILD',
+  if (!superAdminMappingExists) {
+    await prisma.userMapping.create({
+      data: {
+        userId: superAdmin.id,
+        companyId: company.id,
+        status: 'ACTIVE',
+        designation: 'CTO',
+        employeeId: 'EMP001',
+      },
+    });
+  }
+
+  const superAdminAccessExists = await prisma.userAccess.findUnique({
+    where: {
+      userId_roleCode_companyId_nodeId: {
+        userId: superAdmin.id,
+        roleCode: "SAAS_ADMIN",
+        companyId: company.id,
+        nodeId: rootNode.id,
+      },
     },
   });
+
+  if (!superAdminAccessExists) {
+    await prisma.userAccess.create({
+      data: {
+        userId: superAdmin.id,
+        roleCode: "SAAS_ADMIN",
+        nodeId: rootNode.id,
+        accessType: null,
+        companyId: company.id,
+        isGlobalAccess: true,
+        accessCategory: 'ALL_CHILD',
+      },
+    });
+  }
   
   console.log('Super Admin mapping and global access configured.');
 
@@ -451,7 +486,7 @@ async function main() {
           accessType: 'PRIMARY',
           companyId: company.id,
           isGlobalAccess: false,
-          userCategory: i % 2 === 0 ? 'NODE' : 'IMMEDIATE_CHILD',
+          accessCategory: i % 2 === 0 ? 'NODE' : 'IMMEDIATE_CHILD',
         },
       });
     }

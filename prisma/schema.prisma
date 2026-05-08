@@ -259,7 +259,7 @@ model UserAccess {
   roleCode       String?      @map("role_code")
   nodeId         String       @map("node_id")
   accessType     AccessType?  @map("access_type")
-  userCategory   UserCategory @map("user_category")
+  accessCategory   UserCategory @map("user_category") @default(NODE)
   companyId      String       @map("company_id")
   isGlobalAccess Boolean      @default(false) @map("is_global_access")
   createdAt      DateTime     @default(now()) @map("created_at")

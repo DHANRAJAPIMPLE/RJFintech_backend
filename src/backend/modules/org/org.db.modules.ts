@@ -170,7 +170,7 @@ export class OrgStructureDbController {
                     roleCode: access.roleCode,
                     nodeId: newNode.id,
                     accessType: 'SECONDARY',
-                    userCategory: access.userCategory,
+                    accessCategory: access.accessCategory,
                     companyId: access.companyId,
                     isGlobalAccess: false,
                   });

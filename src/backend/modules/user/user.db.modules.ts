@@ -158,7 +158,7 @@ export class UserDbController {
               nodeName: a.orgStructure?.nodeName,
               nodePath: a.orgStructure?.nodePath,
               nodeType: a.orgStructure?.nodeType,
-              accessCategory: a.userCategory,
+              accessCategory: a.accessCategory,
             })),
           secondary: u.userAccesses
             .filter((a) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
@@ -169,7 +169,7 @@ export class UserDbController {
               nodeName: a.orgStructure?.nodeName,
               nodePath: a.orgStructure?.nodePath,
               nodeType: a.orgStructure?.nodeType,
-              accessCategory: a.userCategory,
+              accessCategory: a.accessCategory,
             })),
         };
 
@@ -196,7 +196,7 @@ export class UserDbController {
             nodeName: p.nodeName,
             nodePath: p.nodePath,
             nodeType: p.nodeType,
-            accessCategory: p.accessCategory || p.userCategory,
+            accessCategory: p.accessCategory,
           };
           // Condition: isGlobal true then comes in primary
           if (
@@ -439,8 +439,8 @@ export class UserDbController {
           // 3. Setup Granular Access Permissions
           if (Array.isArray(permissions)) {
             for (const perm of permissions) {
-              const { accessType, roleName, nodePath, accessCategory, userCategory } = perm;
-              const finalCategory = accessCategory || userCategory;
+              const { accessType, roleName, nodePath, accessCategory } = perm;
+              const finalCategory = accessCategory;
 
               const role = await tx.roles.findUnique({
                 where: { roleName },
@@ -476,7 +476,7 @@ export class UserDbController {
                     roleCode: role.roleCode,
                     nodeId: node.id,
                     accessType,
-                    userCategory: finalCategory,
+                    accessCategory: finalCategory,
                     companyId: company.id,
                     isGlobalAccess: false,
                   },

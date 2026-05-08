@@ -45,7 +45,7 @@ export const workflowOnboardingSchema = z
         l5: levelSchema,
       })
       .optional(),
-    workflowId: z.string().uuid('Invalid workflow ID').optional(),
+    workflowId: z.string().uuid('Invalid workflow ID').nullable().optional(),
   })
   .strict();
 

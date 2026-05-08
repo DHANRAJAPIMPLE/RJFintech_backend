@@ -555,6 +555,7 @@ export class CompanyDbController {
               accessType: null,
               companyId: newCompany.id,
               isGlobalAccess: true,
+              accessCategory: 'ALL_CHILD',
             },
           });
 
