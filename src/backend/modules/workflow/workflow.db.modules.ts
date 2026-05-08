@@ -501,7 +501,10 @@ export class WorkflowDbController {
             const currentPending = levels.find(l => l.status === 'PENDING');
             if (currentPending) {
               const approvers = (currentPending.approversList as string[])
-                .map(id => approverMap.get(id))
+                .map(id => {
+                  const u = approverMap.get(id);
+                  return u ? { name: u.name, email: u.email } : null;
+                })
                 .filter(Boolean);
 
               resultList.push({
@@ -555,7 +558,6 @@ export class WorkflowDbController {
             ? { name: 'Teams', email: 'Teams' }
             : { name: h.user?.name || 'System', email: h.user?.email || 'system@internal' },
           workflowName: (h.workflowReq?.data as any)?.name || null,
-          workflow: workflowStatus
         };
       });
 

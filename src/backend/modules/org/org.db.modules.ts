@@ -536,7 +536,10 @@ export class OrgStructureDbController {
             const currentPending = levels.find(l => l.status === 'PENDING');
             if (currentPending) {
               const approvers = (currentPending.approversList as string[])
-                .map(id => approverMap.get(id))
+                .map(id => {
+                  const u = approverMap.get(id);
+                  return u ? { name: u.name, email: u.email } : null;
+                })
                 .filter(Boolean);
 
               const data = h.orgReq?.data as any;
@@ -597,7 +600,6 @@ export class OrgStructureDbController {
           nodeType: data?._nodeType || data?.nodeType || null,
           parentNodePath: data?.parentNode?.nodePath || 'ROOT',
           parentNodeName: data?.parentNode?.nodeName || 'ROOT',
-          workflow: workflowStatus
         };
       });
 

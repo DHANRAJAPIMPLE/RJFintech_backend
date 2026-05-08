@@ -735,7 +735,10 @@ export class UserDbController {
             const currentPending = levels.find(l => l.status === 'PENDING');
             if (currentPending) {
               const approvers = (currentPending.approversList as string[])
-                .map(id => approverMap.get(id))
+                .map(id => {
+                  const u = approverMap.get(id);
+                  return u ? { name: u.name, email: u.email } : null;
+                })
                 .filter(Boolean);
 
               resultList.push({
