@@ -362,14 +362,7 @@ export class UserController {
         );
       }
 
-      res.status(200).json({
-        message:
-          data && data.length > 0
-            ? 'User history fetched successfully!'
-            : 'User history not found',
-        code: 200,
-        data,
-      });
+      res.status(200).json(data);
     } catch (error) {
       next(error);
     }

@@ -339,14 +339,7 @@ export class OrgController {
           status,
         );
       }
-      res.status(200).json({
-        message:
-          data && data.length > 0
-            ? 'Organization structure history fetched successfully!'
-            : 'Organization structure history not found',
-        code: 200,
-        data: data || [],
-      });
+      res.status(200).json(data);
     } catch (error) {
       next(error);
     }

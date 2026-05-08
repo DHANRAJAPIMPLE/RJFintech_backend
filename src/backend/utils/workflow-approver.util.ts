@@ -181,7 +181,10 @@ export class WorkflowApproverUtil {
       created.push(record);
     }
 
-    return created;
+    return {
+      workflowId: workflow.id,
+      approvers: created,
+    };
   }
 
   /**

@@ -244,11 +244,7 @@ export class WorkflowController {
         );
       }
 
-      res.status(200).json({
-        message: 'History fetched successfully!',
-        code: 200,
-        data: data,
-      });
+      res.status(200).json(data);
     } catch (error) {
       next(error);
     }

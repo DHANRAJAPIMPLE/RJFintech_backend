@@ -336,7 +336,7 @@ export class OrgStructureDbController {
         }
 
         if (nodeId && initiatorId) {
-          await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+          const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
             workflowId: workflowId || null,
             module: 'SYSTEM_ACCESS',
             subModule: 'ORG_STR',
@@ -345,6 +345,12 @@ export class OrgStructureDbController {
             initiatorId,
             reqId: reqRecord.id,
             reqTable: 'org_structure_req',
+          });
+
+          // Store the resolved workflowId in the request record
+          await tx.orgStructureReq.update({
+            where: { id: reqRecord.id },
+            data: { workflowId: resolvedWorkflowId },
           });
         }
 
@@ -498,6 +504,19 @@ export class OrgStructureDbController {
         orderBy: { level: 'asc' },
       });
 
+      // 2. Resolve approver details (names/emails)
+      const allApproverIds = new Set<string>();
+      workflowApprovers.forEach(wa => {
+        if (Array.isArray(wa.approversList)) {
+          wa.approversList.forEach((id: any) => allApproverIds.add(String(id)));
+        }
+      });
+      const approverDetails = await prisma.user.findMany({
+        where: { id: { in: Array.from(allApproverIds) } },
+        select: { id: true, name: true, email: true }
+      });
+      const approverMap = new Map(approverDetails.map(u => [u.id, u]));
+
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
       workflowApprovers.forEach((wa) => {
@@ -505,17 +524,46 @@ export class OrgStructureDbController {
         existing.push(wa);
         workflowMap.set(wa.reqId, existing);
       });
+
+      const resultList: any[] = [];
+      const handledPendingReqs = new Set<string>();
+
+      // 3. Inject "Pending Approval" entries for any active requests
+      histories.forEach((h) => {
+        if (h.orgReqId && !handledPendingReqs.has(h.orgReqId)) {
+          const levels = workflowMap.get(h.orgReqId);
+          if (levels) {
+            const currentPending = levels.find(l => l.status === 'PENDING');
+            if (currentPending) {
+              const approvers = (currentPending.approversList as string[])
+                .map(id => approverMap.get(id))
+                .filter(Boolean);
+
+              const data = h.orgReq?.data as any;
+              resultList.push({
+                companyCode: h.company.companyCode,
+                event: `L${currentPending.level} Pending Approval`,
+                createdAt: null,
+                eligibleapprovers: approvers,
+                newNodeName: data?.newNodeName || null,
+                nodeType: data?._nodeType || data?.nodeType || null,
+                parentNodePath: data?.parentNode?.nodePath || 'ROOT',
+                parentNodeName: data?.parentNode?.nodeName || 'ROOT',
+              });
+            }
+          }
+          handledPendingReqs.add(h.orgReqId);
+        }
+      });
  
-      // Format history for easy display
+      // 4. Format history for easy display
       const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;
         const initiatorAccesses = h.user?.userAccesses || [];
         
-        // 2. Resolve "Teams" display logic: Only for SAAS_ADMIN
         const isSaasAdmin = initiatorAccesses.some(a => a.roleCode === 'SAAS_ADMIN');
         const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
 
-        // 3. Resolve workflow status for this request
         const levels = h.orgReqId ? workflowMap.get(h.orgReqId) : null;
         let workflowStatus = null;
         
@@ -528,19 +576,19 @@ export class OrgStructureDbController {
             overallStatus: isRejected ? 'REJECTED' : allApproved ? 'APPROVED' : 'PENDING',
             currentLevel: currentPending ? currentPending.level : (allApproved ? levels.length : null),
             totalLevels: levels.length,
-            levels: levels.map((l: any) => ({
-              level: l.level,
-              status: l.status,
-              mandatoryCount: l.mandatoryCount,
-              approversCount: Array.isArray(l.approversList) ? l.approversList.length : 0
-            }))
+            levels: levels
+              .filter((l: any) => l.level <= (currentPending?.level || levels.length))
+              .map((l: any) => ({
+                level: l.level,
+                status: l.status
+              }))
           };
         }
 
         return {
           companyCode: h.company.companyCode,
           event: h.event,
-          level: h.level, // The specific level this history event occurred at
+          level: h.level, 
           createdAt: h.createdAt,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
@@ -553,7 +601,13 @@ export class OrgStructureDbController {
         };
       });
 
-      res.json(formattedHistories);
+      resultList.push(...formattedHistories);
+
+      res.status(200).json({
+        message: 'Organization structure history fetched successfully!',
+        code: 200,
+        data: resultList
+      });
     } catch (error) {
       next(error);
     }

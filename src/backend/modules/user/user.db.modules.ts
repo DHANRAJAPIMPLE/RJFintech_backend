@@ -345,7 +345,7 @@ export class UserDbController {
       }
 
       if (nodeId && initiatorId) {
-        await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+        const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
           workflowId: workflowId || null,
           module: 'SYSTEM_ACCESS',
           subModule: 'USER_ACC',
@@ -354,6 +354,12 @@ export class UserDbController {
           initiatorId,
           reqId: onb.id,
           reqTable: 'user_onboarding',
+        });
+
+        // Store the resolved workflowId in the onboarding record
+        await tx.userOnboarding.update({
+          where: { id: onb.id },
+          data: { workflowId: resolvedWorkflowId },
         });
       }
 
@@ -697,6 +703,19 @@ export class UserDbController {
         orderBy: { level: 'asc' },
       });
 
+      // 2. Resolve approver details (names/emails)
+      const allApproverIds = new Set<string>();
+      workflowApprovers.forEach(wa => {
+        if (Array.isArray(wa.approversList)) {
+          wa.approversList.forEach((id: any) => allApproverIds.add(String(id)));
+        }
+      });
+      const approverDetails = await prisma.user.findMany({
+        where: { id: { in: Array.from(allApproverIds) } },
+        select: { id: true, name: true, email: true }
+      });
+      const approverMap = new Map(approverDetails.map(u => [u.id, u]));
+
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
       workflowApprovers.forEach((wa) => {
@@ -705,15 +724,41 @@ export class UserDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
+      const resultList: any[] = [];
+      const handledPendingReqs = new Set<string>();
+
+      // 3. Inject "Pending Approval" entries for any active requests
+      history.forEach((h) => {
+        if (h.reqId && !handledPendingReqs.has(h.reqId)) {
+          const levels = workflowMap.get(h.reqId);
+          if (levels) {
+            const currentPending = levels.find(l => l.status === 'PENDING');
+            if (currentPending) {
+              const approvers = (currentPending.approversList as string[])
+                .map(id => approverMap.get(id))
+                .filter(Boolean);
+
+              resultList.push({
+                email: h.email,
+                companyCode: h.company.companyCode,
+                event: `L${currentPending.level} Pending Approval`,
+                createdAt: null,
+                eligibleapprovers: approvers
+              });
+            }
+          }
+          handledPendingReqs.add(h.reqId);
+        }
+      });
+
+      // 4. Add actual history entries
       const formattedHistory = history.map((h) => {
         const initiatorMapping = h.user?.userMappings?.[0];
         const initiatorAccesses = h.user?.userAccesses || [];
         
-        // 2. Resolve "Teams" display logic: Only for SAAS_ADMIN
         const isSaasAdmin = initiatorAccesses.some(a => a.roleCode === 'SAAS_ADMIN');
         const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
 
-        // 3. Resolve workflow status for this request
         const levels = h.reqId ? workflowMap.get(h.reqId) : null;
         let workflowStatus = null;
         
@@ -726,10 +771,12 @@ export class UserDbController {
             overallStatus: isRejected ? 'REJECTED' : allApproved ? 'APPROVED' : 'PENDING',
             currentLevel: currentPending ? currentPending.level : (allApproved ? levels.length : null),
             totalLevels: levels.length,
-            levels: levels.map((l: any) => ({
-              level: l.level,
-              status: l.status
-            }))
+            levels: levels
+              .filter((l: any) => l.level <= (currentPending?.level || levels.length))
+              .map((l: any) => ({
+                level: l.level,
+                status: l.status
+              }))
           };
         }
 
@@ -737,16 +784,21 @@ export class UserDbController {
           email: h.email,
           companyCode: h.company.companyCode,
           event: h.event,
-          level: h.level, // The specific level this history event occurred at
+          level: h.level, 
           createdAt: h.createdAt,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : { name: h.user?.name || 'System', email: h.user?.email || 'system@internal' },
-          workflow: workflowStatus
         };
       });
 
-      res.status(200).json(formattedHistory);
+      resultList.push(...formattedHistory);
+
+      res.status(200).json({
+        message: 'User history fetched successfully!',
+        code: 200,
+        data: resultList
+      });
     } catch (error) {
       next(error);
     }

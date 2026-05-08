@@ -133,7 +133,7 @@ export class WorkflowDbController {
 
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         if (initiatorId) {
-          await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+          const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
             workflowId: parentWorkflowId || null,
             module: 'SYSTEM_ACCESS',
             subModule: 'WORK_FLOW',
@@ -142,6 +142,12 @@ export class WorkflowDbController {
             initiatorId,
             reqId: request.id,
             reqTable: 'workflow_req',
+          });
+
+          // Store the resolved workflowId in the request record
+          await tx.workflowReq.update({
+            where: { id: request.id },
+            data: { workflowId: resolvedWorkflowId },
           });
         }
 
@@ -463,6 +469,19 @@ export class WorkflowDbController {
         orderBy: { level: 'asc' },
       });
 
+      // 2. Resolve approver details (names/emails)
+      const allApproverIds = new Set<string>();
+      workflowApprovers.forEach(wa => {
+        if (Array.isArray(wa.approversList)) {
+          wa.approversList.forEach((id: any) => allApproverIds.add(String(id)));
+        }
+      });
+      const approverDetails = await prisma.user.findMany({
+        where: { id: { in: Array.from(allApproverIds) } },
+        select: { id: true, name: true, email: true }
+      });
+      const approverMap = new Map(approverDetails.map(u => [u.id, u]));
+
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
       workflowApprovers.forEach((wa) => {
@@ -471,16 +490,41 @@ export class WorkflowDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
-      // Format the output for the UI
+      const resultList: any[] = [];
+      const handledPendingReqs = new Set<string>();
+
+      // 3. Inject "Pending Approval" entries for any active requests
+      histories.forEach((h) => {
+        if (h.workflowReqId && !handledPendingReqs.has(h.workflowReqId)) {
+          const levels = workflowMap.get(h.workflowReqId);
+          if (levels) {
+            const currentPending = levels.find(l => l.status === 'PENDING');
+            if (currentPending) {
+              const approvers = (currentPending.approversList as string[])
+                .map(id => approverMap.get(id))
+                .filter(Boolean);
+
+              resultList.push({
+                companyCode: h.company.companyCode,
+                event: `L${currentPending.level} Pending Approval`,
+                createdAt: null,
+                eligibleapprovers: approvers,
+                workflowName: (h.workflowReq?.data as any)?.name || null
+              });
+            }
+          }
+          handledPendingReqs.add(h.workflowReqId);
+        }
+      });
+
+      // 4. Format the output for the UI
       const formattedHistories = histories.map((h) => {
         const companyId = h.company.id;
         const initiatorAccesses = h.user?.userAccesses?.filter(a => a.companyId === companyId) || [];
         
-        // 2. Resolve "Teams" display logic: Only for SAAS_ADMIN
         const isSaasAdmin = initiatorAccesses.some(a => a.roleCode === 'SAAS_ADMIN');
         const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
 
-        // 3. Resolve workflow status for this request
         const levels = h.workflowReqId ? workflowMap.get(h.workflowReqId) : null;
         let workflowStatus = null;
         
@@ -493,19 +537,19 @@ export class WorkflowDbController {
             overallStatus: isRejected ? 'REJECTED' : allApproved ? 'APPROVED' : 'PENDING',
             currentLevel: currentPending ? currentPending.level : (allApproved ? levels.length : null),
             totalLevels: levels.length,
-            levels: levels.map((l: any) => ({
-              level: l.level,
-              status: l.status,
-              mandatoryCount: l.mandatoryCount,
-              approversCount: Array.isArray(l.approversList) ? l.approversList.length : 0
-            }))
+            levels: levels
+              .filter((l: any) => l.level <= (currentPending?.level || levels.length))
+              .map((l: any) => ({
+                level: l.level,
+                status: l.status
+              }))
           };
         }
 
         return {
           companyCode: h.company.companyCode,
           event: h.event,
-          level: h.level, // The specific level this history event occurred at
+          level: h.level, 
           createdAt: h.createdAt,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
@@ -515,7 +559,13 @@ export class WorkflowDbController {
         };
       });
 
-      res.json(formattedHistories);
+      resultList.push(...formattedHistories);
+
+      res.status(200).json({
+        message: 'Workflow history fetched successfully!',
+        code: 200,
+        data: resultList
+      });
     } catch (error) {
       next(error);
     }
