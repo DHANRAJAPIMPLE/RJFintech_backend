@@ -728,9 +728,7 @@ export class UserDbController {
             totalLevels: levels.length,
             levels: levels.map((l: any) => ({
               level: l.level,
-              status: l.status,
-              mandatoryCount: l.mandatoryCount,
-              approversCount: Array.isArray(l.approversList) ? l.approversList.length : 0
+              status: l.status
             }))
           };
         }
