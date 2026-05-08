@@ -133,6 +133,7 @@ Table user_onboarding {
   id String [pk]
   groupId String
   companyId String [not null]
+  workflowId String
   data Json [not null]
   status OnboardingStatus [not null, default: 'PENDING']
   createdAt DateTime [default: `now()`, not null]
@@ -160,6 +161,7 @@ Table org_structure_req {
   id String [pk]
   data Json [not null]
   companyId String [not null]
+  workflowId String
   status OnboardingStatus [not null, default: 'PENDING']
   createdAt DateTime [default: `now()`, not null]
   remarks String
@@ -218,6 +220,7 @@ Table user_access {
   roleCode String
   nodeId String [not null]
   accessType AccessType
+  userCategory UserCategory [not null]
   companyId String [not null]
   isGlobalAccess Boolean [not null, default: false]
   createdAt DateTime [default: `now()`, not null]
@@ -239,6 +242,7 @@ Table workflow {
   nodeId String [not null]
   module String [not null]
   subModule String [not null]
+  roleCode String
   companyId String [not null]
   levelsHash String [not null]
   orgStructure org_structure [not null]
@@ -274,6 +278,7 @@ Table workflow_req {
   module String [not null]
   subModule String [not null]
   levelsHash String [not null]
+  workflowId String
   data Json [not null]
   status OnboardingStatus [not null, default: 'PENDING']
   approvalRemark String
@@ -362,6 +367,12 @@ Enum ApprovalType {
 Enum AccessType {
   PRIMARY
   SECONDARY
+}
+
+Enum UserCategory {
+  ALL_CHILD
+  IMMEDIATE_CHILD
+  NODE
 }
 
 Ref: user_history.eventUserId > user.id

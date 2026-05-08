@@ -382,10 +382,81 @@ async function main() {
       accessType: null,
       companyId: company.id,
       isGlobalAccess: true,
+      userCategory: 'ALL_CHILD',
     },
   });
   
   console.log('Super Admin mapping and global access configured.');
+
+  // 6. Seed 10 Dummy Users
+  console.log('Seeding 10 dummy users...');
+  for (let i = 1; i <= 10; i++) {
+    const userEmail = `employee${i}@testtech.com`;
+    let dummyUser = await prisma.user.findUnique({ where: { email: userEmail } });
+    if (!dummyUser) {
+      dummyUser = await prisma.user.create({
+        data: {
+          name: `Employee ${i}`,
+          email: userEmail,
+          password: adminPassword,
+          phone: `98765432${i.toString().padStart(2, '0')}`,
+        },
+      });
+    }
+
+    const mappingExists = await prisma.userMapping.findUnique({
+      where: {
+        userId_companyId: {
+          userId: dummyUser.id,
+          companyId: company.id,
+        }
+      }
+    });
+
+    if (!mappingExists) {
+      await prisma.userMapping.create({
+        data: {
+          userId: dummyUser.id,
+          companyId: company.id,
+          reportingManager: superAdmin.id,
+          status: 'ACTIVE',
+          designation: `Executive ${i}`,
+          employeeId: `EMP${i.toString().padStart(3, '0')}`,
+        },
+      });
+    }
+
+    const rolesToAssign = [
+      'ACCOUNTS_USER', 'PAYMENTS_USER', 'PURCHASE_USER', 'FINOPS_USER', 'MASTER_USER'
+    ];
+    const roleCode = rolesToAssign[i % rolesToAssign.length];
+
+    const accessExists = await prisma.userAccess.findUnique({
+      where: {
+        userId_roleCode_companyId_nodeId: {
+          userId: dummyUser.id,
+          roleCode: roleCode,
+          companyId: company.id,
+          nodeId: rootNode.id,
+        }
+      }
+    });
+
+    if (!accessExists) {
+      await prisma.userAccess.create({
+        data: {
+          userId: dummyUser.id,
+          roleCode: roleCode,
+          nodeId: rootNode.id,
+          accessType: 'PRIMARY',
+          companyId: company.id,
+          isGlobalAccess: false,
+          userCategory: i % 2 === 0 ? 'NODE' : 'IMMEDIATE_CHILD',
+        },
+      });
+    }
+  }
+  console.log('10 Dummy users seeded.');
 
 }
 
