@@ -212,7 +212,7 @@ export class UserDbController {
 
         return {
           id: onb.id,
-          initiator: onb.initiator,
+          
           approver: onb.approver,
           basicDetails: {
             name: basic.name,
@@ -223,6 +223,9 @@ export class UserDbController {
             employeeId: basic.employeeId || 'N/A',
             reportingManagerName: onb.reportingManagerInfo?.name || 'N/A',
             reportingManagerEmail: onb.reportingManagerInfo?.email || 'N/A',
+            initiatorName: onb.initiator?.name || null,
+            initiatorEmail: onb.initiator?.email || null,
+            initiatedDate: onb.createdAt,
           },
           primary,
           secondary,
@@ -685,14 +688,14 @@ export class UserDbController {
           },
         },
       });
-
+  console.log(userAccesses);
       const nodes = userAccesses
         .map((ua) => ua.orgStructure)
         .filter(
           (node, index, self) =>
             index === self.findIndex((t) => t.nodePath === node.nodePath),
         );
-
+    console.log(nodes);
       return res.status(200).json(nodes);
     }
   } catch (error) {
