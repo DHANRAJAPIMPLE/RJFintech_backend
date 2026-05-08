@@ -61,7 +61,7 @@ export class OrgController {
       }
 
       // 2. Logic: Get eligible approver IDs (Global Access + Org Structure Managers + SAAS_ADMIN)
-      const [globalRes, mgrRes, adminRes] = await Promise.all([
+      const [globalRes, mgrRes] = await Promise.all([
         internalPost<string[]>(
           `${config.backendUrl}/internal/onboarding/global-access-ids`,
           { companyCode },
@@ -70,17 +70,12 @@ export class OrgController {
           `${config.backendUrl}/internal/onboarding/approver-ids`,
           { companyCode, roleCode: 'ORG_STR_MGR' },
         ),
-        internalPost<string[]>(
-          `${config.backendUrl}/internal/onboarding/saas-admin-ids`,
-          { companyCode },
-        ),
       ]);
 
       let eligibleApprovers = [
         ...new Set([
           ...(globalRes.data || []),
-          ...(mgrRes.data || []),
-          ...(adminRes.data || []),
+          ...(mgrRes.data || [])
         ]),
       ];
 

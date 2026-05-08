@@ -59,7 +59,7 @@ export class WorkflowController {
       }
 
       // 3. Get eligible approver IDs (Global Access + Workflow Managers + SAAS_ADMIN)
-      const [globalRes, mgrRes, adminRes] = await Promise.all([
+      const [globalRes, mgrRes] = await Promise.all([
         internalPost<string[]>(
           `${config.backendUrl}/internal/onboarding/global-access-ids`,
           { companyCode },
@@ -68,18 +68,14 @@ export class WorkflowController {
           `${config.backendUrl}/internal/onboarding/approver-ids`,
           { companyCode, roleCode: 'WORK_FLOW_MGR' },
         ),
-        internalPost<string[]>(
-          `${config.backendUrl}/internal/onboarding/saas-admin-ids`,
-          { companyCode },
-        ),
+
       ]);
 
       // Combine and deduplicate
       let eligibleApprovers = Array.from(
         new Set([
           ...(globalRes.data || []),
-          ...(mgrRes.data || []),
-          ...(adminRes.data || []),
+          ...(mgrRes.data || [])
         ]),
       );
 
