@@ -119,6 +119,8 @@ export class WorkflowApproverUtil {
 
     // ── Step 4: Resolve approvers for each level ─────────────────────────────
     const approverRows: any[] = [];
+    // Track approvers already assigned to a level — each user can only approve at ONE level
+    const usedApprovers = new Set<string>();
 
     for (const level of levels) {
       const approverSet = new Set<string>();
@@ -143,6 +145,12 @@ export class WorkflowApproverUtil {
       // ── Step 5: Exclude the initiator ──────────────────────────────────────
       approverSet.delete(initiatorId);
 
+      // ── Step 5b: Exclude approvers already assigned to a previous level ────
+      // Each user can only be an eligible approver at ONE level per request
+      for (const usedId of usedApprovers) {
+        approverSet.delete(usedId);
+      }
+
       // ── Step 6: Determine mandatoryCount from AND/OR logic ─────────────────
       // AND = both approver types must approve → count how many distinct approver types we have
       // OR  = only one approver needed
@@ -159,6 +167,11 @@ export class WorkflowApproverUtil {
           `The initiator cannot be an approver in their own workflow.`,
           400,
         );
+      }
+
+      // Mark these approvers as used so they won't appear in subsequent levels
+      for (const id of approverSet) {
+        usedApprovers.add(id);
       }
 
       approverRows.push({
