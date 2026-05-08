@@ -508,10 +508,14 @@ async function main() {
       });
     }
 
-    const rolesToAssign = [
-      'ACCOUNTS_USER', 'PAYMENTS_USER', 'PURCHASE_USER', 'FINOPS_USER', 'MASTER_USER'
+    // Define roles to assign based on employee index
+    // Exclusively using System Access roles (User, Org, Workflow) as requested
+    const systemAccessRoles = [
+      'USER_ACC_MGR', 'ORG_STR_MGR', 'WORK_FLOW_MGR',
+      'USER_ACC_USER', 'ORG_STR_USER', 'WORK_FLOW_USER',
+      'USER_ACC_VIEWER', 'ORG_STR_VIEWER', 'WORK_FLOW_VIEWER'
     ];
-    const roleCode = rolesToAssign[i % rolesToAssign.length];
+    const roleCode = systemAccessRoles[(i - 1) % systemAccessRoles.length];
 
     const accessExists = await prisma.userAccess.findUnique({
       where: {

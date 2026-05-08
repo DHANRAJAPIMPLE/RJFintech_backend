@@ -444,20 +444,76 @@ export class WorkflowDbController {
       const histories = await prisma.workflowReqHistory.findMany({
         where: whereCondition,
         include: {
-          user: { select: { name: true, email: true } },
+          user: { 
+            include: {
+              userAccesses: true 
+            }
+          },
           workflowReq: true,
-          company: { select: { companyCode: true } },
+          company: { select: { companyCode: true, id: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
 
+      // 1. Collect all unique request IDs to fetch their workflow approval status
+      const reqIds = Array.from(new Set(histories.map((h) => h.workflowReqId).filter(Boolean))) as string[];
+      
+      const workflowApprovers = await prisma.workflowApprover.findMany({
+        where: { reqId: { in: reqIds } },
+        orderBy: { level: 'asc' },
+      });
+
+      // Group workflow levels by reqId
+      const workflowMap = new Map<string, any[]>();
+      workflowApprovers.forEach((wa) => {
+        const existing = workflowMap.get(wa.reqId) || [];
+        existing.push(wa);
+        workflowMap.set(wa.reqId, existing);
+      });
+
       // Format the output for the UI
-      const formattedHistories = histories.map((h) => ({
-        companyCode: h.company.companyCode,
-        event: h.event,
-        user: h.user,
-        workflowName: (h.workflowReq?.data as any)?.name || null,
-      }));
+      const formattedHistories = histories.map((h) => {
+        const companyId = h.company.id;
+        const initiatorAccesses = h.user?.userAccesses?.filter(a => a.companyId === companyId) || [];
+        
+        // 2. Resolve "Teams" display logic: Only for SAAS_ADMIN
+        const isSaasAdmin = initiatorAccesses.some(a => a.roleCode === 'SAAS_ADMIN');
+        const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
+
+        // 3. Resolve workflow status for this request
+        const levels = h.workflowReqId ? workflowMap.get(h.workflowReqId) : null;
+        let workflowStatus = null;
+        
+        if (levels && levels.length > 0) {
+          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
+          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
+          const currentPending = levels.find((l: any) => l.status === 'PENDING');
+
+          workflowStatus = {
+            overallStatus: isRejected ? 'REJECTED' : allApproved ? 'APPROVED' : 'PENDING',
+            currentLevel: currentPending ? currentPending.level : (allApproved ? levels.length : null),
+            totalLevels: levels.length,
+            levels: levels.map((l: any) => ({
+              level: l.level,
+              status: l.status,
+              mandatoryCount: l.mandatoryCount,
+              approversCount: Array.isArray(l.approversList) ? l.approversList.length : 0
+            }))
+          };
+        }
+
+        return {
+          companyCode: h.company.companyCode,
+          event: h.event,
+          level: h.level, // The specific level this history event occurred at
+          createdAt: h.createdAt,
+          user: isTeams
+            ? { name: 'Teams', email: 'Teams' }
+            : { name: h.user?.name || 'System', email: h.user?.email || 'system@internal' },
+          workflowName: (h.workflowReq?.data as any)?.name || null,
+          workflow: workflowStatus
+        };
+      });
 
       res.json(formattedHistories);
     } catch (error) {
