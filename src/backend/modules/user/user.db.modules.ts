@@ -158,7 +158,7 @@ export class UserDbController {
               nodeName: a.orgStructure?.nodeName,
               nodePath: a.orgStructure?.nodePath,
               nodeType: a.orgStructure?.nodeType,
-              userCategory: a.userCategory,
+              accessCategory: a.userCategory,
             })),
           secondary: u.userAccesses
             .filter((a) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
@@ -169,7 +169,7 @@ export class UserDbController {
               nodeName: a.orgStructure?.nodeName,
               nodePath: a.orgStructure?.nodePath,
               nodeType: a.orgStructure?.nodeType,
-              userCategory: a.userCategory,
+              accessCategory: a.userCategory,
             })),
         };
 
