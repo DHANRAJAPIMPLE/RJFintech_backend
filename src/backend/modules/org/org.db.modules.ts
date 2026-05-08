@@ -121,7 +121,7 @@ export class OrgStructureDbController {
           }
 
           // 1. Create the actual node in the production organization structure
-          await tx.orgStructure.create({
+          const newNode = await tx.orgStructure.create({
             data: {
               companyId: request.companyId,
               nodePath: newNodePath,
@@ -130,6 +130,62 @@ export class OrgStructureDbController {
               parentId: parentId || null,
             },
           });
+
+          // Propagate user access from parent nodes to the new node
+          const pathParts = newNodePath.split('.');
+          const parentPaths = [];
+          let currentPath = '';
+          for (let i = 0; i < pathParts.length - 1; i++) {
+            currentPath += (i === 0 ? '' : '.') + pathParts[i];
+            parentPaths.push(currentPath);
+          }
+
+          if (parentPaths.length > 0) {
+            // Find parent node IDs
+            const parentNodes = await tx.orgStructure.findMany({
+              where: {
+                companyId: request.companyId,
+                nodePath: { in: parentPaths },
+              },
+            });
+            const parentNodeIds = parentNodes.map((n) => n.id);
+
+            if (parentNodeIds.length > 0) {
+              // Find all user access entries for parent nodes with isGlobalAccess = false
+              const parentAccesses = await tx.userAccess.findMany({
+                where: {
+                  companyId: request.companyId,
+                  nodeId: { in: parentNodeIds },
+                  isGlobalAccess: false,
+                },
+              });
+
+              // Prepare new entries, ensuring uniqueness to avoid constraint violations
+              const newAccessesMap = new Map();
+              for (const access of parentAccesses) {
+                const uniqueKey = `${access.userId}_${access.roleCode}`;
+                if (!newAccessesMap.has(uniqueKey)) {
+                  newAccessesMap.set(uniqueKey, {
+                    userId: access.userId,
+                    roleCode: access.roleCode,
+                    nodeId: newNode.id,
+                    accessType: 'SECONDARY',
+                    userCategory: access.userCategory,
+                    companyId: access.companyId,
+                    isGlobalAccess: false,
+                  });
+                }
+              }
+
+              const newAccesses = Array.from(newAccessesMap.values());
+              if (newAccesses.length > 0) {
+                await tx.userAccess.createMany({
+                  data: newAccesses,
+                  skipDuplicates: true,
+                });
+              }
+            }
+          }
 
           // 2. Update the onboarding request status
           const updated = await tx.orgStructureReq.update({

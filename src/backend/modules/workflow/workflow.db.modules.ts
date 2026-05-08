@@ -241,6 +241,15 @@ export class WorkflowDbController {
 
           if (!node) throw new Error(`Node path '${nodePath}' not found`);
 
+          // Fetch the corresponding roleCode for the module and subModule
+          const roleRecord = await tx.roles.findFirst({
+            where: {
+              category: module,
+              subCategory: subModule,
+              permissionLevel: 'MANAGER',
+            },
+          });
+
           // 2. Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels}
           // logic: 'AND' levels with 2 approvers = 2, 'OR' or 1 approver = 1.
           let totalApprovers = 0;
@@ -268,6 +277,7 @@ export class WorkflowDbController {
               alias: generatedAlias,
               module,
               subModule,
+              roleCode: roleRecord?.roleCode || null,
               companyId: request.companyId,
               nodeId: node.id,
               levelsHash: request.levelsHash,

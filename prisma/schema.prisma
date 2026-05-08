@@ -279,6 +279,7 @@ model Workflow {
   nodeId       String        @map("node_id")
   module       String
   subModule    String        @map("sub_module")
+  roleCode     String?       @map("role_code")
   companyId    String        @map("company_id")
   levelsHash   String        @map("levels_hash")
   orgStructure OrgStructure  @relation(fields: [nodeId], references: [id])

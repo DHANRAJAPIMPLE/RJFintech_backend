@@ -60,6 +60,7 @@ export const userOnboardingSchema = z.object({
             .min(1, 'Role sub-category is required'),
           nodeName: z.string().trim().min(1, 'Node name is required'),
           nodePath: z.string().trim().min(1, 'Node path is required'),
+          userCategory: z.enum(['ALL_CHILD', 'IMMEDIATE_CHILD', 'NODE']),
         })
         .strict(),
     )
@@ -102,7 +103,7 @@ export const userHistory = z
 
   
 export const userCompanyNodesSchema = z.object({
-  subCategory: z.string().min(1).nullable().optional(),
+  subCategory: z.enum(['USER_ACC', 'WORK_FLOW', 'ORG_STR']).nullable().optional(),
 });
 
 
