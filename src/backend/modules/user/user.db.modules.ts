@@ -196,7 +196,7 @@ export class UserDbController {
             nodeName: p.nodeName,
             nodePath: p.nodePath,
             nodeType: p.nodeType,
-            userCategory: p.userCategory,
+            accessCategory: p.accessCategory || p.userCategory,
           };
           // Condition: isGlobal true then comes in primary
           if (
@@ -439,7 +439,8 @@ export class UserDbController {
           // 3. Setup Granular Access Permissions
           if (Array.isArray(permissions)) {
             for (const perm of permissions) {
-              const { accessType, roleName, nodePath, userCategory } = perm;
+              const { accessType, roleName, nodePath, accessCategory, userCategory } = perm;
+              const finalCategory = accessCategory || userCategory;
 
               const role = await tx.roles.findUnique({
                 where: { roleName },
@@ -475,7 +476,7 @@ export class UserDbController {
                     roleCode: role.roleCode,
                     nodeId: node.id,
                     accessType,
-                    userCategory,
+                    userCategory: finalCategory,
                     companyId: company.id,
                     isGlobalAccess: false,
                   },
