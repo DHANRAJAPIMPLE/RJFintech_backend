@@ -23,7 +23,7 @@ import {
 
 export class OrgController {
   private static formatDate(date: Date | string | null): string {
-    if (!date) return 'N/A';
+    if (!date) return null;
     const d = new Date(date);
     const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');

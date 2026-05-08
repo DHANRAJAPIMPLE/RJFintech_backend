@@ -25,14 +25,6 @@ import {
 } from '../validations/user.validation';
 
 export class UserController {
-  private static formatDate(date: Date | null) {
-    if (!date) return 'N/A';
-    const d = new Date(date);
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
-  }
 
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {

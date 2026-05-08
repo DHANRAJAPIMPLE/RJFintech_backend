@@ -397,7 +397,7 @@ export class WorkflowDbController {
         companyCode: h.company.companyCode,
         event: h.event,
         user: h.user,
-        workflowName: (h.workflowReq?.data as any)?.name || 'N/A',
+        workflowName: (h.workflowReq?.data as any)?.name || null,
       }));
 
       res.json(formattedHistories);

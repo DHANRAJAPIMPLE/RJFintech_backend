@@ -409,8 +409,8 @@ export class OrgStructureDbController {
           event: h.event,
           createdAt: h.createdAt,
           user: h.user,
-          newNodeName: data?.newNodeName || 'N/A',
-          nodeType: data?._nodeType || data?.nodeType || 'N/A',
+          newNodeName: data?.newNodeName || null,
+          nodeType: data?._nodeType || data?.nodeType || null,
           parentNodePath: data?.parentNode?.nodePath || 'ROOT',
           parentNodeName: data?.parentNode?.nodeName || 'ROOT',
         };
