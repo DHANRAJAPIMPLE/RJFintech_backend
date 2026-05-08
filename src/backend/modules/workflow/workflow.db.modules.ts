@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { createHash } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../../shared/middlewares/error.middleware';
+import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 
 /**
  * Controller for handling workflow-related database operations.
@@ -43,7 +44,9 @@ export class WorkflowDbController {
    * Initiates a new workflow onboarding request.
    * Performs an atomic transaction to:
    * 1. Create a WorkflowReq entry with the provided payload and eligible approvers.
-   * 2. Log the 'INITIATE' event in the WorkflowReqHistory table.
+   * 2. Resolve the workflow (explicit or default for WORK_FLOW section).
+   * 3. Build WorkflowApprover rows for each approval level.
+   * 4. Log the 'INITIATE' event in the WorkflowReqHistory table.
    */
   static async initiateWorkflowRequest(
     req: Request,
@@ -51,7 +54,7 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyCode, companyId, data, eligibleApprovers } = req.body;
+      const { initiatorId, companyCode, companyId, data, eligibleApprovers, workflowId: parentWorkflowId } = req.body;
       const { module, subModule, nodePath, levels } = data;
 
       let resolvedCompanyId = companyId;
@@ -128,6 +131,20 @@ export class WorkflowDbController {
           include: { company: true },
         });
 
+        // ── Resolve workflow approvers and create WorkflowApprover rows ──────
+        if (initiatorId) {
+          await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+            workflowId: parentWorkflowId || null,
+            module: 'SYSTEM_ACCESS',
+            subModule: 'WORK_FLOW',
+            companyId: resolvedCompanyId,
+            nodeId,
+            initiatorId,
+            reqId: request.id,
+            reqTable: 'workflow_req',
+          });
+        }
+
         // Record the initiation in history for auditing
         await tx.workflowReqHistory.create({
           data: {
@@ -149,7 +166,12 @@ export class WorkflowDbController {
 
   /**
    * Processes an action (APPROVE/REJECT) on a pending workflow request.
-   * Uses an atomic transaction to ensure data integrity across multiple tables.
+   * Level-wise Approval Flow:
+   * 1. Checks the current pending level from WorkflowApprover.
+   * 2. Verifies the approver is in the current level's approversList.
+   * 3. For APPROVE: marks level as APPROVED, only commits the workflow if all levels pass.
+   * 4. For REJECT: marks all levels REJECTED.
+   * 5. Logs level-wise events in WorkflowReqHistory.
    */
   static async actionWorkflowRequest(
     req: Request,
@@ -158,6 +180,22 @@ export class WorkflowDbController {
   ) {
     try {
       const { id, status, approverId, remark } = req.body;
+
+      // ── Check WorkflowApprover for level-wise authorization ──────────────
+      const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
+        id, 'workflow_req',
+      );
+
+      // If workflow approver rows exist, enforce level-wise checks
+      if (currentLevel) {
+        const approversList = currentLevel.approversList as string[];
+        if (Array.isArray(approversList) && !approversList.includes(approverId)) {
+          throw new AppError(
+            `Unauthorized: You are not an eligible approver for level ${currentLevel.level}`,
+            403,
+          );
+        }
+      }
 
       const result = await prisma.$transaction(async (tx) => {
         // 1. Fetch the request to validate existence and get company info
@@ -168,11 +206,69 @@ export class WorkflowDbController {
 
         if (!request) throw new Error('Request not found');
 
-        // --- DUPLICATE CHECKS (only for APPROVE) ---
+        // --- REJECT FLOW ---
+        // Marks the request as REJECTED, rejects all levels, and logs the history.
+        if (status.toLowerCase() === 'reject') {
+          // Reject all remaining approval levels
+          await WorkflowApproverUtil.rejectAllLevels(tx, id, 'workflow_req');
+
+          const updated = await tx.workflowReq.update({
+            where: { id },
+            data: {
+              status: 'REJECTED',
+              approvalRemark: remark,
+            },
+          });
+
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: id,
+              companyId: request.companyId,
+              event: 'REJECTED',
+              eventUserId: approverId,
+              level: currentLevel?.level || null,
+            },
+          });
+
+          return updated;
+        }
+
+        // --- APPROVE FLOW ---
+        // Converts the request into an active Workflow and setup its approval levels.
         if (status.toLowerCase() === 'approve') {
+          // ── Level-wise approval: mark current level as APPROVED ──────────
+          let allLevelsApproved = true;
+          const approvedLevel = currentLevel?.level || null;
+
+          if (currentLevel) {
+            const nextLevel = await WorkflowApproverUtil.approveLevel(
+              tx, id, 'workflow_req', currentLevel.level,
+            );
+            if (nextLevel) {
+              allLevelsApproved = false;
+            }
+          }
+
+          // Log level-wise APPROVED event in history
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: id,
+              companyId: request.companyId,
+              event: 'APPROVED',
+              eventUserId: approverId,
+              level: approvedLevel,
+            },
+          });
+
+          // If NOT all levels approved, return early (partial approval)
+          if (!allLevelsApproved) {
+            return { id: request.id, status: 'PARTIAL_APPROVED' };
+          }
+
+          // ── DUPLICATE CHECKS (only for full approval) ──────────────────
           const { companyId, nodeId, module, subModule, levelsHash } = request;
 
-          // 1. Block if ACTIVE duplicate exists
+          // Block if ACTIVE duplicate exists
           const alreadyActive = await tx.workflow.findUnique({
             where: {
               companyId_nodeId_module_subModule_levelsHash: {
@@ -188,7 +284,7 @@ export class WorkflowDbController {
             throw new AppError(`Already active: "${alreadyActive.name}"`, 409);
           }
 
-          // 2. Block if OTHER PENDING duplicates exist
+          // Block if OTHER PENDING duplicates exist
           const alreadyPending = await tx.workflowReq.findFirst({
             where: {
               companyId,
@@ -203,55 +299,28 @@ export class WorkflowDbController {
           if (alreadyPending) {
             throw new AppError(`Already pending: ${alreadyPending.id}`, 409);
           }
-        }
 
-        // --- REJECT FLOW ---
-        // Marks the request as REJECTED and logs the history.
-        if (status.toLowerCase() === 'reject') {
-          const updated = await tx.workflowReq.update({
-            where: { id },
-            data: {
-              status: 'REJECTED',
-              approvalRemark: remark,
-            },
-          });
-
-          await tx.workflowReqHistory.create({
-            data: {
-              workflowReqId: id,
-              companyId: request.companyId,
-              event: 'REJECTED',
-              eventUserId: approverId,
-            },
-          });
-
-          return updated;
-        }
-
-        // --- APPROVE FLOW ---
-        // Converts the request into an active Workflow and setup its approval levels.
-        if (status.toLowerCase() === 'approve') {
-          const data = request.data as any;
-          const { name, module, subModule, nodePath, levels } = data;
+          // ── All levels approved — proceed with production workflow creation ──
+          const reqData = request.data as any;
+          const { name, module: reqModule, subModule: reqSubModule, nodePath, levels } = reqData;
 
           // 1. Resolve the organizational node from the path
-          const node = await tx.orgStructure.findUnique({
+          const nodeRecord = await tx.orgStructure.findUnique({
             where: { nodePath },
           });
 
-          if (!node) throw new Error(`Node path '${nodePath}' not found`);
+          if (!nodeRecord) throw new Error(`Node path '${nodePath}' not found`);
 
           // Fetch the corresponding roleCode for the module and subModule
           const roleRecord = await tx.roles.findFirst({
             where: {
-              category: module,
-              subCategory: subModule,
+              category: reqModule,
+              subCategory: reqSubModule,
               permissionLevel: 'MANAGER',
             },
           });
 
           // 2. Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels}
-          // logic: 'AND' levels with 2 approvers = 2, 'OR' or 1 approver = 1.
           let totalApprovers = 0;
           let totalLevels = 0;
           if (levels) {
@@ -270,16 +339,15 @@ export class WorkflowDbController {
           const generatedAlias = `1M_${totalApprovers}C_${totalLevels}`;
 
           // 3. Create the production Workflow record
-          // workflowReqIds is a manual array tracking the requests that formed this workflow
           const workflow = await tx.workflow.create({
             data: {
               name,
               alias: generatedAlias,
-              module,
-              subModule,
+              module: reqModule,
+              subModule: reqSubModule,
               roleCode: roleRecord?.roleCode || null,
               companyId: request.companyId,
-              nodeId: node.id,
+              nodeId: nodeRecord.id,
               levelsHash: request.levelsHash,
               workflowReqIds: [id],
             },
@@ -305,21 +373,12 @@ export class WorkflowDbController {
             }
           }
 
-          // 5. Finalize the request status and audit log
+          // 5. Finalize the request status
           const updated = await tx.workflowReq.update({
             where: { id },
             data: {
               status: 'APPROVED',
               approvalRemark: remark,
-            },
-          });
-
-          await tx.workflowReqHistory.create({
-            data: {
-              workflowReqId: id,
-              companyId: request.companyId,
-              event: 'APPROVED',
-              eventUserId: approverId,
             },
           });
 

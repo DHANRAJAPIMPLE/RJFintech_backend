@@ -81,7 +81,9 @@ model GroupCompany {
 model UserHistory {
   id          String    @id @default(uuid())
   email       String
-  companyId String    @map("company_id")
+  companyId   String    @map("company_id")
+  reqId       String?   @map("req_id")
+  level       Int?
   event       EventType
   eventUserId String    @map("event_user_id")
   createdAt   DateTime  @default(now()) @map("created_at")
@@ -205,6 +207,7 @@ model OrgHistory {
   id          String          @id @default(uuid())
   orgReqId    String          @map("org_req_id")
   companyId   String          @map("company_id")
+  level       Int?
   event       EventType
   eventUserId String          @map("event_user_id")
   createdAt   DateTime        @default(now()) @map("created_at")
@@ -294,6 +297,24 @@ model Workflow {
   @@map("workflow")
 }
 
+model WorkflowApprover {
+  id             String           @id @default(uuid())
+  workflowId     String           @map("workflow_id")
+  reqId          String           @map("req_id")
+  reqTable       String           @map("req_table")
+  level          Int
+  approversList  Json
+  mandatoryCount Int              @map("mandatory_count")
+  status         OnboardingStatus @default(PENDING)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  @@map("workflow_approver")
+}
+
+
+
+
 model WorkflowLevel {
   id            String        @id @default(uuid())
   workflowId    String        @map("workflow_id")
@@ -335,7 +356,8 @@ model WorkflowReq {
 model WorkflowReqHistory {
   id            String      @id @default(uuid())
   workflowReqId String      @map("workflow_req_id")
-  companyId   String      @map("company_id")
+  companyId     String      @map("company_id")
+  level         Int?
   event         EventType
   eventUserId   String      @map("event_user_id")
   createdAt     DateTime    @default(now()) @map("created_at")
@@ -382,6 +404,7 @@ enum OnboardedType {
 }
 
 enum ApproverType {
+  GLOBAL_APPROVER
   REPORTING_MANAGER
   NODE_APPROVER
   HIERARCHY_APPROVER

@@ -79,34 +79,6 @@ export class OrgController {
         ]),
       ];
 
-      // 2b. If workflowId is provided, validate workflow approvers and merge
-      if (workflowId) {
-        const { data: workflowApprovers, ok: wfOk } = await internalPost<any>(
-          `${config.backendUrl}/internal/workflow/validate-approvers`,
-          {
-            workflowId,
-            initiatorId,
-            nodePath: parentNode?.nodePath,
-            companyId: company?.id,
-          },
-        );
-
-        if (!wfOk || !workflowApprovers?.success) {
-          throw new AppError(
-            workflowApprovers?.message || 'Workflow approver validation failed',
-            400,
-          );
-        }
-
-        // Merge workflow-resolved approvers with the existing ones
-        eligibleApprovers = Array.from(
-          new Set([
-            ...eligibleApprovers,
-            ...(workflowApprovers.eligibleApprovers || []),
-          ]),
-        );
-      }
-
       // 3. Validate Node Initiation (Check for duplicates and parent existence)
       const { data: validationRes, ok: validationOk } = await internalPost<any>(
         `${config.backendUrl}/internal/org/validate-initiation`,
@@ -190,17 +162,19 @@ export class OrgController {
         );
       }
 
-      // 2. Logic: Verify status and permissions
+      // 2. Logic: Verify status and permissions (Permission check disabled as per request)
       if (request.status !== 'PENDING') {
         throw new AppError('Request is already processed', 400);
       }
 
+      /*
       if (!request.eligibleApprovers.includes(approverId)) {
         throw new AppError(
           'Unauthorized: You do not have permission to process this request',
           403,
         );
       }
+      */
 
       // 3. Handle Rejection
       if (action === 'reject') {

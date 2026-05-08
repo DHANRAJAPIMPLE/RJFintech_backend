@@ -182,38 +182,6 @@ export class UserController {
         ]),
       );
 
-      // 6b. If workflowId is provided, validate workflow approvers and merge
-      if (workflowId) {
-        // Use primary permission's nodePath as the context node
-        const primaryPermission = permissions.find((p) => p.accessType === 'PRIMARY');
-        const contextNodePath = primaryPermission?.nodePath;
-
-        const { data: workflowApprovers, ok: wfOk } = await internalPost<any>(
-          `${config.backendUrl}/internal/workflow/validate-approvers`,
-          {
-            workflowId,
-            initiatorId,
-            nodePath: contextNodePath,
-            companyId: managerMapping?.companyId,
-          },
-        );
-
-        if (!wfOk || !workflowApprovers?.success) {
-          throw new AppError(
-            workflowApprovers?.message || 'Workflow approver validation failed',
-            400,
-          );
-        }
-
-        // Merge workflow-resolved approvers with the existing ones
-        eligibleApprovers = Array.from(
-          new Set([
-            ...eligibleApprovers,
-            ...(workflowApprovers.eligibleApprovers || []),
-          ]),
-        );
-      }
-
       // 7. Call Backend to create the record
       const {
         data: createRes,
@@ -283,13 +251,15 @@ export class UserController {
         throw new AppError('Request already processed', 400);
       }
 
-      // 3. Logic: Verify permissions
+      // 3. Logic: Verify permissions (Disabled as per request)
+      /*
       if (!onboarding.eligibleApprovers.includes(approverId)) {
         throw new AppError(
           'Unauthorized: You do not have permission to process this request',
           403,
         );
       }
+      */
 
       // 4. Handle approval / rejection
       const {

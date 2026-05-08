@@ -423,6 +423,53 @@ async function main() {
   
   console.log('Super Admin mapping and global access configured.');
 
+  // 5b. Seed Default Workflows
+  // These are the fallback workflows used when no explicit workflowId is provided
+  // during initiation. One per section (USER_ACC, ORG_STR, WORK_FLOW).
+  const defaultWorkflows = [
+    { name: 'USER_ACC_WORKFLOW_DEFAULT', subModule: 'USER_ACC', roleCode: 'USER_ACC_MGR' },
+    { name: 'ORG_STR_WORKFLOW_DEFAULT', subModule: 'ORG_STR', roleCode: 'ORG_STR_MGR' },
+    { name: 'WORK_FLOW_WORKFLOW_DEFAULT', subModule: 'WORK_FLOW', roleCode: 'WORK_FLOW_MGR' },
+  ];
+
+  for (const dwf of defaultWorkflows) {
+    const existingWorkflow = await prisma.workflow.findFirst({
+      where: {
+        companyId: company.id,
+        subModule: dwf.subModule,
+        name: dwf.name,
+      },
+    });
+
+    if (!existingWorkflow) {
+      const workflow = await prisma.workflow.create({
+        data: {
+          name: dwf.name,
+          alias: '1M_1C_1',
+          module: 'SYSTEM_ACCESS',
+          subModule: dwf.subModule,
+          roleCode: dwf.roleCode,
+          companyId: company.id,
+          nodeId: rootNode.id,
+          levelsHash: `DEFAULT_${dwf.subModule}_1M1C1`,
+          levels: {
+            create: [
+              {
+                level: 1,
+                approver1: 'GLOBAL_APPROVER',
+                approverType: 'OR',
+              },
+            ],
+          },
+        },
+      });
+
+      // Log the default workflow creation as a system-initiated event
+      console.log(`Default workflow '${dwf.name}' created with ID: ${workflow.id}`);
+    }
+  }
+  console.log('Default workflows seeded.');
+
   // 6. Seed 10 Dummy Users
   console.log('Seeding 10 dummy users...');
   for (let i = 1; i <= 10; i++) {

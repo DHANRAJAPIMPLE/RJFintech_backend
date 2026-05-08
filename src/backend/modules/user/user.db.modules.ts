@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
 import { AppError } from '../../middlewares/error.middleware';
+import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 
 /**
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
@@ -270,8 +271,16 @@ export class UserDbController {
    * Creates a new user onboarding request in the database.
    * Performs an atomic transaction to create the request and the initial history log.
    */
+  /**
+   * Creates a new user onboarding request.
+   * Performs an atomic transaction to:
+   * 1. Create the onboarding record.
+   * 2. Resolve the workflow (explicit or default for USER_ACC section).
+   * 3. Build WorkflowApprover rows for each approval level.
+   * 4. Log the INITIATE event in UserHistory with the reqId.
+   */
   static async createUserOnboarding(req: Request, res: Response) {
-    const { initiatorId, companyCode, companyId, groupCode, ...onboardingData } = req.body;
+    const { initiatorId, companyCode, companyId, groupCode, workflowId, ...onboardingData } = req.body;
     let resolvedCompanyId = companyId;
 
     if (!resolvedCompanyId) {
@@ -314,6 +323,41 @@ export class UserDbController {
           groupId: groupId,
         },
       });
+
+      // ── Resolve workflow approvers and create WorkflowApprover rows ──────
+      // Determine the node for approver resolution from the permissions data
+      const permissions = onboardingData.data?.permissions || [];
+      let nodeId: string | null = null;
+
+      if (permissions.length > 0 && permissions[0].nodePath) {
+        const node = await tx.orgStructure.findFirst({
+          where: { nodePath: permissions[0].nodePath, companyId: resolvedCompanyId },
+        });
+        if (node) nodeId = node.id;
+      }
+
+      // Fallback to root node if no specific node was found
+      if (!nodeId) {
+        const rootNode = await tx.orgStructure.findFirst({
+          where: { companyId: resolvedCompanyId, nodeType: 'ROOT' },
+        });
+        if (rootNode) nodeId = rootNode.id;
+      }
+
+      if (nodeId && initiatorId) {
+        await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+          workflowId: workflowId || null,
+          module: 'SYSTEM_ACCESS',
+          subModule: 'USER_ACC',
+          companyId: resolvedCompanyId,
+          nodeId,
+          initiatorId,
+          reqId: onb.id,
+          reqTable: 'user_onboarding',
+        });
+      }
+
+      // Log INITIATE event with reqId reference
       if (initiatorId && email) {
         await tx.userHistory.create({
           data: {
@@ -321,6 +365,7 @@ export class UserDbController {
             event: 'INITIATE',
             eventUserId: initiatorId,
             companyId: resolvedCompanyId,
+            reqId: onb.id,
           },
         });
       }
@@ -349,6 +394,16 @@ export class UserDbController {
    * 3. Iterates through requested permissions and creates 'UserAccess' records for each Role + Node pair.
    * 4. Updates the request status to 'APPROVED' and logs the audit history.
    */
+  /**
+   * Handles the approval or rejection of a user onboarding request.
+   * Level-wise Approval Flow:
+   * 1. Checks the current pending level from WorkflowApprover.
+   * 2. Verifies the approver is in the current level's approversList.
+   * 3. Marks the level as APPROVED and checks if more levels remain.
+   * 4. If all levels are approved → creates user, mapping, access records.
+   * 5. If rejected at any level → marks all levels REJECTED.
+   * 6. Logs level-wise events in UserHistory.
+   */
   static async handleUserOnboardingStatus(
     req: Request,
     res: Response,
@@ -365,13 +420,29 @@ export class UserDbController {
         throw new AppError('User onboarding request not found', 404);
       }
 
-      // Authorization check for the approver
-      if (
-        onboarding.eligibleApprovers &&
-        onboarding.eligibleApprovers.length > 0 &&
-        !onboarding.eligibleApprovers.includes(approverId)
-      ) {
-        throw new AppError('Unauthorized to process this request', 403);
+      // ── Check WorkflowApprover for level-wise authorization ──────────────
+      const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
+        id, 'user_onboarding',
+      );
+
+      // If workflow approver rows exist, enforce level-wise checks
+      if (currentLevel) {
+        const approversList = currentLevel.approversList as string[];
+        if (Array.isArray(approversList) && !approversList.includes(approverId)) {
+          throw new AppError(
+            `Unauthorized: You are not an eligible approver for level ${currentLevel.level}`,
+            403,
+          );
+        }
+      } else {
+        // Fallback to legacy eligibleApprovers check if no WorkflowApprover rows exist
+        if (
+          onboarding.eligibleApprovers &&
+          onboarding.eligibleApprovers.length > 0 &&
+          !onboarding.eligibleApprovers.includes(approverId)
+        ) {
+          throw new AppError('Unauthorized to process this request', 403);
+        }
       }
 
       const data = onboarding.data as any;
@@ -384,7 +455,40 @@ export class UserDbController {
         // ✅ APPROVED FLOW
         // =========================
         if (status === 'approve') {
-          // Resolve managers and company context
+          // ── Level-wise approval: mark current level as APPROVED ──────────
+          let allLevelsApproved = true;
+          const approvedLevel = currentLevel?.level || null;
+
+          if (currentLevel) {
+            const nextLevel = await WorkflowApproverUtil.approveLevel(
+              tx, id, 'user_onboarding', currentLevel.level,
+            );
+            // If there's a next pending level, the request is NOT fully approved yet
+            if (nextLevel) {
+              allLevelsApproved = false;
+            }
+          }
+
+          // Log level-wise APPROVED event in history
+          if (email && approverId) {
+            await tx.userHistory.create({
+              data: {
+                email,
+                event: 'APPROVED',
+                eventUserId: approverId,
+                companyId: onboarding.companyId,
+                reqId: id,
+                level: approvedLevel,
+              },
+            });
+          }
+
+          // If NOT all levels are approved, return early (partial approval)
+          if (!allLevelsApproved) {
+            return;
+          }
+
+          // ── All levels approved — proceed with production user creation ───
           const manager = await tx.user.findUnique({
             where: { id: approverId },
             include: {
@@ -488,7 +592,7 @@ export class UserDbController {
             }
           }
 
-          // 4. Update request and log history
+          // 4. Update request status to fully APPROVED
           await tx.userOnboarding.update({
             where: { id },
             data: {
@@ -496,23 +600,15 @@ export class UserDbController {
               approvalRemark: remark,
             },
           });
-
-          if (email && approverId) {
-            await tx.userHistory.create({
-              data: {
-                email,
-                event: 'APPROVED',
-                eventUserId: approverId,
-                companyId: company.id,
-              },
-            });
-          }
         }
 
         // =========================
         // ❌ REJECTED FLOW
         // =========================
         else if (status === 'reject') {
+          // Reject all remaining approval levels
+          await WorkflowApproverUtil.rejectAllLevels(tx, id, 'user_onboarding');
+
           const updated = await tx.userOnboarding.update({
             where: { id },
             data: {
@@ -530,6 +626,8 @@ export class UserDbController {
                 event: 'REJECTED',
                 eventUserId: approverId,
                 companyId: onboarding.companyId,
+                reqId: id,
+                level: currentLevel?.level || null,
               },
             });
           }
@@ -576,19 +674,33 @@ export class UserDbController {
           companyId: resolvedCompanyId,
         },
         include: {
-          user: { select: { name: true, email: true } },
+          user: {
+            include: {
+              userMappings: {
+                where: { companyId: resolvedCompanyId },
+              },
+            },
+          },
           company: { select: { companyCode: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
 
-      const formattedHistory = history.map((h) => ({
-        email: h.email,
-        companyCode: h.company.companyCode,
-        event: h.event,
-        createdAt: h.createdAt,
-        user: h.user,
-      }));
+      const formattedHistory = history.map((h) => {
+        const initiatorMapping = h.user?.userMappings?.[0];
+        // Show "Teams" if the initiator has no reporting manager (indicates admin/system action)
+        const isTeams = !initiatorMapping || !initiatorMapping.reportingManager;
+
+        return {
+          email: h.email,
+          companyCode: h.company.companyCode,
+          event: h.event,
+          createdAt: h.createdAt,
+          user: isTeams
+            ? { name: 'Teams', email: 'Teams' }
+            : { name: h.user?.name, email: h.user?.email },
+        };
+      });
 
       res.status(200).json(formattedHistory);
     } catch (error) {

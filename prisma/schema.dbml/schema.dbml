@@ -61,6 +61,8 @@ Table user_history {
   id String [pk]
   email String [not null]
   companyId String [not null]
+  reqId String
+  level Int
   event EventType [not null]
   eventUserId String [not null]
   createdAt DateTime [default: `now()`, not null]
@@ -175,6 +177,7 @@ Table org_history {
   id String [pk]
   orgReqId String [not null]
   companyId String [not null]
+  level Int
   event EventType [not null]
   eventUserId String [not null]
   createdAt DateTime [default: `now()`, not null]
@@ -257,6 +260,19 @@ Table workflow {
   }
 }
 
+Table workflow_approver {
+  id String [pk]
+  workflowId String [not null]
+  reqId String [not null]
+  reqTable String [not null]
+  level Int [not null]
+  approversList Json [not null]
+  mandatoryCount Int [not null]
+  status OnboardingStatus [not null, default: 'PENDING']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+}
+
 Table workflow_level {
   id String [pk]
   workflowId String [not null]
@@ -293,6 +309,7 @@ Table workflow_req_history {
   id String [pk]
   workflowReqId String [not null]
   companyId String [not null]
+  level Int
   event EventType [not null]
   eventUserId String [not null]
   createdAt DateTime [default: `now()`, not null]
@@ -354,6 +371,7 @@ Enum OnboardedType {
 }
 
 Enum ApproverType {
+  GLOBAL_APPROVER
   REPORTING_MANAGER
   NODE_APPROVER
   HIERARCHY_APPROVER

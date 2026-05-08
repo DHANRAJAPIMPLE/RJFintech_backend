@@ -79,34 +79,6 @@ export class WorkflowController {
         ]),
       );
 
-      // 3b. If workflowId is provided, validate workflow approvers and merge
-      if (workflowId) {
-        const { data: workflowApprovers, ok: wfOk } = await internalPost<any>(
-          `${config.backendUrl}/internal/workflow/validate-approvers`,
-          {
-            workflowId,
-            initiatorId,
-            nodePath,
-            companyId: company.id,
-          },
-        );
-
-        if (!wfOk || !workflowApprovers?.success) {
-          throw new AppError(
-            workflowApprovers?.message || 'Workflow approver validation failed',
-            400,
-          );
-        }
-
-        // Merge workflow-resolved approvers with the existing ones
-        eligibleApprovers = Array.from(
-          new Set([
-            ...eligibleApprovers,
-            ...(workflowApprovers.eligibleApprovers || []),
-          ]),
-        );
-      }
-
       // 4. Initiate Workflow Request in Backend
       const {
         data: createRes,
@@ -175,13 +147,15 @@ export class WorkflowController {
         throw new AppError('Request already processed', 400);
       }
 
-      // 3. Verify permissions
+      // 3. Verify permissions (Disabled as per request)
+      /*
       if (!onboarding.eligibleApprovers.includes(approverId)) {
         throw new AppError(
           'Unauthorized: You do not have permission to process this request',
           403,
         );
       }
+      */
 
       // 4. Handle approval / rejection
       const {

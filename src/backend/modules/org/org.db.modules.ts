@@ -1,5 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
+import { AppError } from '../../middlewares/error.middleware';
+import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 
 /**
  * Controller for managing the organizational hierarchy (nodes) for companies.
@@ -47,10 +49,12 @@ export class OrgStructureDbController {
 
   /**
    * Processes the approval or rejection of an organization unit request.
-   * Logic:
-   * - Uses a transaction to ensure that if a node is approved, the production record
-   *   is created and the request status is updated simultaneously.
-   * - Includes an 'eligibleApprovers' check to enforce authorization.
+   * Level-wise Approval Flow:
+   * 1. Checks the current pending level from WorkflowApprover.
+   * 2. Verifies the approver is in the current level's approversList.
+   * 3. For APPROVE: marks level as APPROVED, only commits the node if all levels pass.
+   * 4. For REJECT: marks all levels REJECTED.
+   * 5. Logs level-wise events in OrgHistory.
    */
   static async updateOrgRequestStatus(
     req: Request,
@@ -73,6 +77,22 @@ export class OrgStructureDbController {
         throw new Error('id and status are required');
       }
 
+      // ── Check WorkflowApprover for level-wise authorization ──────────────
+      const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
+        id, 'org_structure_req',
+      );
+
+      // If workflow approver rows exist, enforce level-wise checks
+      if (currentLevel) {
+        const approversList = currentLevel.approversList as string[];
+        if (Array.isArray(approversList) && !approversList.includes(approverId)) {
+          throw new AppError(
+            `Unauthorized: You are not an eligible approver for level ${currentLevel.level}`,
+            403,
+          );
+        }
+      }
+
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.orgStructureReq.findUnique({
           where: { id },
@@ -81,17 +101,22 @@ export class OrgStructureDbController {
 
         if (!request) throw new Error('Request not found');
 
-        // Verify that the approver is authorized for this specific request
-        if (
-          request.eligibleApprovers &&
-          request.eligibleApprovers.length > 0 &&
-          !request.eligibleApprovers.includes(approverId)
-        ) {
-          throw new Error('Unauthorized to process this request');
+        // Fallback: Verify with legacy eligibleApprovers if no WorkflowApprover rows
+        if (!currentLevel) {
+          if (
+            request.eligibleApprovers &&
+            request.eligibleApprovers.length > 0 &&
+            !request.eligibleApprovers.includes(approverId)
+          ) {
+            throw new Error('Unauthorized to process this request');
+          }
         }
 
         // --- REJECT FLOW ---
         if (status.toUpperCase() === 'REJECTED') {
+          // Reject all remaining approval levels
+          await WorkflowApproverUtil.rejectAllLevels(tx, id, 'org_structure_req');
+
           const updated = await tx.orgStructureReq.update({
             where: { id },
             data: {
@@ -107,6 +132,7 @@ export class OrgStructureDbController {
                 event: 'REJECTED',
                 eventUserId: approverId,
                 orgReqId: id,
+                level: currentLevel?.level || null,
               },
             });
           }
@@ -116,6 +142,36 @@ export class OrgStructureDbController {
 
         // --- APPROVE FLOW ---
         if (status.toUpperCase() === 'APPROVED') {
+          // ── Level-wise approval: mark current level as APPROVED ──────────
+          let allLevelsApproved = true;
+          const approvedLevel = currentLevel?.level || null;
+
+          if (currentLevel) {
+            const nextLevel = await WorkflowApproverUtil.approveLevel(
+              tx, id, 'org_structure_req', currentLevel.level,
+            );
+            if (nextLevel) {
+              allLevelsApproved = false;
+            }
+          }
+
+          // Log level-wise APPROVED event in history
+          await tx.orgHistory.create({
+            data: {
+              companyId: request.companyId,
+              event: 'APPROVED',
+              eventUserId: approverId,
+              orgReqId: id,
+              level: approvedLevel,
+            },
+          });
+
+          // If NOT all levels approved, return early (partial approval)
+          if (!allLevelsApproved) {
+            return { id: request.id, status: 'PARTIAL_APPROVED' };
+          }
+
+          // ── All levels approved — proceed with node creation ─────────────
           if (!newNodePath || !newNodeName || !nodeType) {
             throw new Error('Missing node details for approval');
           }
@@ -196,16 +252,6 @@ export class OrgStructureDbController {
             },
           });
 
-          // 3. Log history for auditing
-          await tx.orgHistory.create({
-            data: {
-              companyId: request.companyId,
-              event: 'APPROVED',
-              eventUserId: approverId,
-              orgReqId: id,
-            },
-          });
-
           return updated;
         }
 
@@ -227,7 +273,10 @@ export class OrgStructureDbController {
 
   /**
    * Initiates a request to add a new organization unit.
-   * Logs an 'INITIATE' event in the history for tracking.
+   * 1. Creates the OrgStructureReq record.
+   * 2. Resolves the workflow (explicit or default for ORG_STR section).
+   * 3. Builds WorkflowApprover rows for each approval level.
+   * 4. Logs an 'INITIATE' event in OrgHistory.
    */
   static async initiateRequest(
     req: Request,
@@ -235,7 +284,7 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyCode, companyId, ...rest } = req.body;
+      const { initiatorId, companyCode, companyId, workflowId, ...rest } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -264,6 +313,40 @@ export class OrgStructureDbController {
           },
           include: { company: true },
         });
+
+        // ── Resolve workflow approvers and create WorkflowApprover rows ──────
+        // Determine node for approver resolution from the request data
+        const reqData = rest.data || {};
+        let nodeId: string | null = null;
+
+        // Use parent node if available, otherwise use root node
+        if (reqData.parentNode?.nodePath) {
+          const parentNode = await tx.orgStructure.findFirst({
+            where: { nodePath: reqData.parentNode.nodePath, companyId: resolvedCompanyId },
+          });
+          if (parentNode) nodeId = parentNode.id;
+        }
+
+        // Fallback to root node
+        if (!nodeId) {
+          const rootNode = await tx.orgStructure.findFirst({
+            where: { companyId: resolvedCompanyId, nodeType: 'ROOT' },
+          });
+          if (rootNode) nodeId = rootNode.id;
+        }
+
+        if (nodeId && initiatorId) {
+          await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+            workflowId: workflowId || null,
+            module: 'SYSTEM_ACCESS',
+            subModule: 'ORG_STR',
+            companyId: resolvedCompanyId,
+            nodeId,
+            initiatorId,
+            reqId: reqRecord.id,
+            reqTable: 'org_structure_req',
+          });
+        }
 
         await tx.orgHistory.create({
           data: {

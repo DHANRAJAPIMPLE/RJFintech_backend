@@ -500,6 +500,40 @@ export class CompanyDbController {
           },
         });
 
+        // 4b. Create default workflows for SYSTEM_ACCESS
+        const defaultWorkflows = [
+          { name: 'USER_ACC_WORKFLOW_DEFAULT', subModule: 'USER_ACC', roleCode: 'USER_ACC_MGR' },
+          { name: 'ORG_STR_WORKFLOW_DEFAULT', subModule: 'ORG_STR', roleCode: 'ORG_STR_MGR' },
+          { name: 'WORK_FLOW_WORKFLOW_DEFAULT', subModule: 'WORK_FLOW', roleCode: 'WORK_FLOW_MGR' },
+        ];
+
+        for (const dwf of defaultWorkflows) {
+          const workflow = await tx.workflow.create({
+            data: {
+              name: dwf.name,
+              alias: '1M1C1',
+              module: 'SYSTEM_ACCESS',
+              subModule: dwf.subModule,
+              roleCode: dwf.roleCode,
+              companyId: newCompany.id,
+              nodeId: rootNode.id,
+              levelsHash: `DEFAULT_${dwf.subModule}_1M1C1`,
+              levels: {
+                create: [
+                  {
+                    level: 1,
+                    approver1: 'GLOBAL_APPROVER',
+                    approverType: 'OR',
+                  },
+                ],
+              },
+            },
+          });
+
+          // Log the default workflow creation as a system-initiated event
+          console.log(`Default workflow '${dwf.name}' created for company ${newCompany.id}`);
+        }
+
         // 5. Signatories Setup
         for (const sig of signatories) {
           let user = await tx.user.findUnique({
