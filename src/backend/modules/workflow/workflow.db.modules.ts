@@ -108,6 +108,11 @@ export class WorkflowDbController {
         throw new AppError(`Already pending: ${alreadyPending.id}`, 409);
       }
 
+      // Filter out the initiator from eligible approvers — initiator cannot approve their own request
+      const filteredApprovers = initiatorId
+        ? eligibleApprovers.filter((id: string) => id !== initiatorId)
+        : eligibleApprovers;
+
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.workflowReq.create({
           data: {
@@ -118,7 +123,7 @@ export class WorkflowDbController {
             levelsHash,
             data,
             status: 'PENDING',
-            eligibleApprovers,
+            eligibleApprovers: filteredApprovers,
           },
           include: { company: true },
         });

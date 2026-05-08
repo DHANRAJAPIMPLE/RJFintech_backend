@@ -72,6 +72,7 @@ export const userOnboardingSchema = z.object({
         path: ['permissions'],
       },
     ),
+  workflowId: z.string().uuid('Invalid workflow ID').optional(),
 });
 
 export const userActionSchema = z
@@ -98,3 +99,10 @@ export const userHistory = z
     companyCode: z.string().trim().min(1, 'Company code is required'),
   })
   .strict();
+
+  
+export const userCompanyNodesSchema = z.object({
+  subCategory: z.string().min(1).nullable().optional(),
+});
+
+

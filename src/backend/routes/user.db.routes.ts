@@ -10,4 +10,6 @@ router.post('/get', UserDbController.getUserOnboardingById);
 router.post('/action', UserDbController.handleUserOnboardingStatus);
 router.post('/history', UserDbController.getUserHistory);
 router.post('/get-pending-users', UserDbController.getPendingUsers);
+router.post('/fetch-company-nodes', UserDbController.fetchCompanyNodes);
+
 export default router;

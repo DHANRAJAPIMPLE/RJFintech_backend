@@ -49,24 +49,12 @@ export class CompanyDbController {
             include: {
               company: {
                 include: {
-                  userMappings: {
-                    where: {
-                      user: {
-                        userAccesses: {
-                          some: {
-                            isGlobalAccess: true,
-                          },
-                        },
-                      },
-                    },
+                  userAccesses: {
+                    where: { isGlobalAccess: true },
                     include: {
                       user: {
                         include: {
-                          userAccesses: {
-                            where: {
-                              isGlobalAccess: true,
-                            },
-                          },
+                          userMappings: true,
                         },
                       },
                     },
@@ -86,24 +74,12 @@ export class CompanyDbController {
           },
         },
         include: {
-          userMappings: {
-            where: {
-              user: {
-                userAccesses: {
-                  some: {
-                    isGlobalAccess: true,
-                  },
-                },
-              },
-            },
+          userAccesses: {
+            where: { isGlobalAccess: true },
             include: {
               user: {
                 include: {
-                  userAccesses: {
-                    where: {
-                      isGlobalAccess: true,
-                    },
-                  },
+                  userMappings: true,
                 },
               },
             },
@@ -173,10 +149,27 @@ export class CompanyDbController {
             const compApprove = historyMap.get(
               `${cm.company.companyCode}_APPROVE`,
             );
+            const signatories = cm.company.userAccesses.map((ua: any) => {
+              const mapping = ua.user.userMappings.find(
+                (m: any) => m.companyId === cm.company.id,
+              );
+              return {
+                name: ua.user.name,
+                email: ua.user.email,
+                phone: ua.user.phone,
+                designation: mapping?.designation || null,
+                employeeId: mapping?.employeeId || null,
+              };
+            });
+
+            // Remove internal mapping fields to keep response clean
+            const { userAccesses, ...companyData } = cm.company;
+
             return {
               ...cm,
               company: {
-                ...cm.company,
+                ...companyData,
+                signatories,
                 initiator: compInit?.user || initiateHistory?.user || null,
                 approver: compApprove?.user || approveHistory?.user || null,
                 approvedAt:
@@ -194,8 +187,24 @@ export class CompanyDbController {
       const enhancedSoloCompanies = soloCompanies.map((c: any) => {
         const compInit = historyMap.get(`${c.companyCode}_INITIATE`);
         const compApprove = historyMap.get(`${c.companyCode}_APPROVE`);
+        const signatories = c.userAccesses.map((ua: any) => {
+          const mapping = ua.user.userMappings.find(
+            (m: any) => m.companyId === c.id,
+          );
+          return {
+            name: ua.user.name,
+            email: ua.user.email,
+            phone: ua.user.phone,
+            designation: mapping?.designation || null,
+            employeeId: mapping?.employeeId || null,
+          };
+        });
+
+        const { userAccesses, ...companyData } = c;
+
         return {
-          ...c,
+          ...companyData,
+          signatories,
           initiator: compInit?.user || null,
           approver: compApprove?.user || null,
           approvedAt: compApprove?.createdAt || null,
@@ -248,6 +257,7 @@ export class CompanyDbController {
    * 2. Log 'INITIATE' events in CompanyHistory.
    * 3. Log 'INITIATE' events in UserHistory for all proposed signatories.
    */
+  
   static async createCompanyOnboarding(req: Request, res: Response) {
     const { initiatorId, ...onboardingData } = req.body;
     const companyCode = onboardingData.companyCode;

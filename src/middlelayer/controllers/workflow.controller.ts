@@ -29,7 +29,7 @@ export class WorkflowController {
     try {
       const validatedData = zodParse(workflowOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { companyCode, nodePath } = validatedData;
+      const { companyCode, nodePath, workflowId } = validatedData;
 
       if (!initiatorId) {
         throw new AppError('Unauthorized', 401);
@@ -75,13 +75,41 @@ export class WorkflowController {
       ]);
 
       // Combine and deduplicate
-      const eligibleApprovers = Array.from(
+      let eligibleApprovers = Array.from(
         new Set([
           ...(globalRes.data || []),
           ...(mgrRes.data || []),
           ...(adminRes.data || []),
         ]),
       );
+
+      // 3b. If workflowId is provided, validate workflow approvers and merge
+      if (workflowId) {
+        const { data: workflowApprovers, ok: wfOk } = await internalPost<any>(
+          `${config.backendUrl}/internal/workflow/validate-approvers`,
+          {
+            workflowId,
+            initiatorId,
+            nodePath,
+            companyId: company.id,
+          },
+        );
+
+        if (!wfOk || !workflowApprovers?.success) {
+          throw new AppError(
+            workflowApprovers?.message || 'Workflow approver validation failed',
+            400,
+          );
+        }
+
+        // Merge workflow-resolved approvers with the existing ones
+        eligibleApprovers = Array.from(
+          new Set([
+            ...eligibleApprovers,
+            ...(workflowApprovers.eligibleApprovers || []),
+          ]),
+        );
+      }
 
       // 4. Initiate Workflow Request in Backend
       const {
@@ -93,6 +121,7 @@ export class WorkflowController {
         {
           initiatorId,
           companyId: company.id,
+          workflowId: workflowId || null,
           data: validatedData,
           eligibleApprovers,
         },
@@ -101,8 +130,8 @@ export class WorkflowController {
       if (!createOk) {
         throw new AppError(
           createRes?.message ||
-            createRes?.error ||
-            'Failed to initiate workflow request',
+          createRes?.error ||
+          'Failed to initiate workflow request',
           createStatus,
         );
       }
@@ -139,8 +168,8 @@ export class WorkflowController {
       if (!fetchOk || !onboarding) {
         throw new AppError(
           onboarding?.message ||
-            onboarding?.error ||
-            'Workflow request not found',
+          onboarding?.error ||
+          'Workflow request not found',
           404,
         );
       }
@@ -173,8 +202,8 @@ export class WorkflowController {
       if (!commitOk) {
         throw new AppError(
           commitRes?.message ||
-            commitRes?.error ||
-            'Failed to process workflow action',
+          commitRes?.error ||
+          'Failed to process workflow action',
           commitStatus,
         );
       }

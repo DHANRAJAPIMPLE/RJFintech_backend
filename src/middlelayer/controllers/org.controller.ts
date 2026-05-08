@@ -37,7 +37,7 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, newNodeName, nodeType, parentNode } = zodParse(
+      const { companyCode, newNodeName, nodeType, parentNode, workflowId } = zodParse(
         orgOnboardingSchema,
         req.body,
       );
@@ -76,13 +76,41 @@ export class OrgController {
         ),
       ]);
 
-      const eligibleApprovers = [
+      let eligibleApprovers = [
         ...new Set([
           ...(globalRes.data || []),
           ...(mgrRes.data || []),
           ...(adminRes.data || []),
         ]),
       ];
+
+      // 2b. If workflowId is provided, validate workflow approvers and merge
+      if (workflowId) {
+        const { data: workflowApprovers, ok: wfOk } = await internalPost<any>(
+          `${config.backendUrl}/internal/workflow/validate-approvers`,
+          {
+            workflowId,
+            initiatorId,
+            nodePath: parentNode?.nodePath,
+            companyId: company?.id,
+          },
+        );
+
+        if (!wfOk || !workflowApprovers?.success) {
+          throw new AppError(
+            workflowApprovers?.message || 'Workflow approver validation failed',
+            400,
+          );
+        }
+
+        // Merge workflow-resolved approvers with the existing ones
+        eligibleApprovers = Array.from(
+          new Set([
+            ...eligibleApprovers,
+            ...(workflowApprovers.eligibleApprovers || []),
+          ]),
+        );
+      }
 
       // 3. Validate Node Initiation (Check for duplicates and parent existence)
       const { data: validationRes, ok: validationOk } = await internalPost<any>(
@@ -109,8 +137,8 @@ export class OrgController {
         {
           initiatorId,
           companyId: company?.id,
+          workflowId: workflowId || null,
           data: {
-            
             newNodeName,
             nodeType,
             parentNode,
@@ -123,8 +151,8 @@ export class OrgController {
       if (!ok) {
         throw new AppError(
           data?.message ||
-            data?.error ||
-            'Failed to initiate org structure request',
+          data?.error ||
+          'Failed to initiate org structure request',
           status,
         );
       }
@@ -161,8 +189,8 @@ export class OrgController {
       if (!fetchOk || !request) {
         throw new AppError(
           request?.message ||
-            request?.error ||
-            'Org structure request not found',
+          request?.error ||
+          'Org structure request not found',
           404,
         );
       }
@@ -249,8 +277,8 @@ export class OrgController {
       if (!commitOk) {
         throw new AppError(
           commitRes?.message ||
-            commitRes?.error ||
-            'Failed to approve org structure request',
+          commitRes?.error ||
+          'Failed to approve org structure request',
           commitStatus,
         );
       }
@@ -337,8 +365,8 @@ export class OrgController {
       if (!ok) {
         throw new AppError(
           data?.message ||
-            data?.error ||
-            'Failed to fetch org structure history',
+          data?.error ||
+          'Failed to fetch org structure history',
           status,
         );
       }

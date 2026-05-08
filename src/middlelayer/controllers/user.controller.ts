@@ -21,6 +21,7 @@ import {
   userActionSchema,
   userStatusUpdateSchema,
   userHistory,
+  userCompanyNodesSchema,
 } from '../validations/user.validation';
 
 export class UserController {
@@ -49,158 +50,9 @@ export class UserController {
         );
       }
 
-      const { users, pendingOnboardings } = data;
-
-      const result = {
-        activeUsers: [] as any[],
-        pendingUsers: [] as any[],
-        inactiveUsers: [] as any[],
-      };
-
-      users.forEach((u: any) => {
-        if (u.userMappings.length === 0) {
-          const primaryRoles = u.userAccesses
-            .filter((a: any) => a.accessType === 'PRIMARY')
-            .map((a: any) => ({
-              roleCategory: a.role?.category || 'N/A',
-              roleSubCategory: a.role?.subCategory || 'N/A',
-              roleName: a.role?.roleName || 'N/A',
-              nodeName: a.orgStructure?.nodeName || 'N/A',
-              nodePath: a.orgStructure?.nodePath || 'N/A',
-              accessType: 'PRIMARY',
-            }));
-
-          const secondaryRoles = u.userAccesses
-            .filter((a: any) => a.accessType === 'SECONDARY')
-            .map((a: any) => ({
-              roleCategory: a.role?.category || 'N/A',
-              roleSubCategory: a.role?.subCategory || 'N/A',
-              roleName: a.role?.roleName || 'N/A',
-              nodeName: a.orgStructure?.nodeName || 'N/A',
-              nodePath: a.orgStructure?.nodePath || 'N/A',
-              accessType: 'SECONDARY',
-            }));
-
-          result.inactiveUsers.push({
-            basicDetails: {
-              name: u.name,
-              email: u.email,
-              phone: u.phone,
-              employeeId: 'N/A',
-              createdAt: UserController.formatDate(u.createdAt),
-            },
-
-            primary: primaryRoles,
-            secondary: secondaryRoles,
-          });
-        } else {
-          u.userMappings.forEach((m: any) => {
-            const companyAccesses = u.userAccesses.filter(
-              (a: any) => a.companyId === m.companyId,
-            );
-
-            const primaryRoles = companyAccesses
-              .filter((a: any) => a.accessType === 'PRIMARY')
-              .map((a: any) => ({
-                roleCategory: a.role?.category || 'N/A',
-                roleSubCategory: a.role?.subCategory || 'N/A',
-                roleName: a.role?.roleName || 'N/A',
-                nodeName: a.orgStructure?.nodeName || 'N/A',
-                nodePath: a.orgStructure?.nodePath || 'N/A',
-                accessType: 'PRIMARY',
-              }));
-
-            const secondaryRoles = companyAccesses
-              .filter((a: any) => a.accessType === 'SECONDARY')
-              .map((a: any) => ({
-                roleCategory: a.role?.category || 'N/A',
-                roleSubCategory: a.role?.subCategory || 'N/A',
-                roleName: a.role?.roleName || 'N/A',
-                nodeName: a.orgStructure?.nodeName || 'N/A',
-                nodePath: a.orgStructure?.nodePath || 'N/A',
-                accessType: 'SECONDARY',
-              }));
-
-            const userData = {
-              basicDetails: {
-                name: u.name,
-                email: u.email,
-                phone: u.phone,
-                createdAt: UserController.formatDate(m.createdAt),
-                designation: m.designation || '',
-                employeeId: m.employeeId || '',
-                reportingManagerName: m.manager?.name || 'N/A',
-                reportingManagerEmail: m.manager?.email || 'N/A',
-              },
-              primary: primaryRoles,
-              secondary: secondaryRoles,
-            };
-
-            if (m.status === 'ACTIVE') {
-              result.activeUsers.push(userData);
-            } else {
-              result.inactiveUsers.push(userData);
-            }
-          });
-        }
-      });
-
-      pendingOnboardings.forEach((onb: any) => {
-        const onbData = onb.data as any;
-        const basic = onbData?.basicDetails || {};
-        const permissions = onbData?.permissions || [];
-
-        const primary = permissions
-          .filter((p: any) => p.accessType === 'PRIMARY')
-          .map((p: any) => ({
-            roleCategory: p.roleCategory || 'N/A',
-            roleSubCategory: p.roleSubCategory || 'N/A',
-            roleName: p.roleName || 'N/A',
-            nodeName: p.nodeName || 'N/A',
-            nodePath: p.nodePath || 'N/A',
-            accessType: 'PRIMARY',
-          }));
-
-        const secondary = permissions
-          .filter((p: any) => p.accessType === 'SECONDARY')
-          .map((p: any) => ({
-            roleCategory: p.roleCategory || 'N/A',
-            roleSubCategory: p.roleSubCategory || 'N/A',
-            roleName: p.roleName || 'N/A',
-            nodeName: p.nodeName || 'N/A',
-            nodePath: p.nodePath || 'N/A',
-            accessType: 'SECONDARY',
-          }));
-
-        result.pendingUsers.push({
-          id: onb.id,
-          basicDetails: {
-            name: basic.name || 'N/A',
-            email: basic.email || 'N/A',
-            phone: basic.phone || 'N/A',
-            createdAt: UserController.formatDate(onb.createdAt),
-            designation: basic.designation || 'N/A',
-            employeeId: basic.employeeId || 'N/A',
-            reportingManagerName: onb.reportingManagerInfo?.name || 'N/A',
-            reportingManagerEmail:
-              onb.reportingManagerInfo?.email ||
-              basic.reportingManager ||
-              'N/A',
-            initiatorName: onb.initiator?.name || null,
-            initiatorEmail: onb.initiator?.email || null,
-            initiatedDate: onb.createdAt,
-          },
-
-          primary,
-          secondary,
-        });
-      });
-
-      res.status(200).json({
-        message: 'Users fetched successfully!',
-        code: 200,
-        data: result,
-      });
+      // The backend already returns the data in the requested format:
+      // { message, code, data: { activeUsers, pendingUsers, inactiveUsers } }
+      res.status(200).json(data);
     } catch (error) {
       next(error);
     }
@@ -214,7 +66,7 @@ export class UserController {
     try {
       const validatedData = zodParse(userOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { basicDetails, permissions } = validatedData;
+      const { basicDetails, permissions, workflowId } = validatedData;
       const { email, reportingManager } = basicDetails;
 
       if (!initiatorId) {
@@ -226,12 +78,12 @@ export class UserController {
         `${config.backendUrl}/internal/onboarding/user/check-manager`,
         { email: reportingManager },
       );
-     
+
       if (!managerOk || !manager) {
         throw new AppError(
           manager?.message ||
-            manager?.error ||
-            'Reporting manager email not found',
+          manager?.error ||
+          'Reporting manager email not found',
           400,
         );
       }
@@ -241,7 +93,7 @@ export class UserController {
         `${config.backendUrl}/internal/onboarding/user/check-exists`,
         { email },
       );
-    
+
       if (existsOk && existingUser) {
         throw new AppError('User already exists in master table', 400);
       }
@@ -250,7 +102,7 @@ export class UserController {
         `${config.backendUrl}/internal/user/get-pending-users`,
         { email },
       );
-    
+
       if (pendingOk && pendingUsers) {
         throw new AppError('User already exists in pending onboarding', 400);
       }
@@ -261,11 +113,11 @@ export class UserController {
           `${config.backendUrl}/internal/company/check-signatories`,
           { emails: [email] },
         );
-      
+
       if (signatoryCheckOk && signatoryCheck.exists) {
         throw new AppError(
           signatoryCheck.message ||
-            'User already exists as a signatory in a pending company onboarding',
+          'User already exists as a signatory in a pending company onboarding',
           400,
         );
       }
@@ -281,7 +133,7 @@ export class UserController {
             roleSubCategory: permission.roleSubCategory,
           },
         );
-       
+
         if (!rolesOk || !Array.isArray(roles) || roles.length === 0) {
           throw new AppError(`Role '${permission.roleName}' not found`, 400);
         }
@@ -293,7 +145,7 @@ export class UserController {
             companyId: manager?.userMappings?.[0]?.companyId,
           },
         );
-       
+
         if (!nodeOk || !node) {
           throw new AppError(`Node '${permission.nodePath}' not found`, 400);
         }
@@ -335,13 +187,45 @@ export class UserController {
       ]);
 
       // Combine and deduplicate
-      const eligibleApprovers = Array.from(
+      let eligibleApprovers = Array.from(
         new Set([
           ...(globalRes.data || []),
           ...(mgrRes.data || []),
           ...(adminRes.data || []),
         ]),
       );
+
+      // 6b. If workflowId is provided, validate workflow approvers and merge
+      if (workflowId) {
+        // Use primary permission's nodePath as the context node
+        const primaryPermission = permissions.find((p) => p.accessType === 'PRIMARY');
+        const contextNodePath = primaryPermission?.nodePath;
+
+        const { data: workflowApprovers, ok: wfOk } = await internalPost<any>(
+          `${config.backendUrl}/internal/workflow/validate-approvers`,
+          {
+            workflowId,
+            initiatorId,
+            nodePath: contextNodePath,
+            companyId: managerMapping?.companyId,
+          },
+        );
+
+        if (!wfOk || !workflowApprovers?.success) {
+          throw new AppError(
+            workflowApprovers?.message || 'Workflow approver validation failed',
+            400,
+          );
+        }
+
+        // Merge workflow-resolved approvers with the existing ones
+        eligibleApprovers = Array.from(
+          new Set([
+            ...eligibleApprovers,
+            ...(workflowApprovers.eligibleApprovers || []),
+          ]),
+        );
+      }
 
       // 7. Call Backend to create the record
       const {
@@ -352,6 +236,7 @@ export class UserController {
         initiatorId,
         companyCode,
         groupCode,
+        workflowId: workflowId || null,
         data: {
           basicDetails,
           permissions,
@@ -363,8 +248,8 @@ export class UserController {
       if (!createOk) {
         throw new AppError(
           createRes?.message ||
-            createRes?.error ||
-            'Failed to initiate user onboarding',
+          createRes?.error ||
+          'Failed to initiate user onboarding',
           createStatus,
         );
       }
@@ -400,8 +285,8 @@ export class UserController {
       if (!fetchOk || !onboarding) {
         throw new AppError(
           onboarding?.message ||
-            onboarding?.error ||
-            'User onboarding request not found',
+          onboarding?.error ||
+          'User onboarding request not found',
           404,
         );
       }
@@ -434,8 +319,8 @@ export class UserController {
       if (!commitOk) {
         throw new AppError(
           commitRes?.message ||
-            commitRes?.error ||
-            'Failed to process user onboarding approval',
+          commitRes?.error ||
+          'Failed to process user onboarding approval',
           commitStatus,
         );
       }
@@ -489,8 +374,8 @@ export class UserController {
       if (!updateOk) {
         throw new AppError(
           updateData?.message ||
-            updateData?.error ||
-            'Failed to update user status',
+          updateData?.error ||
+          'Failed to update user status',
           updateStatus || 500,
         );
       }
@@ -532,4 +417,48 @@ export class UserController {
       next(error);
     }
   }
+  static async fetchCompanyNodes(
+    req: Request & { user?: { id: string; companyId: string } },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { subCategory } = zodParse(userCompanyNodesSchema, req.body);
+      const userId = req.user?.id;
+      const companyId = req.user?.companyId;
+
+      if (!userId || !companyId) {
+        throw new AppError('Unauthorized', 401);
+      }
+
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendUrl}/internal/user/fetch-company-nodes`,
+        {
+          userId,
+          companyId,
+          subCategory,
+        },
+      );
+
+      if (!ok) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch company nodes',
+          status,
+        );
+      }
+
+      // res.status(200).json(data);
+      res.status(200).json({
+        message:
+          data && data.length > 0
+            ? 'User nodes fetched successfully!'
+            : 'User nodes not found',
+        code: 200,
+        data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
+

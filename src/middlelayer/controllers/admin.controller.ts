@@ -40,7 +40,9 @@ export class AdminController {
       // 1. Fetch raw data from Backend (5001)
       const { data, ok, status } = await internalPost<any>(
         `${config.backendCompanyUrl}/groups`,
+        {},
       );
+
 
       if (!ok) {
         throw new AppError(
@@ -67,19 +69,14 @@ export class AdminController {
             ieCode: c.ieCode || '',
             registration: c.registrationDate,
             address: c.address || '',
+            signatories: c.signatories || [],
           }));
 
           companies.forEach((c: any) => {
-            if (c.userMappings) {
-              c.userMappings.forEach((um: any) => {
-                if (um.user && !signatoryMap.has(um.user.email)) {
-                  signatoryMap.set(um.user.email, {
-                    name: um.user.name,
-                    email: um.user.email,
-                    phone: um.user.phone,
-                    designation: um.designation || '',
-                    employeeId: um.employeeId || '',
-                  });
+            if (c.signatories) {
+              c.signatories.forEach((s: any) => {
+                if (!signatoryMap.has(s.email)) {
+                  signatoryMap.set(s.email, s);
                 }
               });
             }
@@ -91,7 +88,6 @@ export class AdminController {
               groupName: g.name,
             },
             comapnyDetails: companyDetails,
-            signatories: Array.from(signatoryMap.values()),
           };
         };
 
@@ -142,15 +138,9 @@ export class AdminController {
               ieCode: c.ieCode || '',
               registration: c.registrationDate,
               address: c.address || '',
+              signatories: c.signatories || [],
             },
           ],
-          signatories: (c.userMappings || []).map((um: any) => ({
-            name: um.user.name,
-            email: um.user.email,
-            phone: um.user.phone,
-            designation: um.designation || '',
-            employeeId: um.employeeId || '',
-          })),
         };
 
         if (c.status === 'ACTIVE') {
@@ -179,7 +169,6 @@ export class AdminController {
                 }
               : null,
             comapnyDetails: [],
-            signatories: [],
           };
         }
 
@@ -195,23 +184,13 @@ export class AdminController {
           initiatorName: onb.initiator?.name || null,
           initiatorEmail: onb.initiator?.email || null,
           initiatedDate: onb.createdAt,
-        });
-
-        // Add signatories if not already there
-        signatories.forEach((s: any) => {
-          if (
-            !pendingGroups[groupCode].signatories.some(
-              (existing: any) => existing.email === s.email,
-            )
-          ) {
-            pendingGroups[groupCode].signatories.push({
-              name: s.name || '',
-              email: s.email || '',
-              phone: s.phone || '',
-              designation: s.designation || '',
-              employeeId: s.employeeId || '',
-            });
-          }
+          signatories: signatories.map((s: any) => ({
+            name: s.name || '',
+            email: s.email || '',
+            phone: s.phone || '',
+            designation: s.designation || '',
+            employeeId: s.employeeId || '',
+          })),
         });
       });
       pending.push(...Object.values(pendingGroups));

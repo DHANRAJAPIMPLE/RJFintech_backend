@@ -7,6 +7,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+generator dbml {
+  provider = "prisma-dbml-generator"
+  output   = "./schema.dbml"
+}
+
 model User {
   id             String           @id @default(uuid())
   name           String
@@ -149,17 +154,18 @@ model UserActivity {
 }
 
 model UserOnboarding {
-  id             String           @id @default(uuid())
-  groupId        String?          @map("group_id")
-  companyId      String           @map("company_id")
-  data           Json
-  status         OnboardingStatus @default(PENDING)
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
-  approvalRemark String?          @map("approval_remark")
-  eligibleApprovers   String[]         @default([]) @map("eligible_approvers")
-  company        Company          @relation("UserOnboardingRel", fields: [companyId], references: [id])
-  group          GroupCompany?    @relation("UserOnboardingRel", fields: [groupId], references: [id])
+  id                String           @id @default(uuid())
+  groupId           String?          @map("group_id")
+  companyId         String           @map("company_id")
+  workflowId        String?          @map("workflow_id")
+  data              Json
+  status            OnboardingStatus @default(PENDING)
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  approvalRemark    String?          @map("approval_remark")
+  eligibleApprovers String[]         @default([]) @map("eligible_approvers")
+  company           Company          @relation("UserOnboardingRel", fields: [companyId], references: [id])
+  group             GroupCompany?    @relation("UserOnboardingRel", fields: [groupId], references: [id])
 
   @@map("user_onboarding")
 }
@@ -180,16 +186,17 @@ model CompanyOnboarding {
 }
 
 model OrgStructureReq {
-  id           String           @id @default(uuid())
-  data         Json
-  companyId    String           @map("company_id")
-  status       OnboardingStatus @default(PENDING)
-  createdAt    DateTime         @default(now()) @map("created_at")
-  remarks      String?
-  updatedAt    DateTime         @updatedAt @map("updated_at")
+  id                String           @id @default(uuid())
+  data              Json
+  companyId         String           @map("company_id")
+  workflowId        String?          @map("workflow_id")
+  status            OnboardingStatus @default(PENDING)
+  createdAt         DateTime         @default(now()) @map("created_at")
+  remarks           String?
+  updatedAt         DateTime         @updatedAt @map("updated_at")
   eligibleApprovers String[]         @default([]) @map("eligible_approvers")
-  orgHistories OrgHistory[]     @relation("OrgRequestHistory")
-  company      Company          @relation(fields: [companyId], references: [id])
+  orgHistories      OrgHistory[]     @relation("OrgRequestHistory")
+  company           Company          @relation(fields: [companyId], references: [id])
 
   @@map("org_structure_req")
 }
@@ -208,6 +215,7 @@ model OrgHistory {
   @@map("org_history")
 }
 
+
 model OrgStructure {
   id         String         @id @default(uuid())
   companyId  String         @map("company_id")
@@ -225,6 +233,7 @@ model OrgStructure {
 
   @@map("org_structure")
 }
+
 
 model Roles {
   roleCode        String       @id @map("role_code")
@@ -250,6 +259,7 @@ model UserAccess {
   roleCode       String?      @map("role_code")
   nodeId         String       @map("node_id")
   accessType     AccessType?  @map("access_type")
+  userCategory   UserCategory @map("user_category")
   companyId      String       @map("company_id")
   isGlobalAccess Boolean      @default(false) @map("is_global_access")
   createdAt      DateTime     @default(now()) @map("created_at")
@@ -298,22 +308,23 @@ model WorkflowLevel {
 }
 
 model WorkflowReq {
-  id             String           @id @default(uuid())
-  companyId      String           @map("company_id")
-  nodeId         String           @map("node_id")
-  module         String
-  subModule      String           @map("sub_module")
-  levelsHash     String           @map("levels_hash")
+  id                String           @id @default(uuid())
+  companyId         String           @map("company_id")
+  nodeId            String           @map("node_id")
+  module            String
+  subModule         String           @map("sub_module")
+  levelsHash        String           @map("levels_hash")
+  workflowId        String?          @map("workflow_id")
 
-  data           Json
-  status         OnboardingStatus @default(PENDING)
-  approvalRemark String?          @map("approval_remark")
-  eligibleApprovers String[]      @default([]) @map("eligible_approvers")
+  data              Json
+  status            OnboardingStatus @default(PENDING)
+  approvalRemark    String?          @map("approval_remark")
+  eligibleApprovers String[]         @default([]) @map("eligible_approvers")
 
-  createdAt      DateTime         @default(now()) @map("created_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
 
-  company        Company          @relation(fields: [companyId], references: [id])
+  company           Company          @relation(fields: [companyId], references: [id])
 
   workflowHistories WorkflowReqHistory[] @relation("WorkflowRequestHistory")
 
@@ -383,4 +394,10 @@ enum ApprovalType {
 enum AccessType{
   PRIMARY
   SECONDARY
+}
+
+enum UserCategory{
+   ALL_CHILD
+   IMMEDIATE_CHILD
+   NODE
 }

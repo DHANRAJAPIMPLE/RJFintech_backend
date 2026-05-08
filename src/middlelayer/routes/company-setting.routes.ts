@@ -48,6 +48,12 @@ router.post(
   authorize('view', 'USER_ACC'),
   UserController.getUserHistory,
 );
+router.post(
+  '/user/fetch-company-nodes',
+  authorize('view', 'USER_ACC'),
+  UserController.fetchCompanyNodes,
+);
+
 // ----------------------------------------------------------
 
 //--------------org routes-----------------------------------

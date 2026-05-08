@@ -125,9 +125,115 @@ export class UserDbController {
         };
       });
 
+      // 4. Format all users into the requested structure
+      const formatDate = (date: Date) => {
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        return `${day}-${month}-${year}`;
+      };
+
+      const activeUsers: any[] = [];
+      const inactiveUsers: any[] = [];
+
+      users.forEach((u) => {
+        const mapping = u.userMappings[0];
+        const formattedUser = {
+          basicDetails: {
+            name: u.name,
+            email: u.email,
+            phone: u.phone,
+            createdAt: formatDate(u.createdAt),
+            designation: mapping?.designation || 'N/A',
+            employeeId: mapping?.employeeId || 'N/A',
+            reportingManagerName: mapping?.manager?.name || 'N/A',
+            reportingManagerEmail: mapping?.manager?.email || 'N/A',
+          },
+          primary: u.userAccesses
+            .filter((a) => a.accessType === 'PRIMARY' || a.isGlobalAccess)
+            .map((a) => ({
+              roleCategory: a.role?.category,
+              roleSubCategory: a.role?.subCategory,
+              roleName: a.role?.roleName,
+              nodeName: a.orgStructure?.nodeName,
+              nodePath: a.orgStructure?.nodePath,
+              nodeType: a.orgStructure?.nodeType,
+            })),
+          secondary: u.userAccesses
+            .filter((a) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
+            .map((a) => ({
+              roleCategory: a.role?.category,
+              roleSubCategory: a.role?.subCategory,
+              roleName: a.role?.roleName,
+              nodeName: a.orgStructure?.nodeName,
+              nodePath: a.orgStructure?.nodePath,
+              nodeType: a.orgStructure?.nodeType,
+            })),
+        };
+
+        if (mapping?.status === 'ACTIVE') {
+          activeUsers.push(formattedUser);
+        } else {
+          inactiveUsers.push(formattedUser);
+        }
+      });
+
+      const pendingUsers = enhancedPending.map((onb: any) => {
+        const dataBlob = onb.data as any;
+        const basic = dataBlob?.basicDetails || {};
+        const permissions = dataBlob?.permissions || [];
+
+        const primary: any[] = [];
+        const secondary: any[] = [];
+
+        permissions.forEach((p: any) => {
+          const access = {
+            roleCategory: p.roleCategory,
+            roleSubCategory: p.roleSubCategory,
+            roleName: p.roleName,
+            nodeName: p.nodeName,
+            nodePath: p.nodePath,
+            nodeType: p.nodeType,
+          };
+          // Condition: isGlobal true then comes in primary
+          if (
+            p.isGlobal === true ||
+            p.isGlobalAccess === true ||
+            p.accessType === 'PRIMARY'
+          ) {
+            primary.push(access);
+          } else {
+            secondary.push(access);
+          }
+        });
+
+        return {
+          id: onb.id,
+          initiator: onb.initiator,
+          approver: onb.approver,
+          basicDetails: {
+            name: basic.name,
+            email: basic.email,
+            phone: basic.phone,
+            createdAt: formatDate(onb.createdAt),
+            designation: basic.designation || 'N/A',
+            employeeId: basic.employeeId || 'N/A',
+            reportingManagerName: onb.reportingManagerInfo?.name || 'N/A',
+            reportingManagerEmail: onb.reportingManagerInfo?.email || 'N/A',
+          },
+          primary,
+          secondary,
+        };
+      });
+
       res.status(200).json({
-        users,
-        pendingOnboardings: enhancedPending,
+        message: 'Users fetched successfully!',
+        code: 200,
+        data: {
+          activeUsers,
+          pendingUsers,
+          inactiveUsers,
+        },
       });
     } catch (error) {
       next(error);
@@ -177,6 +283,13 @@ export class UserDbController {
 
     const email = onboardingData.data?.basicDetails?.email;
 
+    // Filter out the initiator from eligible approvers — initiator cannot approve their own request
+    if (initiatorId && onboardingData.eligibleApprovers) {
+      onboardingData.eligibleApprovers = onboardingData.eligibleApprovers.filter(
+        (id: string) => id !== initiatorId,
+      );
+    }
+
     const onboarding = await prisma.$transaction(async (tx) => {
       let groupId: string | null = null;
       if (groupCode) {
@@ -209,7 +322,7 @@ export class UserDbController {
     });
     res.status(201).json(onboarding);
   }
-  
+
 
   /**
    * Fetches a single user onboarding request by its ID.
@@ -501,4 +614,86 @@ export class UserDbController {
       next(error);
     }
   }
+  /**
+   * Fetches organizational nodes for a user based on global status and sub-category.
+   */
+ static async fetchCompanyNodes(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { userId, companyId, subCategory } = req.body;
+
+    const globalAccess = await prisma.userAccess.findFirst({
+      where: {
+        userId,
+        companyId,
+        isGlobalAccess: true,
+      },
+    });
+
+    if (globalAccess) {
+      const nodes = await prisma.orgStructure.findMany({
+        where: { companyId },
+        select: {
+          nodeName: true,
+          nodePath: true,
+          nodeType: true,
+          workflows: {
+            select: {
+              id: true,
+              name: true,
+              alias: true,
+            },
+          },
+        },
+      });
+      return res.status(200).json(nodes);
+    } else {
+      if (!subCategory) {
+        return res.status(200).json([]);
+      }
+
+      const userAccesses = await prisma.userAccess.findMany({
+        where: {
+          userId,
+          companyId,
+          role: {
+            subCategory: subCategory,
+          },
+        },
+        include: {
+          orgStructure: {
+            select: {
+              nodeName: true,
+              nodePath: true,
+              nodeType: true,
+              workflows: {
+                select: {
+                  id: true,
+                  name: true,
+                  alias: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const nodes = userAccesses
+        .map((ua) => ua.orgStructure)
+        .filter(
+          (node, index, self) =>
+            index === self.findIndex((t) => t.nodePath === node.nodePath),
+        );
+
+      return res.status(200).json(nodes);
+    }
+  } catch (error) {
+    next(error);
+  }
 }
+}
+
+

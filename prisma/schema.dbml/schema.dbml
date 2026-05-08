@@ -1,0 +1,421 @@
+//// ------------------------------------------------------
+//// THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+//// ------------------------------------------------------
+
+Table user {
+  id String [pk]
+  name String [not null]
+  email String [unique, not null]
+  password String [not null]
+  phone String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  companyHistory company_history [not null]
+  orgHistory org_history [not null]
+  userAccesses user_access [not null]
+  userActivities user_activity [not null]
+  userHistory user_history [not null]
+  managedUsers user_mapping [not null]
+  userMappings user_mapping [not null]
+  workflowHistories workflow_req_history [not null]
+}
+
+Table company {
+  id String [pk]
+  gstNumber String
+  legalName String [not null]
+  address String [not null]
+  status Status [not null]
+  registrationDate DateTime [not null]
+  brandName String
+  ieCode String
+  companyCode String [unique, not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  companyMappings company_mapping [not null]
+  orgStructures org_structure [not null]
+  orgStructureReqs org_structure_req [not null]
+  userAccesses user_access [not null]
+  userMappings user_mapping [not null]
+  workflows workflow [not null]
+  workflowReqs workflow_req [not null]
+  userHistories user_history [not null]
+  userOnboardings user_onboarding [not null]
+  orgHistories org_history [not null]
+  workflowReqHistories workflow_req_history [not null]
+}
+
+Table group_company {
+  id String [pk]
+  name String [not null]
+  status Status [not null]
+  groupCode String [unique, not null]
+  remarks String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  companyMappings company_mapping [not null]
+  userOnboardings user_onboarding [not null]
+}
+
+Table user_history {
+  id String [pk]
+  email String [not null]
+  companyId String [not null]
+  event EventType [not null]
+  eventUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  user user [not null]
+  company company [not null]
+}
+
+Table company_history {
+  id String [pk]
+  companyCode String [not null]
+  event EventType [not null]
+  eventUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  user user [not null]
+}
+
+Table user_mapping {
+  id String [pk]
+  userId String [not null]
+  companyId String [not null]
+  reportingManager String
+  status Status [not null]
+  designation String
+  employeeId String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  company company [not null]
+  manager user
+  user user [not null]
+
+  indexes {
+    (userId, companyId) [unique]
+  }
+}
+
+Table company_mapping {
+  id String [pk]
+  companyId String [not null]
+  groupId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  company company [not null]
+  group group_company [not null]
+
+  indexes {
+    (groupId, companyId) [unique]
+  }
+}
+
+Table user_activity {
+  id String [pk]
+  userId String [not null]
+  companyId String [not null]
+  refreshToken String
+  version String
+  ipAddress String [not null]
+  userAgent String [not null]
+  forceLogToken String
+  expiryAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  user user [not null]
+
+  indexes {
+    (userId, companyId) [unique]
+  }
+}
+
+Table user_onboarding {
+  id String [pk]
+  groupId String
+  companyId String [not null]
+  data Json [not null]
+  status OnboardingStatus [not null, default: 'PENDING']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  approvalRemark String
+  eligibleApprovers String[] [not null]
+  company company [not null]
+  group group_company
+}
+
+Table company_onboarding {
+  id String [pk]
+  data Json
+  groupCode String
+  companyCode String [unique, not null]
+  onboardedType OnboardedType [not null, default: 'NEW']
+  status OnboardingStatus [not null, default: 'PENDING']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  approvalRemark String
+  eligibleApprovers String[] [not null]
+}
+
+Table org_structure_req {
+  id String [pk]
+  data Json [not null]
+  companyId String [not null]
+  status OnboardingStatus [not null, default: 'PENDING']
+  createdAt DateTime [default: `now()`, not null]
+  remarks String
+  updatedAt DateTime [not null]
+  eligibleApprovers String[] [not null]
+  orgHistories org_history [not null]
+  company company [not null]
+}
+
+Table org_history {
+  id String [pk]
+  orgReqId String [not null]
+  companyId String [not null]
+  event EventType [not null]
+  eventUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  user user [not null]
+  orgReq org_structure_req [not null]
+  company company [not null]
+}
+
+Table org_structure {
+  id String [pk]
+  companyId String [not null]
+  nodePath String [unique, not null]
+  nodeName String [not null]
+  nodeType NodeType [not null]
+  parentId String
+  createdAt DateTime [default: `now()`, not null]
+  company company [not null]
+  parent org_structure
+  children org_structure [not null]
+  userAccess user_access [not null]
+  workflows workflow [not null]
+}
+
+Table roles {
+  roleCode String [pk]
+  roleName String [unique, not null]
+  category String [not null]
+  subCategory String [not null]
+  permissionLevel String
+  view Boolean [not null, default: false]
+  modify Boolean [not null, default: false]
+  approve Boolean [not null, default: false]
+  initiate Boolean [not null, default: false]
+  isActive Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  userAccess user_access [not null]
+}
+
+Table user_access {
+  id String [pk]
+  userId String [not null]
+  roleCode String
+  nodeId String [not null]
+  accessType AccessType
+  companyId String [not null]
+  isGlobalAccess Boolean [not null, default: false]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  company company [not null]
+  orgStructure org_structure [not null]
+  role roles
+  user user [not null]
+
+  indexes {
+    (userId, roleCode, companyId, nodeId) [unique]
+  }
+}
+
+Table workflow {
+  id String [pk]
+  name String [not null]
+  alias String [not null]
+  nodeId String [not null]
+  module String [not null]
+  subModule String [not null]
+  companyId String [not null]
+  levelsHash String [not null]
+  orgStructure org_structure [not null]
+  company company [not null]
+  workflowReqIds String[] [not null]
+  levels workflow_level [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, nodeId, module, subModule, levelsHash) [unique]
+  }
+}
+
+Table workflow_level {
+  id String [pk]
+  workflowId String [not null]
+  level Int [not null]
+  approver1 ApproverType [not null]
+  approver2 ApproverType
+  approverType ApprovalType [not null]
+  workflow workflow [not null]
+
+  indexes {
+    (workflowId, level) [unique]
+  }
+}
+
+Table workflow_req {
+  id String [pk]
+  companyId String [not null]
+  nodeId String [not null]
+  module String [not null]
+  subModule String [not null]
+  levelsHash String [not null]
+  data Json [not null]
+  status OnboardingStatus [not null, default: 'PENDING']
+  approvalRemark String
+  eligibleApprovers String[] [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  company company [not null]
+  workflowHistories workflow_req_history [not null]
+}
+
+Table workflow_req_history {
+  id String [pk]
+  workflowReqId String [not null]
+  companyId String [not null]
+  event EventType [not null]
+  eventUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  user user [not null]
+  workflowReq workflow_req [not null]
+  company company [not null]
+}
+
+Table CompanyHistoryRel {
+  companyhistoryId String [ref: > company_history.id]
+  userhistoriesId String [ref: > user_history.id]
+}
+
+Table OrgHistoryRel {
+  orghistoryId String [ref: > org_history.id]
+  orghistoriesId String [ref: > org_history.id]
+}
+
+Table UserOnboardingRel {
+  useronboardingsId String [ref: > user_onboarding.id]
+  useronboardingsId String [ref: > user_onboarding.id]
+}
+
+Table WorkflowRequestHistory {
+  workflowreqhistoriesId String [ref: > workflow_req_history.id]
+  workflowhistoriesId String [ref: > workflow_req_history.id]
+}
+
+Enum NodeType {
+  ROOT
+  DIVISION
+  DEPARTMENT
+  TEAM
+  PLANT
+  LOCATION
+}
+
+Enum EventType {
+  INITIATE
+  APPROVED
+  REJECTED
+  MODIFY
+}
+
+Enum Status {
+  ACTIVE
+  INACTIVE
+}
+
+Enum OnboardingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+Enum OnboardedType {
+  EXISTING
+  NEW
+}
+
+Enum ApproverType {
+  REPORTING_MANAGER
+  NODE_APPROVER
+  HIERARCHY_APPROVER
+}
+
+Enum ApprovalType {
+  AND
+  OR
+}
+
+Enum AccessType {
+  PRIMARY
+  SECONDARY
+}
+
+Ref: user_history.eventUserId > user.id
+
+Ref: user_history.companyId > company.id
+
+Ref: company_history.eventUserId > user.id
+
+Ref: user_mapping.companyId > company.id
+
+Ref: user_mapping.reportingManager > user.id
+
+Ref: user_mapping.userId > user.id
+
+Ref: company_mapping.companyId > company.id
+
+Ref: company_mapping.groupId > group_company.id
+
+Ref: user_activity.userId > user.id
+
+Ref: user_onboarding.companyId > company.id
+
+Ref: user_onboarding.groupId > group_company.id
+
+Ref: org_structure_req.companyId > company.id
+
+Ref: org_history.eventUserId > user.id
+
+Ref: org_history.orgReqId > org_structure_req.id
+
+Ref: org_history.companyId > company.id
+
+Ref: org_structure.companyId > company.id
+
+Ref: org_structure.parentId - org_structure.id
+
+Ref: user_access.companyId > company.id
+
+Ref: user_access.nodeId > org_structure.id
+
+Ref: user_access.roleCode > roles.roleCode
+
+Ref: user_access.userId > user.id
+
+Ref: workflow.nodeId > org_structure.id
+
+Ref: workflow.companyId > company.id
+
+Ref: workflow_level.workflowId > workflow.id
+
+Ref: workflow_req.companyId > company.id
+
+Ref: workflow_req_history.eventUserId > user.id
+
+Ref: workflow_req_history.workflowReqId > workflow_req.id
+
+Ref: workflow_req_history.companyId > company.id

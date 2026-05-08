@@ -193,6 +193,13 @@ export class OrgStructureDbController {
         resolvedCompanyId = company.id;
       }
 
+      // Filter out the initiator from eligible approvers — initiator cannot approve their own request
+      if (initiatorId && rest.eligibleApprovers) {
+        rest.eligibleApprovers = rest.eligibleApprovers.filter(
+          (id: string) => id !== initiatorId,
+        );
+      }
+
       const request = await prisma.$transaction(async (tx) => {
         const reqRecord = await tx.orgStructureReq.create({
           data: {
