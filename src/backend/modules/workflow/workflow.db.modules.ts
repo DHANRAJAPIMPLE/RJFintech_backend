@@ -793,6 +793,7 @@ export class WorkflowDbController {
           alias: true,
           approvalRemark: true,
           levelsHash: true,
+          createdAt: true,
           workflowHistories: {
             where: { event: 'INITIATE' },
             select: {
