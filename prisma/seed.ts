@@ -451,7 +451,7 @@ async function main() {
           roleCode: dwf.roleCode,
           companyId: company.id,
           nodeId: rootNode.id,
-          levelsHash: `DEFAULT_${dwf.subModule}_1M1C1`,
+          levelsHash: `DEFAULT_${dwf.subModule}_1M_1C_1`,
           levels: {
             create: [
               {

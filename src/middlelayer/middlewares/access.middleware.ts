@@ -19,15 +19,22 @@ import type { AuthRequest } from './auth.middleware';
  */
 export const authorize = (
   action: 'view' | 'modify' | 'approve' | 'initiate',
-  module: string,
+  moduleName?: string,
 ) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const userId = req.user?.id;
       const companyId = req.user?.companyId;
 
+      // Determine the module: use the provided moduleName or fallback to req.body fields
+      const module = moduleName || req.body?.subCategory || req.body?.subModule || req.body?.module;
+
       if (!userId || !companyId) {
         throw new AppError('Unauthorized: User information missing', 401);
+      }
+
+      if (!module) {
+        throw new AppError('Authorization Denied: Module context missing', 400);
       }
 
       // Fetch authorization status from the backend

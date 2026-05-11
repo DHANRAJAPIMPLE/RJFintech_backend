@@ -50,7 +50,7 @@ router.post(
 );
 router.post(
   '/user/fetch-company-nodes',
-  authorize('view', 'USER_ACC'),
+  authorize('view'),
   UserController.fetchCompanyNodes,
 );
 

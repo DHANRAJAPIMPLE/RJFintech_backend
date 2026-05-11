@@ -874,6 +874,7 @@ export class UserDbController {
           nodePath: true,
           nodeType: true,
           workflows: {
+            where: { subModule: subCategory },
             select: {
               id: true,
               name: true,
@@ -903,6 +904,7 @@ export class UserDbController {
               nodePath: true,
               nodeType: true,
               workflows: {
+                where: { subModule: subCategory },
                 select: {
                   id: true,
                   name: true,

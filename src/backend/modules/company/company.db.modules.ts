@@ -511,13 +511,13 @@ export class CompanyDbController {
           const workflow = await tx.workflow.create({
             data: {
               name: dwf.name,
-              alias: '1M1C1',
+              alias: '1M_1C_1',
               module: 'SYSTEM_ACCESS',
               subModule: dwf.subModule,
               roleCode: dwf.roleCode,
               companyId: newCompany.id,
               nodeId: rootNode.id,
-              levelsHash: `DEFAULT_${dwf.subModule}_1M1C1`,
+              levelsHash: `DEFAULT_${dwf.subModule}_1M_1C_1`,
               levels: {
                 create: [
                   {
