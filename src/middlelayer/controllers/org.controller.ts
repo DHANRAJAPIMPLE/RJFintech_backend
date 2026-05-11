@@ -288,15 +288,16 @@ export class OrgController {
       // Format response with active and pending arrays
       const formattedPending = data.data.pending.map((req: any) => {
         const reqData = req.data || {};
-        const initiatorHistory = req.orgHistories?.[0];
         return {
           id: req.id,
           newNodeName: reqData.newNodeName,
           nodeType: reqData.nodeType,
           parentNode: reqData.parentNode,
-          initiatorName: initiatorHistory?.user?.name || null,
-          initiatorEmail: initiatorHistory?.user?.email || null,
+          initiatorName: req.initiator?.name || null,
+          initiatorEmail: req.initiator?.email || null,
           initiatedDate: req.createdAt,
+          workflowName: req.workflowName,
+          alias: req.alias,
         };
       });
 

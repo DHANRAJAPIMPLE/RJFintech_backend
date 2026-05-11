@@ -494,7 +494,7 @@ export class WorkflowApproverUtil {
       })
       .map((a: any) => a.userId);
 
-    console.log(`[WorkflowApproverUtil] Found ${eligibleUserIds.length} global approvers for subModule ${subModule}:`, eligibleUserIds);
+  
 
     return [...new Set(eligibleUserIds)];
   }

@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { prisma } from '../../lib/prisma';
+import { prisma, ltree } from '../../lib/prisma';
 import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 

@@ -124,6 +124,24 @@ export class WorkflowDbController {
         ? eligibleApprovers.filter((id: string) => id !== initiatorId)
         : eligibleApprovers;
 
+      // ── Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels} ───────
+      let totalApprovers = 0;
+      let totalLevels = 0;
+      if (levels) {
+        for (const level of Object.values(levels)) {
+          if (level) {
+            totalLevels++;
+            const l = level as any;
+            if (l.approver2 && l.type === 'AND') {
+              totalApprovers += 2;
+            } else {
+              totalApprovers += 1;
+            }
+          }
+        }
+      }
+      const generatedAlias = `1M_${totalApprovers}C_${totalLevels}`;
+
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.workflowReq.create({
           data: {
@@ -133,6 +151,7 @@ export class WorkflowDbController {
             subModule,
             levelsHash,
             data,
+            alias: generatedAlias,
             status: 'PENDING',
             eligibleApprovers: filteredApprovers,
           },
@@ -771,6 +790,7 @@ export class WorkflowDbController {
           id: true,
           data: true,
           status: true,
+          alias: true,
           approvalRemark: true,
           levelsHash: true,
           workflowHistories: {
@@ -805,7 +825,7 @@ export class WorkflowDbController {
         
         // Resolve workflow name and alias
         let workflowName = (req.data as any)?.name || 'New Workflow';
-        let alias = (req.data as any)?.alias || 'N/A';
+        let alias = req.alias || (req.data as any)?.alias || 'N/A';
 
         if (req.workflowId) {
           const w = workflowMap.get(req.workflowId);
