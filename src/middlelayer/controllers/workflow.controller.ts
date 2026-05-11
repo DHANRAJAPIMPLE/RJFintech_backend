@@ -200,7 +200,7 @@ export class WorkflowController {
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/workflow/fetch`,
-        { companyId },
+        { companyId, userId: req.user?.id },
       );
 
       if (!ok) {
@@ -234,7 +234,7 @@ export class WorkflowController {
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/workflow/history`,
-        { companyId, levelsHash, module, subModule, nodePath },
+        { companyId, levelsHash, module, subModule, nodePath, userId: req.user?.id },
       );
 
       if (!ok) {

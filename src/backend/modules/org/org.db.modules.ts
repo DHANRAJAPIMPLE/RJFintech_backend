@@ -141,6 +141,7 @@ export class OrgStructureDbController {
                 eventUserId: approverId,
                 orgReqId: id,
                 level: currentLevel?.level || null,
+                remarks: remarks,
               },
             });
           }
@@ -174,6 +175,7 @@ export class OrgStructureDbController {
               eventUserId: approverId,
               orgReqId: id,
               level: approvedLevel,
+              remarks: remarks,
             },
           });
 
@@ -198,46 +200,51 @@ export class OrgStructureDbController {
             },
           });
 
-          // Propagate user access from parent nodes to the new node
-          const pathParts = newNodePath.split('.');
-          const parentPaths = [];
-          let currentPath = '';
-          for (let i = 0; i < pathParts.length - 1; i++) {
-            currentPath += (i === 0 ? '' : '.') + pathParts[i];
-            parentPaths.push(currentPath);
-          }
+          // Propagate user access from parent nodes using ltree concept
+          const parentPaths = ltree.getAncestors(newNodePath);
 
           if (parentPaths.length > 0) {
-            // Find parent node IDs
             const parentNodes = await tx.orgStructure.findMany({
               where: {
                 companyId: request.companyId,
                 nodePath: { in: parentPaths },
               },
             });
+
             const parentNodeIds = parentNodes.map((n) => n.id);
+            const directParentPath = ltree.getParent(newNodePath);
+            const directParentId = parentNodes.find(n => n.nodePath === directParentPath)?.id;
 
             if (parentNodeIds.length > 0) {
-              // Find all user access entries for parent nodes with isGlobalAccess = false
+              // Fetch only propagating access: 
+              // - ALL_CHILD from any ancestor 
+              // - IMMEDIATE_CHILD only from the direct parent
               const parentAccesses = await tx.userAccess.findMany({
                 where: {
                   companyId: request.companyId,
                   nodeId: { in: parentNodeIds },
                   isGlobalAccess: false,
+                  OR: [
+                    { accessCategory: 'ALL_CHILD' },
+                    directParentId ? { nodeId: directParentId, accessCategory: 'IMMEDIATE_CHILD' } : undefined
+                  ].filter(Boolean) as any,
                 },
               });
 
-              // Prepare new entries, ensuring uniqueness to avoid constraint violations
+              // Prepare new entries, ensuring uniqueness
               const newAccessesMap = new Map();
               for (const access of parentAccesses) {
                 const uniqueKey = `${access.userId}_${access.roleCode}`;
                 if (!newAccessesMap.has(uniqueKey)) {
+                  // Rule: IMMEDIATE_CHILD on parent becomes NODE on child
+                  const newCategory = access.accessCategory === 'IMMEDIATE_CHILD' ? 'NODE' : access.accessCategory;
+                  
                   newAccessesMap.set(uniqueKey, {
                     userId: access.userId,
                     roleCode: access.roleCode,
                     nodeId: newNode.id,
                     accessType: 'SECONDARY',
-                    accessCategory: access.accessCategory,
+                    accessCategory: newCategory,
                     companyId: access.companyId,
                     isGlobalAccess: false,
                   });
@@ -635,6 +642,7 @@ export class OrgStructureDbController {
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,
+          remarks: h.remarks,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
@@ -710,7 +718,28 @@ export class OrgStructureDbController {
         },
       });
 
-      // 3. Remove internal UUIDs and format for the tree UI
+      // 3. Resolve workflow names and aliases for pending requests
+      const workflowIds = Array.from(new Set(pendingRequests.map(req => req.workflowId).filter(Boolean))) as string[];
+      const workflowDetails = await prisma.workflow.findMany({
+        where: { id: { in: workflowIds } },
+        select: { id: true, name: true, alias: true }
+      });
+      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
+
+      const pendingWithDetails = pendingRequests.map((req) => {
+        const w = req.workflowId ? workflowMap.get(req.workflowId) : null;
+        const initiator = req.orgHistories[0]?.user || { name: '', email: '' };
+        
+        const { orgHistories, ...rest } = req;
+        return {
+          ...rest,
+          initiator,
+          workflowName: w?.name || 'N/A',
+          alias: w?.alias || 'N/A',
+        };
+      });
+
+      // 4. Remove internal UUIDs and format for the tree UI
       const safeNodes = nodes.map((node) => ({
         nodeName: node.nodeName,
         nodeType: node.nodeType,
@@ -722,7 +751,7 @@ export class OrgStructureDbController {
         code: 200,
         data: {
           nodes: safeNodes,
-          pending: pendingRequests,
+          pending: pendingWithDetails,
         },
       });
     } catch (error) {

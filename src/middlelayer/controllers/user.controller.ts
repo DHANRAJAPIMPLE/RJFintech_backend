@@ -31,7 +31,7 @@ export class UserController {
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/user/fetch-all`,
-        { companyCode },
+        { companyCode, userId: (req as any).user?.id },
       );
 
       if (!ok) {
@@ -350,7 +350,7 @@ export class UserController {
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/user/history`,
-        { email, companyCode },
+        { email, companyCode, userId: (req as any).user?.id },
       );
 
       if (!ok || !data) {

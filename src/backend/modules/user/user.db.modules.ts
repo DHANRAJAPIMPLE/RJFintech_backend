@@ -18,7 +18,7 @@ export class UserDbController {
    */
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode, companyId } = req.body;
+      const { companyCode, companyId, userId } = req.body;
       let resolvedCompanyId = companyId;
 
       // Resolve companyId for filtering production users
@@ -33,6 +33,30 @@ export class UserDbController {
         resolvedCompanyId = company.id;
       }
 
+      // Check if requester is a global access user
+      let isGlobal = true;
+      let userNodeIds: string[] = [];
+      let userNodePaths: string[] = [];
+
+      if (userId) {
+        const globalAccess = await prisma.userAccess.findFirst({
+          where: {
+            userId,
+            companyId: resolvedCompanyId,
+            isGlobalAccess: true,
+          },
+        });
+        if (!globalAccess) {
+          isGlobal = false;
+          const accesses = await prisma.userAccess.findMany({
+            where: { userId, companyId: resolvedCompanyId },
+            select: { nodeId: true, orgStructure: { select: { nodePath: true } } },
+          });
+          userNodeIds = accesses.map((a) => a.nodeId);
+          userNodePaths = accesses.map((a) => a.orgStructure.nodePath);
+        }
+      }
+
       // 1. Fetch production users with their full organizational context
       const users = await prisma.user.findMany({
         where: {
@@ -41,6 +65,16 @@ export class UserDbController {
               companyId: resolvedCompanyId,
             },
           },
+          // If not global, only fetch users who share at least one node with the requester
+          ...(isGlobal
+            ? {}
+            : {
+              userAccesses: {
+                some: {
+                  nodeId: { in: userNodeIds },
+                },
+              },
+            }),
         },
         include: {
           userMappings: {
@@ -59,12 +93,20 @@ export class UserDbController {
       });
 
       // 2. Fetch pending onboarding requests
-      const pendingOnboardings = await prisma.userOnboarding.findMany({
+      const allPendingOnboardings = await prisma.userOnboarding.findMany({
         where: {
           status: 'PENDING',
           companyId: resolvedCompanyId,
         },
       });
+
+      // Filter pending requests: if not global, only show those whose permissions match user's nodes
+      const pendingOnboardings = isGlobal
+        ? allPendingOnboardings
+        : allPendingOnboardings.filter((onb: any) => {
+          const permissions = onb.data?.permissions || [];
+          return permissions.some((p: any) => userNodePaths.includes(p.nodePath));
+        });
 
       // 3. Enhance pending records with audit trail and manager info
       const pendingEmails = pendingOnboardings
@@ -104,6 +146,14 @@ export class UserDbController {
       const managerMap = new Map();
       managers.forEach((m) => managerMap.set(m.email, m));
 
+      // 4. Resolve workflow names and aliases for pending requests
+      const workflowIds = Array.from(new Set(pendingOnboardings.map((onb: any) => onb.workflowId).filter(Boolean))) as string[];
+      const workflowDetails = await prisma.workflow.findMany({
+        where: { id: { in: workflowIds } },
+        select: { id: true, name: true, alias: true }
+      });
+      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
+
       const enhancedPending = pendingOnboardings.map((onb: any) => {
         const dataBlob = onb.data as any;
         const email = dataBlob?.basicDetails?.email;
@@ -112,11 +162,14 @@ export class UserDbController {
         const init = historyMap.get(`${email}_INITIATE`);
         const approve = historyMap.get(`${email}_APPROVE`);
         const managerInfo = managerMap.get(managerEmail);
+        const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
 
         return {
           ...onb,
           initiator: init?.user || null,
           approver: approve?.user || null,
+          workflowName: w?.name || 'N/A',
+          alias: w?.alias || 'N/A',
           reportingManagerInfo: managerInfo
             ? {
               name: managerInfo.name,
@@ -227,6 +280,8 @@ export class UserDbController {
             initiatorName: onb.initiator?.name || null,
             initiatorEmail: onb.initiator?.email || null,
             initiatedDate: onb.createdAt,
+            workflowName: onb.workflowName,
+            alias: onb.alias,
           },
           primary,
           secondary,
@@ -503,6 +558,7 @@ export class UserDbController {
                 companyId: onboarding.companyId,
                 reqId: id,
                 level: approvedLevel,
+                remarks: remark,
               },
             });
           }
@@ -654,6 +710,7 @@ export class UserDbController {
                 companyId: onboarding.companyId,
                 reqId: id,
                 level: currentLevel?.level || null,
+                remarks: remark,
               },
             });
           }
@@ -837,6 +894,7 @@ export class UserDbController {
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,
+          remarks: h.remarks,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {

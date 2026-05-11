@@ -81,6 +81,7 @@ model UserHistory {
   companyId   String    @map("company_id")
   reqId       String?   @map("req_id")
   level       Int?
+  remarks       String?
   event       EventType
   eventUserId String    @map("event_user_id")
   createdAt   DateTime  @default(now()) @map("created_at")
@@ -208,6 +209,7 @@ model OrgHistory {
   event       EventType
   eventUserId String          @map("event_user_id")
   createdAt   DateTime        @default(now()) @map("created_at")
+  remarks     String?
   user        User            @relation("OrgHistoryRel", fields: [eventUserId], references: [id])
   orgReq      OrgStructureReq @relation("OrgRequestHistory", fields: [orgReqId], references: [id])
   company     Company         @relation("OrgHistoryRel", fields: [companyId], references: [id])
@@ -359,6 +361,7 @@ model WorkflowReqHistory {
   event         EventType
   eventUserId   String      @map("event_user_id")
   createdAt     DateTime    @default(now()) @map("created_at")
+  remarks       String?
 
   user        User        @relation("WorkflowHistoryRel", fields: [eventUserId], references: [id])
   workflowReq WorkflowReq @relation("WorkflowRequestHistory", fields: [workflowReqId], references: [id])

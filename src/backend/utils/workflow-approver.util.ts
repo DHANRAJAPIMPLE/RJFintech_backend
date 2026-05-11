@@ -465,9 +465,11 @@ export class WorkflowApproverUtil {
       select: {
         userId: true,
         roleCode: true,
+        isGlobalAccess: true,
         role: {
           select: {
             approve: true,
+            category: true,
             subCategory: true,
           },
         },
@@ -479,18 +481,20 @@ export class WorkflowApproverUtil {
     //   AND
     //   (b) (they have no role assigned OR their role has approve: true)
     //   AND
-    //   (their role subCategory matches subModule)
+    //   (their role subCategory matches subModule OR they are a SAAS_ADMIN)
     const eligibleUserIds = accesses
       .filter((a: any) => {
         // If no role, assume super admin access
         if (!a.roleCode) return true;
 
         const hasApprove = a.role?.approve === true;
-        const subCategoryMatches = a.role?.subCategory === subModule;
+        const subCategoryMatches = a.role?.subCategory === subModule || a.isGlobalAccess === true;
 
         return hasApprove && subCategoryMatches;
       })
       .map((a: any) => a.userId);
+
+    console.log(`[WorkflowApproverUtil] Found ${eligibleUserIds.length} global approvers for subModule ${subModule}:`, eligibleUserIds);
 
     return [...new Set(eligibleUserIds)];
   }

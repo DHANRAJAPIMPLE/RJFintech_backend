@@ -251,6 +251,7 @@ export class WorkflowDbController {
               event: 'REJECTED',
               eventUserId: approverId,
               level: currentLevel?.level || null,
+              remarks: remark,
             },
           });
 
@@ -284,6 +285,7 @@ export class WorkflowDbController {
               event: 'APPROVED',
               eventUserId: approverId,
               level: approvedLevel,
+              remarks: remark,
             },
           });
 
@@ -455,7 +457,7 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, levelsHash, module, subModule, nodePath } = req.body;
+      const { companyCode, companyId, levelsHash, module, subModule, nodePath, userId } = req.body;
       let whereCondition: any = {};
 
       let resolvedCompanyId = companyId;
@@ -467,39 +469,66 @@ export class WorkflowDbController {
         resolvedCompanyId = company.id;
       }
 
-      if (resolvedCompanyId) {
-        // If specific identifiers are provided, filter the history strictly
-        if (levelsHash || module || subModule || nodePath) {
-          let nodeId: string | undefined;
-          if (nodePath) {
-            const node = await prisma.orgStructure.findFirst({
-              where: { nodePath, companyId: resolvedCompanyId },
-            });
-            nodeId = node?.id;
-          }
-
-          const reqs = await prisma.workflowReq.findMany({
-            where: {
-              companyId: resolvedCompanyId,
-              levelsHash: levelsHash || undefined,
-              module: module || undefined,
-              subModule: subModule || undefined,
-              nodeId: nodeId || undefined,
-            },
-            select: { id: true },
-          });
-
-          whereCondition = {
-            workflowReqId: { in: reqs.map((r) => r.id) },
-          };
-        } else {
-          // Default: Fetch all history for the company
-          whereCondition = { companyId: resolvedCompanyId };
-        }
-      } else {
+      if (!resolvedCompanyId) {
         return res
           .status(400)
           .json({ error: 'companyCode, companyId or levelsHash is required' });
+      }
+
+      // Check if requester is a global access user
+      let isGlobal = true;
+      let userNodeIds: string[] = [];
+
+      if (userId) {
+        const globalAccess = await prisma.userAccess.findFirst({
+          where: {
+            userId,
+            companyId: resolvedCompanyId,
+            isGlobalAccess: true,
+          },
+        });
+        if (!globalAccess) {
+          isGlobal = false;
+          const accesses = await prisma.userAccess.findMany({
+            where: { userId, companyId: resolvedCompanyId },
+            select: { nodeId: true },
+          });
+          userNodeIds = accesses.map((a) => a.nodeId);
+        }
+      }
+
+      // If specific identifiers are provided, filter the history strictly
+      if (levelsHash || module || subModule || nodePath) {
+        let nodeId: string | undefined;
+        if (nodePath) {
+          const node = await prisma.orgStructure.findFirst({
+            where: { nodePath, companyId: resolvedCompanyId },
+          });
+          nodeId = node?.id;
+        }
+
+        const reqs = await prisma.workflowReq.findMany({
+          where: {
+            companyId: resolvedCompanyId,
+            levelsHash: levelsHash || undefined,
+            module: module || undefined,
+            subModule: subModule || undefined,
+            nodeId: nodeId || undefined,
+            // Restrict by user's nodes if not global
+            ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
+          },
+          select: { id: true },
+        });
+
+        whereCondition = {
+          workflowReqId: { in: reqs.map((r) => r.id) },
+        };
+      } else {
+        // Default: Fetch all history for the company, but restricted by nodes if not global
+        whereCondition = {
+          companyId: resolvedCompanyId,
+          ...(isGlobal ? {} : { workflowReq: { nodeId: { in: userNodeIds } } }),
+        };
       }
 
       const histories = await prisma.workflowReqHistory.findMany({
@@ -633,6 +662,7 @@ export class WorkflowDbController {
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,
+          remarks: h.remarks,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
@@ -662,7 +692,7 @@ export class WorkflowDbController {
    */
   static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode, companyId } = req.body;
+      const { companyCode, companyId, userId } = req.body;
 
       let resolvedCompanyId = companyId;
 
@@ -677,9 +707,34 @@ export class WorkflowDbController {
         resolvedCompanyId = company.id;
       }
 
+      // Check if requester is a global access user
+      let isGlobal = true;
+      let userNodeIds: string[] = [];
+
+      if (userId) {
+        const globalAccess = await prisma.userAccess.findFirst({
+          where: {
+            userId,
+            companyId: resolvedCompanyId,
+            isGlobalAccess: true,
+          },
+        });
+        if (!globalAccess) {
+          isGlobal = false;
+          const accesses = await prisma.userAccess.findMany({
+            where: { userId, companyId: resolvedCompanyId },
+            select: { nodeId: true },
+          });
+          userNodeIds = accesses.map((a) => a.nodeId);
+        }
+      }
+
       // Active production workflows
       const activeWorkflows = await prisma.workflow.findMany({
-        where: { companyId: resolvedCompanyId },
+        where: {
+          companyId: resolvedCompanyId,
+          ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
+        },
         select: {
           name: true,
           alias: true,
@@ -706,18 +761,67 @@ export class WorkflowDbController {
       });
 
       // Pending onboarding requests
-      const pendingRequests = await prisma.workflowReq.findMany({
+      const pendingRequestsRaw = await prisma.workflowReq.findMany({
         where: {
           companyId: resolvedCompanyId,
           status: 'PENDING',
+          ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
         },
         select: {
+          id: true,
           data: true,
           status: true,
           approvalRemark: true,
           levelsHash: true,
+          workflowHistories: {
+            where: { event: 'INITIATE' },
+            select: {
+              user: {
+                select: {
+                  name: true,
+                  email: true,
+                },
+              },
+            },
+          },
         },
         orderBy: { createdAt: 'desc' },
+      });
+
+      // 1. Resolve all unique workflow IDs from pending requests to get their names/aliases
+      const workflowIds = Array.from(new Set(pendingRequestsRaw.map(req => req.workflowId).filter(Boolean))) as string[];
+      const workflowDetails = await prisma.workflow.findMany({
+        where: { id: { in: workflowIds } },
+        select: { id: true, name: true, alias: true }
+      });
+      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
+
+      // 2. Flatten initiator and workflow info for frontend
+      const pendingRequests = pendingRequestsRaw.map((req) => {
+        const initiator = req.workflowHistories[0]?.user || {
+          name: '',
+          email: '',
+        };
+        
+        // Resolve workflow name and alias
+        let workflowName = (req.data as any)?.name || 'New Workflow';
+        let alias = (req.data as any)?.alias || 'N/A';
+
+        if (req.workflowId) {
+          const w = workflowMap.get(req.workflowId);
+          if (w) {
+            workflowName = w.name;
+            alias = w.alias;
+          }
+        }
+
+        const { workflowHistories, ...rest } = req;
+        return {
+          ...rest,
+          initiator,
+          workflowName,
+          alias,
+        };
       });
 
       res.status(200).json({
