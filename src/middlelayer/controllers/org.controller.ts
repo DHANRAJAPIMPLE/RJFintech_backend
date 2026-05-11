@@ -37,10 +37,8 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, newNodeName, nodeType, parentNode, levelsHash } = zodParse(
-        orgOnboardingSchema,
-        req.body,
-      );
+      const { companyCode, newNodeName, nodeType, parentNode, levelsHash } =
+        zodParse(orgOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
 
       if (!initiatorId) {
@@ -73,10 +71,7 @@ export class OrgController {
       ]);
 
       let eligibleApprovers = [
-        ...new Set([
-          ...(globalRes.data || []),
-          ...(mgrRes.data || [])
-        ]),
+        ...new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
       ];
 
       // 3. Validate Node Initiation (Check for duplicates and parent existence)
@@ -118,8 +113,8 @@ export class OrgController {
       if (!ok) {
         throw new AppError(
           data?.message ||
-          data?.error ||
-          'Failed to initiate org structure request',
+            data?.error ||
+            'Failed to initiate org structure request',
           status,
         );
       }
@@ -156,8 +151,8 @@ export class OrgController {
       if (!fetchOk || !request) {
         throw new AppError(
           request?.message ||
-          request?.error ||
-          'Org structure request not found',
+            request?.error ||
+            'Org structure request not found',
           404,
         );
       }
@@ -246,15 +241,17 @@ export class OrgController {
       if (!commitOk) {
         throw new AppError(
           commitRes?.message ||
-          commitRes?.error ||
-          'Failed to approve org structure request',
+            commitRes?.error ||
+            'Failed to approve org structure request',
           commitStatus,
         );
       }
 
       res.status(200).json({
         success: true,
-        message: commitRes?.message || 'Org structure request approved and node created',
+        message:
+          commitRes?.message ||
+          'Org structure request approved and node created',
         nodePath: newNodePath,
       });
     } catch (error) {
@@ -299,7 +296,7 @@ export class OrgController {
           parentNode: reqData.parentNode,
           initiatorName: initiatorHistory?.user?.name || null,
           initiatorEmail: initiatorHistory?.user?.email || null,
-          initiatedDate: req.createdAt
+          initiatedDate: req.createdAt,
         };
       });
 
@@ -334,8 +331,8 @@ export class OrgController {
       if (!ok) {
         throw new AppError(
           data?.message ||
-          data?.error ||
-          'Failed to fetch org structure history',
+            data?.error ||
+            'Failed to fetch org structure history',
           status,
         );
       }

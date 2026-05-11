@@ -13,12 +13,19 @@ export const orgOnboardingSchema = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
     newNodeName: z.string().trim().min(1, 'New node name is required'),
-    nodeType: z.enum(['ROOT', 'DIVISION', 'DEPARTMENT', 'TEAM', 'PLANT', 'LOCATION']),
+    nodeType: z.enum([
+      'ROOT',
+      'DIVISION',
+      'DEPARTMENT',
+      'TEAM',
+      'PLANT',
+      'LOCATION',
+    ]),
     parentNode: z.object({
       nodeName: z.string().trim().min(1, 'Node name is required'),
       nodePath: z.string().trim().min(1, 'Node path is required'),
     }),
-      levelsHash: z.string().nullable().optional(),
+    levelsHash: z.string().nullable().optional(),
   })
   .strict();
 

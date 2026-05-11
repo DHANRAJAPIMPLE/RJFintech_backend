@@ -213,7 +213,7 @@ export class UserDbController {
 
         return {
           id: onb.id,
-          
+
           approver: onb.approver,
           basicDetails: {
             name: basic.name,
@@ -280,7 +280,14 @@ export class UserDbController {
    * 4. Log the INITIATE event in UserHistory with the reqId.
    */
   static async createUserOnboarding(req: Request, res: Response) {
-    const { initiatorId, companyCode, companyId, groupCode, levelsHash, ...onboardingData } = req.body;
+    const {
+      initiatorId,
+      companyCode,
+      companyId,
+      groupCode,
+      levelsHash,
+      ...onboardingData
+    } = req.body;
     let resolvedCompanyId = companyId;
 
     if (!resolvedCompanyId) {
@@ -300,9 +307,10 @@ export class UserDbController {
 
     // Filter out the initiator from eligible approvers — initiator cannot approve their own request
     if (initiatorId && onboardingData.eligibleApprovers) {
-      onboardingData.eligibleApprovers = onboardingData.eligibleApprovers.filter(
-        (id: string) => id !== initiatorId,
-      );
+      onboardingData.eligibleApprovers =
+        onboardingData.eligibleApprovers.filter(
+          (id: string) => id !== initiatorId,
+        );
     }
 
     const onboarding = await prisma.$transaction(async (tx) => {
@@ -331,7 +339,10 @@ export class UserDbController {
 
       if (permissions.length > 0 && permissions[0].nodePath) {
         const node = await tx.orgStructure.findFirst({
-          where: { nodePath: permissions[0].nodePath, companyId: resolvedCompanyId },
+          where: {
+            nodePath: permissions[0].nodePath,
+            companyId: resolvedCompanyId,
+          },
         });
         if (node) nodeId = node.id;
       }
@@ -345,16 +356,17 @@ export class UserDbController {
       }
 
       if (nodeId && initiatorId) {
-        const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-          levelsHash: levelsHash || null,
-          module: 'SYSTEM_ACCESS',
-          subModule: 'USER_ACC',
-          companyId: resolvedCompanyId,
-          nodeId,
-          initiatorId,
-          reqId: onb.id,
-          reqTable: 'user_onboarding',
-        });
+        const { workflowId: resolvedWorkflowId } =
+          await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+            levelsHash: levelsHash || null,
+            module: 'SYSTEM_ACCESS',
+            subModule: 'USER_ACC',
+            companyId: resolvedCompanyId,
+            nodeId,
+            initiatorId,
+            reqId: onb.id,
+            reqTable: 'user_onboarding',
+          });
 
         // Store the resolved workflowId in the onboarding record
         await tx.userOnboarding.update({
@@ -379,7 +391,6 @@ export class UserDbController {
     });
     res.status(201).json(onboarding);
   }
-
 
   /**
    * Fetches a single user onboarding request by its ID.
@@ -428,13 +439,17 @@ export class UserDbController {
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
-        id, 'user_onboarding',
+        id,
+        'user_onboarding',
       );
 
       // If workflow approver rows exist, enforce level-wise checks
       if (currentLevel) {
         const approversList = currentLevel.approversList as string[];
-        if (Array.isArray(approversList) && !approversList.includes(approverId)) {
+        if (
+          Array.isArray(approversList) &&
+          !approversList.includes(approverId)
+        ) {
           throw new AppError(
             `Unauthorized: You are not an eligible approver for level ${currentLevel.level}`,
             403,
@@ -467,7 +482,10 @@ export class UserDbController {
 
           if (currentLevel) {
             const nextLevel = await WorkflowApproverUtil.approveLevel(
-              tx, id, 'user_onboarding', currentLevel.level,
+              tx,
+              id,
+              'user_onboarding',
+              currentLevel.level,
             );
             // If there's a next pending level, the request is NOT fully approved yet
             if (nextLevel) {
@@ -606,7 +624,7 @@ export class UserDbController {
               approvalRemark: remark,
             },
           });
-          
+
           return { status: 'APPROVED' };
         }
 
@@ -639,7 +657,7 @@ export class UserDbController {
               },
             });
           }
-          
+
           return { status: 'REJECTED' };
         }
 
@@ -662,7 +680,7 @@ export class UserDbController {
 
       res.status(200).json({
         message,
-        data: result
+        data: result,
       });
     } catch (error) {
       next(error);
@@ -710,8 +728,10 @@ export class UserDbController {
       });
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
-      const reqIds = Array.from(new Set(history.map((h) => h.reqId).filter(Boolean))) as string[];
-      
+      const reqIds = Array.from(
+        new Set(history.map((h) => h.reqId).filter(Boolean)),
+      ) as string[];
+
       const workflowApprovers = await prisma.workflowApprover.findMany({
         where: { reqId: { in: reqIds } },
         orderBy: { level: 'asc' },
@@ -719,16 +739,16 @@ export class UserDbController {
 
       // 2. Resolve approver details (names/emails)
       const allApproverIds = new Set<string>();
-      workflowApprovers.forEach(wa => {
+      workflowApprovers.forEach((wa) => {
         if (Array.isArray(wa.approversList)) {
           wa.approversList.forEach((id: any) => allApproverIds.add(String(id)));
         }
       });
       const approverDetails = await prisma.user.findMany({
         where: { id: { in: Array.from(allApproverIds) } },
-        select: { id: true, name: true, email: true }
+        select: { id: true, name: true, email: true },
       });
-      const approverMap = new Map(approverDetails.map(u => [u.id, u]));
+      const approverMap = new Map(approverDetails.map((u) => [u.id, u]));
 
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
@@ -746,10 +766,10 @@ export class UserDbController {
         if (h.reqId && !handledPendingReqs.has(h.reqId)) {
           const levels = workflowMap.get(h.reqId);
           if (levels) {
-            const currentPending = levels.find(l => l.status === 'PENDING');
+            const currentPending = levels.find((l) => l.status === 'PENDING');
             if (currentPending) {
               const approvers = (currentPending.approversList as string[])
-                .map(id => {
+                .map((id) => {
                   const u = approverMap.get(id);
                   return u ? { name: u.name, email: u.email } : null;
                 })
@@ -760,7 +780,7 @@ export class UserDbController {
                 companyCode: h.company.companyCode,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
-                eligibleapprovers: approvers
+                eligibleapprovers: approvers,
               });
             }
           }
@@ -772,28 +792,42 @@ export class UserDbController {
       const formattedHistory = history.map((h) => {
         const initiatorMapping = h.user?.userMappings?.[0];
         const initiatorAccesses = h.user?.userAccesses || [];
-        
-        const isSaasAdmin = initiatorAccesses.some(a => a.roleCode === 'SAAS_ADMIN');
+
+        const isSaasAdmin = initiatorAccesses.some(
+          (a) => a.roleCode === 'SAAS_ADMIN',
+        );
         const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
 
         const levels = h.reqId ? workflowMap.get(h.reqId) : null;
         let workflowStatus = null;
-        
+
         if (levels && levels.length > 0) {
           const allApproved = levels.every((l: any) => l.status === 'APPROVED');
           const isRejected = levels.some((l: any) => l.status === 'REJECTED');
-          const currentPending = levels.find((l: any) => l.status === 'PENDING');
+          const currentPending = levels.find(
+            (l: any) => l.status === 'PENDING',
+          );
 
           workflowStatus = {
-            overallStatus: isRejected ? 'REJECTED' : allApproved ? 'APPROVED' : 'PENDING',
-            currentLevel: currentPending ? currentPending.level : (allApproved ? levels.length : null),
+            overallStatus: isRejected
+              ? 'REJECTED'
+              : allApproved
+                ? 'APPROVED'
+                : 'PENDING',
+            currentLevel: currentPending
+              ? currentPending.level
+              : allApproved
+                ? levels.length
+                : null,
             totalLevels: levels.length,
             levels: levels
-              .filter((l: any) => l.level <= (currentPending?.level || levels.length))
+              .filter(
+                (l: any) => l.level <= (currentPending?.level || levels.length),
+              )
               .map((l: any) => ({
                 level: l.level,
-                status: l.status
-              }))
+                status: l.status,
+              })),
           };
         }
 
@@ -801,11 +835,14 @@ export class UserDbController {
           email: h.email,
           companyCode: h.company.companyCode,
           event: h.event,
-          level: h.level, 
+          level: h.level,
           createdAt: h.createdAt,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
-            : { name: h.user?.name || 'System', email: h.user?.email || 'system@internal' },
+            : {
+                name: h.user?.name || 'System',
+                email: h.user?.email || 'system@internal',
+              },
         };
       });
 
@@ -814,13 +851,12 @@ export class UserDbController {
       res.status(200).json({
         message: 'User history fetched successfully!',
         code: 200,
-        data: resultList
+        data: resultList,
       });
     } catch (error) {
       next(error);
     }
   }
-
 
   /**
    * Utility to check if a user already has a pending onboarding request by email.
@@ -850,85 +886,83 @@ export class UserDbController {
   /**
    * Fetches organizational nodes for a user based on global status and sub-category.
    */
- static async fetchCompanyNodes(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) {
-  try {
-    const { userId, companyId, subCategory } = req.body;
+  static async fetchCompanyNodes(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { userId, companyId, subCategory } = req.body;
 
-    const globalAccess = await prisma.userAccess.findFirst({
-      where: {
-        userId,
-        companyId,
-        isGlobalAccess: true,
-      },
-    });
-
-    if (globalAccess) {
-      const nodes = await prisma.orgStructure.findMany({
-        where: { companyId },
-        select: {
-          nodeName: true,
-          nodePath: true,
-          nodeType: true,
-          workflows: {
-            where: { subModule: subCategory },
-            select: {
-              levelsHash: true,
-              name: true,
-              alias: true,
-            },
-          },
-        },
-      });
-      return res.status(200).json(nodes);
-    } else {
-      if (!subCategory) {
-        return res.status(200).json([]);
-      }
-
-      const userAccesses = await prisma.userAccess.findMany({
+      const globalAccess = await prisma.userAccess.findFirst({
         where: {
           userId,
           companyId,
-          role: {
-            subCategory: subCategory,
-          },
+          isGlobalAccess: true,
         },
-        include: {
-          orgStructure: {
-            select: {
-              nodeName: true,
-              nodePath: true,
-              nodeType: true,
-              workflows: {
-                where: { subModule: subCategory },
-                select: {
-                  levelsHash: true,
-                  name: true,
-                  alias: true,
+      });
+
+      if (globalAccess) {
+        const nodes = await prisma.orgStructure.findMany({
+          where: { companyId },
+          select: {
+            nodeName: true,
+            nodePath: true,
+            nodeType: true,
+            workflows: {
+              where: { subModule: subCategory },
+              select: {
+                levelsHash: true,
+                name: true,
+                alias: true,
+              },
+            },
+          },
+        });
+        return res.status(200).json(nodes);
+      } else {
+        if (!subCategory) {
+          return res.status(200).json([]);
+        }
+
+        const userAccesses = await prisma.userAccess.findMany({
+          where: {
+            userId,
+            companyId,
+            role: {
+              subCategory: subCategory,
+            },
+          },
+          include: {
+            orgStructure: {
+              select: {
+                nodeName: true,
+                nodePath: true,
+                nodeType: true,
+                workflows: {
+                  where: { subModule: subCategory },
+                  select: {
+                    levelsHash: true,
+                    name: true,
+                    alias: true,
+                  },
                 },
               },
             },
           },
-        },
-      });
+        });
 
-      const nodes = userAccesses
-        .map((ua) => ua.orgStructure)
-        .filter(
-          (node, index, self) =>
-            index === self.findIndex((t) => t.nodePath === node.nodePath),
-        );
+        const nodes = userAccesses
+          .map((ua) => ua.orgStructure)
+          .filter(
+            (node, index, self) =>
+              index === self.findIndex((t) => t.nodePath === node.nodePath),
+          );
 
-      return res.status(200).json(nodes);
+        return res.status(200).json(nodes);
+      }
+    } catch (error) {
+      next(error);
     }
-  } catch (error) {
-    next(error);
   }
 }
-}
-
-

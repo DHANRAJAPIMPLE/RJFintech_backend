@@ -6,7 +6,10 @@ import type { PrismaClient } from '@prisma/client';
  * Transactional Prisma client type used when running inside $transaction blocks.
  * Omit the transaction methods themselves to avoid nested transactions.
  */
-type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
+type TxClient = Omit<
+  PrismaClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+>;
 
 /**
  * Parameters required for resolving workflow approvers.
@@ -49,7 +52,6 @@ interface ResolveApproversParams {
  * 7. Create WorkflowApprover rows in the database.
  */
 export class WorkflowApproverUtil {
-
   /**
    * Main entry point — call inside a Prisma $transaction.
    * Creates WorkflowApprover rows for the given request.
@@ -108,14 +110,25 @@ export class WorkflowApproverUtil {
     });
 
     if (!requestNode) {
-      throw new AppError('Organization node not found for approver resolution', 400);
+      throw new AppError(
+        'Organization node not found for approver resolution',
+        400,
+      );
     }
 
     // 3b. Fetch global access users for this company (always eligible as approvers)
-    const globalAccessUsers = await this.getGlobalAccessUserIds(tx, companyId, subModule);
+    const globalAccessUsers = await this.getGlobalAccessUserIds(
+      tx,
+      companyId,
+      subModule,
+    );
 
     // 3c. Fetch the initiator's reporting manager chain
-    const rmChain = await this.getReportingManagerChain(tx, initiatorId, companyId);
+    const rmChain = await this.getReportingManagerChain(
+      tx,
+      initiatorId,
+      companyId,
+    );
 
     // ── Step 4: Resolve approvers for each level ─────────────────────────────
     const approverRows: any[] = [];
@@ -127,14 +140,24 @@ export class WorkflowApproverUtil {
 
       // Resolve approver1 (always present)
       const approver1Users = await this.resolveByApproverType(
-        tx, level.approver1, companyId, requestNode, rmChain, subModule,
+        tx,
+        level.approver1,
+        companyId,
+        requestNode,
+        rmChain,
+        subModule,
       );
       approver1Users.forEach((id: string) => approverSet.add(id));
 
       // Resolve approver2 (optional)
       if (level.approver2) {
         const approver2Users = await this.resolveByApproverType(
-          tx, level.approver2, companyId, requestNode, rmChain, subModule,
+          tx,
+          level.approver2,
+          companyId,
+          requestNode,
+          rmChain,
+          subModule,
         );
         approver2Users.forEach((id: string) => approverSet.add(id));
       }
@@ -163,8 +186,8 @@ export class WorkflowApproverUtil {
       if (approverSet.size < mandatoryCount) {
         throw new AppError(
           `Insufficient approvers at level ${level.level}. ` +
-          `Need at least ${mandatoryCount} unique approver(s), found ${approverSet.size}. ` +
-          `The initiator cannot be an approver in their own workflow.`,
+            `Need at least ${mandatoryCount} unique approver(s), found ${approverSet.size}. ` +
+            `The initiator cannot be an approver in their own workflow.`,
           400,
         );
       }
@@ -184,10 +207,9 @@ export class WorkflowApproverUtil {
         status: 'PENDING',
       });
     }
-    
 
     // ── Step 7: Bulk create WorkflowApprover rows ────────────────────────────
-  
+
     const created = [];
     for (const row of approverRows) {
       const record = await (tx as any).workflowApprover.create({ data: row });
@@ -222,7 +244,10 @@ export class WorkflowApproverUtil {
         where: { levelsHash: opts.levelsHash, companyId: opts.companyId },
       });
       if (!workflow) {
-        throw new AppError(`Workflow with hash '${opts.levelsHash}' not found for this company`, 404);
+        throw new AppError(
+          `Workflow with hash '${opts.levelsHash}' not found for this company`,
+          404,
+        );
       }
       return workflow;
     }
@@ -273,7 +298,12 @@ export class WorkflowApproverUtil {
 
       case 'HIERARCHY_APPROVER':
         // Users who have approve permission on any PARENT node in the hierarchy
-        return this.getHierarchyApprovers(tx, companyId, node.nodePath, subModule);
+        return this.getHierarchyApprovers(
+          tx,
+          companyId,
+          node.nodePath,
+          subModule,
+        );
 
       default:
         return [];
@@ -332,11 +362,9 @@ export class WorkflowApproverUtil {
         companyId,
         nodeId,
         isGlobalAccess: false,
-        role: { 
+        role: {
           approve: true,
-          OR: [
-            { subCategory: subModule }
-          ],
+          OR: [{ subCategory: subModule }],
         },
         user: {
           userMappings: {
@@ -395,11 +423,9 @@ export class WorkflowApproverUtil {
         companyId,
         nodeId: { in: parentNodeIds },
         isGlobalAccess: false,
-        role: { 
+        role: {
           approve: true,
-          OR: [
-            { subCategory: subModule }
-          ],
+          OR: [{ subCategory: subModule }],
         },
         user: {
           userMappings: {
@@ -440,14 +466,14 @@ export class WorkflowApproverUtil {
         userId: true,
         roleCode: true,
         role: {
-          select: { 
+          select: {
             approve: true,
             subCategory: true,
           },
         },
       },
     });
- 
+
     // Include the user only if:
     //   (a) they are global (isGlobalAccess: true)
     //   AND
@@ -458,15 +484,14 @@ export class WorkflowApproverUtil {
       .filter((a: any) => {
         // If no role, assume super admin access
         if (!a.roleCode) return true;
-        
+
         const hasApprove = a.role?.approve === true;
-        const subCategoryMatches = 
-          a.role?.subCategory === subModule;
-          
+        const subCategoryMatches = a.role?.subCategory === subModule;
+
         return hasApprove && subCategoryMatches;
       })
       .map((a: any) => a.userId);
- 
+
     return [...new Set(eligibleUserIds)];
   }
 
@@ -503,10 +528,7 @@ export class WorkflowApproverUtil {
    * Returns the lowest-numbered level that is still PENDING.
    * Returns null if all levels are approved.
    */
-  static async getCurrentPendingLevel(
-    reqId: string,
-    reqTable: string,
-  ) {
+  static async getCurrentPendingLevel(reqId: string, reqTable: string) {
     const pendingLevel = await prisma.workflowApprover.findFirst({
       where: { reqId, reqTable, status: 'PENDING' },
       orderBy: { level: 'asc' },
@@ -553,11 +575,7 @@ export class WorkflowApproverUtil {
    * @param reqId    - Request ID
    * @param reqTable - Table identifier
    */
-  static async rejectAllLevels(
-    tx: TxClient,
-    reqId: string,
-    reqTable: string,
-  ) {
+  static async rejectAllLevels(tx: TxClient, reqId: string, reqTable: string) {
     await (tx as any).workflowApprover.updateMany({
       where: { reqId, reqTable },
       data: { status: 'REJECTED' },

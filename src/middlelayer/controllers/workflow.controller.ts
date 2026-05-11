@@ -68,15 +68,11 @@ export class WorkflowController {
           `${config.backendUrl}/internal/onboarding/approver-ids`,
           { companyCode, roleCode: 'WORK_FLOW_MGR' },
         ),
-
       ]);
 
       // Combine and deduplicate
       let eligibleApprovers = Array.from(
-        new Set([
-          ...(globalRes.data || []),
-          ...(mgrRes.data || [])
-        ]),
+        new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
       );
 
       // 4. Initiate Workflow Request in Backend
@@ -98,8 +94,8 @@ export class WorkflowController {
       if (!createOk) {
         throw new AppError(
           createRes?.message ||
-          createRes?.error ||
-          'Failed to initiate workflow request',
+            createRes?.error ||
+            'Failed to initiate workflow request',
           createStatus,
         );
       }
@@ -136,8 +132,8 @@ export class WorkflowController {
       if (!fetchOk || !onboarding) {
         throw new AppError(
           onboarding?.message ||
-          onboarding?.error ||
-          'Workflow request not found',
+            onboarding?.error ||
+            'Workflow request not found',
           404,
         );
       }
@@ -173,15 +169,18 @@ export class WorkflowController {
       if (!commitOk) {
         throw new AppError(
           commitRes?.message ||
-          commitRes?.error ||
-          'Failed to process workflow action',
+            commitRes?.error ||
+            'Failed to process workflow action',
           commitStatus,
         );
       }
 
       res
         .status(200)
-        .json({ message: commitRes?.message || `Workflow request ${action}ed successfully` });
+        .json({
+          message:
+            commitRes?.message || `Workflow request ${action}ed successfully`,
+        });
     } catch (error) {
       next(error);
     }

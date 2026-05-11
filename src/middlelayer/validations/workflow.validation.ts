@@ -45,7 +45,7 @@ export const workflowOnboardingSchema = z
         l5: levelSchema,
       })
       .optional(),
-      levelsHash: z.string().nullable().optional(),
+    levelsHash: z.string().nullable().optional(),
   })
   .strict();
 

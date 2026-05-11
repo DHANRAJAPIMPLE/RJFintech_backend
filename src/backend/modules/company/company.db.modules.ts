@@ -257,7 +257,7 @@ export class CompanyDbController {
    * 2. Log 'INITIATE' events in CompanyHistory.
    * 3. Log 'INITIATE' events in UserHistory for all proposed signatories.
    */
-  
+
   static async createCompanyOnboarding(req: Request, res: Response) {
     const { initiatorId, ...onboardingData } = req.body;
     const companyCode = onboardingData.companyCode;
@@ -502,9 +502,21 @@ export class CompanyDbController {
 
         // 4b. Create default workflows for SYSTEM_ACCESS
         const defaultWorkflows = [
-          { name: 'USER_ACC_WORKFLOW_DEFAULT', subModule: 'USER_ACC', roleCode: 'USER_ACC_MGR' },
-          { name: 'ORG_STR_WORKFLOW_DEFAULT', subModule: 'ORG_STR', roleCode: 'ORG_STR_MGR' },
-          { name: 'WORK_FLOW_WORKFLOW_DEFAULT', subModule: 'WORK_FLOW', roleCode: 'WORK_FLOW_MGR' },
+          {
+            name: 'USER_ACC_WORKFLOW_DEFAULT',
+            subModule: 'USER_ACC',
+            roleCode: 'USER_ACC_MGR',
+          },
+          {
+            name: 'ORG_STR_WORKFLOW_DEFAULT',
+            subModule: 'ORG_STR',
+            roleCode: 'ORG_STR_MGR',
+          },
+          {
+            name: 'WORK_FLOW_WORKFLOW_DEFAULT',
+            subModule: 'WORK_FLOW',
+            roleCode: 'WORK_FLOW_MGR',
+          },
         ];
 
         for (const dwf of defaultWorkflows) {
@@ -529,8 +541,6 @@ export class CompanyDbController {
               },
             },
           });
-
-      
         }
 
         // 5. Signatories Setup
@@ -672,83 +682,83 @@ export class CompanyDbController {
    * Scans both production records and pending onboarding requests.
    */
   static async checkCompany(req: Request, res: Response, next: NextFunction) {
-  try {
-    const { gstNumber, ieCode } = req.body;
+    try {
+      const { gstNumber, ieCode } = req.body;
 
-    // Build conditions only for provided values
-    const conditions = [];
+      // Build conditions only for provided values
+      const conditions = [];
 
-    if (gstNumber) {
-      conditions.push({ gstNumber });
-    }
+      if (gstNumber) {
+        conditions.push({ gstNumber });
+      }
 
-    if (ieCode) {
-      conditions.push({ ieCode });
-    }
+      if (ieCode) {
+        conditions.push({ ieCode });
+      }
 
-    // If nothing provided, skip checking
-    if (conditions.length === 0) {
-      return res.status(200).json({
-        exists: false,
-        message: 'No GST Number or IE Code provided',
-      });
-    }
+      // If nothing provided, skip checking
+      if (conditions.length === 0) {
+        return res.status(200).json({
+          exists: false,
+          message: 'No GST Number or IE Code provided',
+        });
+      }
 
-    // 1. Check master records
-    const masterCheck = await prisma.company.findFirst({
-      where: {
-        OR: conditions,
-      },
-    });
-
-    if (masterCheck) {
-      return res.status(200).json({
-        exists: true,
-        message: 'GST Number or IE Code already exists in master records',
-      });
-    }
-
-    // Build onboarding conditions
-    const onboardingConditions = [];
-
-    if (gstNumber) {
-      onboardingConditions.push({
-        data: {
-          path: ['company', 'gst'],
-          equals: gstNumber,
+      // 1. Check master records
+      const masterCheck = await prisma.company.findFirst({
+        where: {
+          OR: conditions,
         },
       });
-    }
 
-    if (ieCode) {
-      onboardingConditions.push({
-        data: {
-          path: ['company', 'ieCode'],
-          equals: ieCode,
+      if (masterCheck) {
+        return res.status(200).json({
+          exists: true,
+          message: 'GST Number or IE Code already exists in master records',
+        });
+      }
+
+      // Build onboarding conditions
+      const onboardingConditions = [];
+
+      if (gstNumber) {
+        onboardingConditions.push({
+          data: {
+            path: ['company', 'gst'],
+            equals: gstNumber,
+          },
+        });
+      }
+
+      if (ieCode) {
+        onboardingConditions.push({
+          data: {
+            path: ['company', 'ieCode'],
+            equals: ieCode,
+          },
+        });
+      }
+
+      // 2. Check pending onboarding requests
+      const onboardingCheck = await prisma.companyOnboarding.findFirst({
+        where: {
+          status: 'PENDING',
+          OR: onboardingConditions,
         },
       });
+
+      if (onboardingCheck) {
+        return res.status(200).json({
+          exists: true,
+          message: 'GST Number or IE Code already exists in pending onboarding',
+        });
+      }
+
+      return res.status(200).json({ exists: false });
+    } catch (error) {
+      next(error);
     }
-
-    // 2. Check pending onboarding requests
-    const onboardingCheck = await prisma.companyOnboarding.findFirst({
-      where: {
-        status: 'PENDING',
-        OR: onboardingConditions,
-      },
-    });
-
-    if (onboardingCheck) {
-      return res.status(200).json({
-        exists: true,
-        message: 'GST Number or IE Code already exists in pending onboarding',
-      });
-    }
-
-    return res.status(200).json({ exists: false });
-  } catch (error) {
-    next(error);
   }
-}
 
   /**
    * Checks if any of the provided signatory emails are already associated with a PENDING onboarding request.

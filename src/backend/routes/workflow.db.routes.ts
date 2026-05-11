@@ -15,5 +15,4 @@ router.post('/get-request', WorkflowDbController.getWorkflowRequestByHash);
 router.post('/action', WorkflowDbController.actionWorkflowRequest);
 router.post('/fetch', WorkflowDbController.fetchWorkflows);
 
-
 export default router;

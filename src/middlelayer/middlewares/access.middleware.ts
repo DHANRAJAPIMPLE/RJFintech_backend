@@ -27,7 +27,11 @@ export const authorize = (
       const companyId = req.user?.companyId;
 
       // Determine the module: use the provided moduleName or fallback to req.body fields
-      const module = moduleName || req.body?.subCategory || req.body?.subModule || req.body?.module;
+      const module =
+        moduleName ||
+        req.body?.subCategory ||
+        req.body?.subModule ||
+        req.body?.module;
 
       if (!userId || !companyId) {
         throw new AppError('Unauthorized: User information missing', 401);

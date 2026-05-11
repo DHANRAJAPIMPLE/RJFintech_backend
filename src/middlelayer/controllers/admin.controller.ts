@@ -43,7 +43,6 @@ export class AdminController {
         {},
       );
 
-
       if (!ok) {
         throw new AppError(
           data?.message || data?.error || 'Failed to fetch groups',

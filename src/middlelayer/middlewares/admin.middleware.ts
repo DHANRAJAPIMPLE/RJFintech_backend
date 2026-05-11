@@ -38,7 +38,6 @@ export const adminMiddleware = async (
 
     next();
   } catch (error) {
-
     if (error instanceof AppError) {
       return next(error);
     }

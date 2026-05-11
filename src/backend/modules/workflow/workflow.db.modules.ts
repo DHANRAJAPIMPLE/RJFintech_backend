@@ -19,7 +19,7 @@ export class WorkflowDbController {
           .sort(),
         type: levels[key].type ?? 'OR',
       }));
-   
+
     return createHash('md5').update(JSON.stringify(normalized)).digest('hex');
   }
 
@@ -54,7 +54,14 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyCode, companyId, data, eligibleApprovers, levelsHash: parentLevelsHash } = req.body;
+      const {
+        initiatorId,
+        companyCode,
+        companyId,
+        data,
+        eligibleApprovers,
+        levelsHash: parentLevelsHash,
+      } = req.body;
       const { module, subModule, nodePath, levels } = data;
 
       let resolvedCompanyId = companyId;
@@ -75,7 +82,8 @@ export class WorkflowDbController {
       const node = await prisma.orgStructure.findFirst({
         where: { nodePath, companyId },
       });
-      if (!node) throw new Error(`Node path '${nodePath}' not found for this company`);
+      if (!node)
+        throw new Error(`Node path '${nodePath}' not found for this company`);
 
       const nodeId = node.id;
       const levelsHash = WorkflowDbController.buildLevelsHash(levels);
@@ -133,16 +141,17 @@ export class WorkflowDbController {
 
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         if (initiatorId) {
-          const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-            levelsHash: parentLevelsHash || null,
-            module: 'SYSTEM_ACCESS',
-            subModule: 'WORK_FLOW',
-            companyId: resolvedCompanyId,
-            nodeId,
-            initiatorId,
-            reqId: request.id,
-            reqTable: 'workflow_req',
-          });
+          const { workflowId: resolvedWorkflowId } =
+            await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+              levelsHash: parentLevelsHash || null,
+              module: 'SYSTEM_ACCESS',
+              subModule: 'WORK_FLOW',
+              companyId: resolvedCompanyId,
+              nodeId,
+              initiatorId,
+              reqId: request.id,
+              reqTable: 'workflow_req',
+            });
 
           // Store the resolved workflowId in the request record
           await tx.workflowReq.update({
@@ -193,18 +202,26 @@ export class WorkflowDbController {
         include: { company: true },
       });
 
-      if (!request) throw new AppError('Workflow request not found or already processed', 404);
+      if (!request)
+        throw new AppError(
+          'Workflow request not found or already processed',
+          404,
+        );
       const id = request.id;
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
-        id, 'workflow_req',
+        id,
+        'workflow_req',
       );
 
       // If workflow approver rows exist, enforce level-wise checks
       if (currentLevel) {
         const approversList = currentLevel.approversList as string[];
-        if (Array.isArray(approversList) && !approversList.includes(approverId)) {
+        if (
+          Array.isArray(approversList) &&
+          !approversList.includes(approverId)
+        ) {
           throw new AppError(
             `Unauthorized: You are not an eligible approver for level ${currentLevel.level}`,
             403,
@@ -213,7 +230,6 @@ export class WorkflowDbController {
       }
 
       const result = await prisma.$transaction(async (tx) => {
-
         // --- REJECT FLOW ---
         // Marks the request as REJECTED, rejects all levels, and logs the history.
         if (status.toLowerCase() === 'reject') {
@@ -250,7 +266,10 @@ export class WorkflowDbController {
 
           if (currentLevel) {
             const nextLevel = await WorkflowApproverUtil.approveLevel(
-              tx, id, 'workflow_req', currentLevel.level,
+              tx,
+              id,
+              'workflow_req',
+              currentLevel.level,
             );
             if (nextLevel) {
               allLevelsApproved = false;
@@ -270,7 +289,11 @@ export class WorkflowDbController {
 
           // If NOT all levels approved, return early (partial approval)
           if (!allLevelsApproved) {
-            return { id: request.id, status: 'PARTIAL_APPROVED', level: approvedLevel };
+            return {
+              id: request.id,
+              status: 'PARTIAL_APPROVED',
+              level: approvedLevel,
+            };
           }
 
           // ── DUPLICATE CHECKS (only for full approval) ──────────────────
@@ -310,7 +333,13 @@ export class WorkflowDbController {
 
           // ── All levels approved — proceed with production workflow creation ──
           const reqData = request.data as any;
-          const { name, module: reqModule, subModule: reqSubModule, nodePath, levels } = reqData;
+          const {
+            name,
+            module: reqModule,
+            subModule: reqSubModule,
+            nodePath,
+            levels,
+          } = reqData;
 
           // 1. Resolve the organizational node from the path
           const nodeRecord = await tx.orgStructure.findUnique({
@@ -407,7 +436,7 @@ export class WorkflowDbController {
 
       res.status(200).json({
         message,
-        data: result
+        data: result,
       });
     } catch (error) {
       next(error);
@@ -457,10 +486,10 @@ export class WorkflowDbController {
       const histories = await prisma.workflowReqHistory.findMany({
         where: whereCondition,
         include: {
-          user: { 
+          user: {
             include: {
-              userAccesses: true 
-            }
+              userAccesses: true,
+            },
           },
           workflowReq: true,
           company: { select: { companyCode: true, id: true } },
@@ -469,8 +498,10 @@ export class WorkflowDbController {
       });
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
-      const reqIds = Array.from(new Set(histories.map((h) => h.workflowReqId).filter(Boolean))) as string[];
-      
+      const reqIds = Array.from(
+        new Set(histories.map((h) => h.workflowReqId).filter(Boolean)),
+      ) as string[];
+
       const workflowApprovers = await prisma.workflowApprover.findMany({
         where: { reqId: { in: reqIds } },
         orderBy: { level: 'asc' },
@@ -478,16 +509,16 @@ export class WorkflowDbController {
 
       // 2. Resolve approver details (names/emails)
       const allApproverIds = new Set<string>();
-      workflowApprovers.forEach(wa => {
+      workflowApprovers.forEach((wa) => {
         if (Array.isArray(wa.approversList)) {
           wa.approversList.forEach((id: any) => allApproverIds.add(String(id)));
         }
       });
       const approverDetails = await prisma.user.findMany({
         where: { id: { in: Array.from(allApproverIds) } },
-        select: { id: true, name: true, email: true }
+        select: { id: true, name: true, email: true },
       });
-      const approverMap = new Map(approverDetails.map(u => [u.id, u]));
+      const approverMap = new Map(approverDetails.map((u) => [u.id, u]));
 
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
@@ -505,10 +536,10 @@ export class WorkflowDbController {
         if (h.workflowReqId && !handledPendingReqs.has(h.workflowReqId)) {
           const levels = workflowMap.get(h.workflowReqId);
           if (levels) {
-            const currentPending = levels.find(l => l.status === 'PENDING');
+            const currentPending = levels.find((l) => l.status === 'PENDING');
             if (currentPending) {
               const approvers = (currentPending.approversList as string[])
-                .map(id => {
+                .map((id) => {
                   const u = approverMap.get(id);
                   return u ? { name: u.name, email: u.email } : null;
                 })
@@ -532,29 +563,46 @@ export class WorkflowDbController {
       // 4. Format the output for the UI
       const formattedHistories = histories.map((h) => {
         const companyId = h.company.id;
-        const initiatorAccesses = h.user?.userAccesses?.filter(a => a.companyId === companyId) || [];
-        
-        const isSaasAdmin = initiatorAccesses.some(a => a.roleCode === 'SAAS_ADMIN');
+        const initiatorAccesses =
+          h.user?.userAccesses?.filter((a) => a.companyId === companyId) || [];
+
+        const isSaasAdmin = initiatorAccesses.some(
+          (a) => a.roleCode === 'SAAS_ADMIN',
+        );
         const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
 
-        const levels = h.workflowReqId ? workflowMap.get(h.workflowReqId) : null;
+        const levels = h.workflowReqId
+          ? workflowMap.get(h.workflowReqId)
+          : null;
         let workflowStatus = null;
-        
+
         if (levels && levels.length > 0) {
           const allApproved = levels.every((l: any) => l.status === 'APPROVED');
           const isRejected = levels.some((l: any) => l.status === 'REJECTED');
-          const currentPending = levels.find((l: any) => l.status === 'PENDING');
+          const currentPending = levels.find(
+            (l: any) => l.status === 'PENDING',
+          );
 
           workflowStatus = {
-            overallStatus: isRejected ? 'REJECTED' : allApproved ? 'APPROVED' : 'PENDING',
-            currentLevel: currentPending ? currentPending.level : (allApproved ? levels.length : null),
+            overallStatus: isRejected
+              ? 'REJECTED'
+              : allApproved
+                ? 'APPROVED'
+                : 'PENDING',
+            currentLevel: currentPending
+              ? currentPending.level
+              : allApproved
+                ? levels.length
+                : null,
             totalLevels: levels.length,
             levels: levels
-              .filter((l: any) => l.level <= (currentPending?.level || levels.length))
+              .filter(
+                (l: any) => l.level <= (currentPending?.level || levels.length),
+              )
               .map((l: any) => ({
                 level: l.level,
-                status: l.status
-              }))
+                status: l.status,
+              })),
           };
         }
 
@@ -564,11 +612,14 @@ export class WorkflowDbController {
           subModule: h.workflowReq?.subModule || null,
           companyCode: h.company.companyCode,
           event: h.event,
-          level: h.level, 
+          level: h.level,
           createdAt: h.createdAt,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
-            : { name: h.user?.name || 'System', email: h.user?.email || 'system@internal' },
+            : {
+                name: h.user?.name || 'System',
+                email: h.user?.email || 'system@internal',
+              },
         };
       });
 
@@ -577,7 +628,7 @@ export class WorkflowDbController {
       res.status(200).json({
         message: 'Workflow history fetched successfully!',
         code: 200,
-        data: resultList
+        data: resultList,
       });
     } catch (error) {
       next(error);

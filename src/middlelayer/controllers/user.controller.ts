@@ -25,7 +25,6 @@ import {
 } from '../validations/user.validation';
 
 export class UserController {
-
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode } = zodParse(companyCodeOnly, req.body);
@@ -74,8 +73,8 @@ export class UserController {
       if (!managerOk || !manager) {
         throw new AppError(
           manager?.message ||
-          manager?.error ||
-          'Reporting manager email not found',
+            manager?.error ||
+            'Reporting manager email not found',
           400,
         );
       }
@@ -109,7 +108,7 @@ export class UserController {
       if (signatoryCheckOk && signatoryCheck.exists) {
         throw new AppError(
           signatoryCheck.message ||
-          'User already exists as a signatory in a pending company onboarding',
+            'User already exists as a signatory in a pending company onboarding',
           400,
         );
       }
@@ -171,15 +170,12 @@ export class UserController {
         internalPost<string[]>(
           `${config.backendUrl}/internal/onboarding/approver-ids`,
           { companyCode, roleCode: 'USER_ACC_MGR' },
-        )
+        ),
       ]);
 
       // Combine and deduplicate
       let eligibleApprovers = Array.from(
-        new Set([
-          ...(globalRes.data || []),
-          ...(mgrRes.data || [])
-        ]),
+        new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
       );
 
       // 7. Call Backend to create the record
@@ -203,8 +199,8 @@ export class UserController {
       if (!createOk) {
         throw new AppError(
           createRes?.message ||
-          createRes?.error ||
-          'Failed to initiate user onboarding',
+            createRes?.error ||
+            'Failed to initiate user onboarding',
           createStatus,
         );
       }
@@ -240,8 +236,8 @@ export class UserController {
       if (!fetchOk || !onboarding) {
         throw new AppError(
           onboarding?.message ||
-          onboarding?.error ||
-          'User onboarding request not found',
+            onboarding?.error ||
+            'User onboarding request not found',
           404,
         );
       }
@@ -276,13 +272,15 @@ export class UserController {
       if (!commitOk) {
         throw new AppError(
           commitRes?.message ||
-          commitRes?.error ||
-          'Failed to process user onboarding approval',
+            commitRes?.error ||
+            'Failed to process user onboarding approval',
           commitStatus,
         );
       }
 
-      res.status(200).json({ message: commitRes?.message || 'User approved and onboarded' });
+      res
+        .status(200)
+        .json({ message: commitRes?.message || 'User approved and onboarded' });
     } catch (error) {
       next(error);
     }
@@ -331,8 +329,8 @@ export class UserController {
       if (!updateOk) {
         throw new AppError(
           updateData?.message ||
-          updateData?.error ||
-          'Failed to update user status',
+            updateData?.error ||
+            'Failed to update user status',
           updateStatus || 500,
         );
       }
@@ -411,4 +409,3 @@ export class UserController {
     }
   }
 }
-

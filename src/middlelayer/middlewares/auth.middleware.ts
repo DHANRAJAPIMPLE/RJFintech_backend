@@ -155,7 +155,7 @@ export const authMiddleware = async (
 
       if (requestedCompanyCode) {
         const mapping = activity.user?.userMappings?.find(
-          (m: any) => m?.company?.companyCode === requestedCompanyCode
+          (m: any) => m?.company?.companyCode === requestedCompanyCode,
         );
 
         if (!mapping) {
