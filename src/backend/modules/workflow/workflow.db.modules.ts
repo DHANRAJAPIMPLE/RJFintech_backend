@@ -236,7 +236,7 @@ export class WorkflowDbController {
             },
           });
 
-          return updated;
+          return { ...updated, status: 'REJECTED' };
         }
 
         // --- APPROVE FLOW ---
@@ -268,7 +268,7 @@ export class WorkflowDbController {
 
           // If NOT all levels approved, return early (partial approval)
           if (!allLevelsApproved) {
-            return { id: request.id, status: 'PARTIAL_APPROVED' };
+            return { id: request.id, status: 'PARTIAL_APPROVED', level: approvedLevel };
           }
 
           // ── DUPLICATE CHECKS (only for full approval) ──────────────────
@@ -388,13 +388,25 @@ export class WorkflowDbController {
             },
           });
 
-          return updated;
+          return { ...updated, status: 'APPROVED' };
         }
 
         throw new Error('Invalid status');
       });
 
-      res.status(200).json(result);
+      let message = `Workflow request ${status.toLowerCase()}ed successfully`;
+      if (result && result.status === 'PARTIAL_APPROVED') {
+        message = `Workflow request approved at Level ${result.level}, pending next level approval`;
+      } else if (result && result.status === 'APPROVED') {
+        message = 'Workflow request approved successfully';
+      } else if (result && result.status === 'REJECTED') {
+        message = 'Workflow request rejected successfully';
+      }
+
+      res.status(200).json({
+        message,
+        data: result
+      });
     } catch (error) {
       next(error);
     }
@@ -405,6 +417,7 @@ export class WorkflowDbController {
    * Can be filtered by a specific workflowId (resolves all associated requests)
    * or by companyCode for a general company audit trail.
    */
+
   static async fetchWorkflowHistory(
     req: Request,
     res: Response,
@@ -508,11 +521,13 @@ export class WorkflowDbController {
                 .filter(Boolean);
 
               resultList.push({
+                workflowName: (h.workflowReq?.data as any)?.name || null,
+                module: h.workflowReq?.module || null,
+                subModule: h.workflowReq?.subModule || null,
                 companyCode: h.company.companyCode,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
-                workflowName: (h.workflowReq?.data as any)?.name || null
               });
             }
           }
@@ -550,6 +565,9 @@ export class WorkflowDbController {
         }
 
         return {
+          workflowName: (h.workflowReq?.data as any)?.name || null,
+          module: h.workflowReq?.module || null,
+          subModule: h.workflowReq?.subModule || null,
           companyCode: h.company.companyCode,
           event: h.event,
           level: h.level, 
@@ -557,7 +575,6 @@ export class WorkflowDbController {
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : { name: h.user?.name || 'System', email: h.user?.email || 'system@internal' },
-          workflowName: (h.workflowReq?.data as any)?.name || null,
         };
       });
 

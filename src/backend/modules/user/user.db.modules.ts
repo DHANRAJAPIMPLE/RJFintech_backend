@@ -456,7 +456,7 @@ export class UserDbController {
       const { name, email, phone, reportingManager, designation, employeeId } =
         basicDetails || {};
 
-      await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx) => {
         // =========================
         // ✅ APPROVED FLOW
         // =========================
@@ -491,7 +491,7 @@ export class UserDbController {
 
           // If NOT all levels are approved, return early (partial approval)
           if (!allLevelsApproved) {
-            return;
+            return { status: 'PARTIAL_APPROVED', level: approvedLevel };
           }
 
           // ── All levels approved — proceed with production user creation ───
@@ -606,6 +606,8 @@ export class UserDbController {
               approvalRemark: remark,
             },
           });
+          
+          return { status: 'APPROVED' };
         }
 
         // =========================
@@ -637,6 +639,8 @@ export class UserDbController {
               },
             });
           }
+          
+          return { status: 'REJECTED' };
         }
 
         // =========================
@@ -647,8 +651,18 @@ export class UserDbController {
         }
       });
 
+      let message = `User onboarding ${status}d successfully`;
+      if (result && result.status === 'PARTIAL_APPROVED') {
+        message = `User request approved at Level ${result.level}, pending next level approval`;
+      } else if (result && result.status === 'APPROVED') {
+        message = 'User approved and onboarded';
+      } else if (result && result.status === 'REJECTED') {
+        message = 'User request rejected';
+      }
+
       res.status(200).json({
-        message: `User onboarding ${status}d successfully`,
+        message,
+        data: result
       });
     } catch (error) {
       next(error);

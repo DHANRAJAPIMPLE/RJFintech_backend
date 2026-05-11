@@ -112,7 +112,7 @@ export class WorkflowApproverUtil {
     }
 
     // 3b. Fetch global access users for this company (always eligible as approvers)
-    const globalAccessUsers = await this.getGlobalAccessUserIds(tx, companyId);
+    const globalAccessUsers = await this.getGlobalAccessUserIds(tx, companyId, subModule);
 
     // 3c. Fetch the initiator's reporting manager chain
     const rmChain = await this.getReportingManagerChain(tx, initiatorId, companyId);
@@ -127,14 +127,14 @@ export class WorkflowApproverUtil {
 
       // Resolve approver1 (always present)
       const approver1Users = await this.resolveByApproverType(
-        tx, level.approver1, companyId, requestNode, rmChain,
+        tx, level.approver1, companyId, requestNode, rmChain, subModule,
       );
       approver1Users.forEach((id: string) => approverSet.add(id));
 
       // Resolve approver2 (optional)
       if (level.approver2) {
         const approver2Users = await this.resolveByApproverType(
-          tx, level.approver2, companyId, requestNode, rmChain,
+          tx, level.approver2, companyId, requestNode, rmChain, subModule,
         );
         approver2Users.forEach((id: string) => approverSet.add(id));
       }
@@ -256,11 +256,12 @@ export class WorkflowApproverUtil {
     companyId: string,
     node: any,
     rmChain: string[],
+    subModule: string,
   ): Promise<string[]> {
     switch (type) {
       case 'GLOBAL_APPROVER':
         // All users with global access for this company — used by default workflows
-        return this.getGlobalAccessUserIds(tx, companyId);
+        return this.getGlobalAccessUserIds(tx, companyId, subModule);
 
       case 'REPORTING_MANAGER':
         // Return the RM chain — these are the user IDs up the reporting hierarchy
@@ -268,11 +269,11 @@ export class WorkflowApproverUtil {
 
       case 'NODE_APPROVER':
         // Users who have approve permission on the SAME node
-        return this.getNodeApprovers(tx, companyId, node.id);
+        return this.getNodeApprovers(tx, companyId, node.id, subModule);
 
       case 'HIERARCHY_APPROVER':
         // Users who have approve permission on any PARENT node in the hierarchy
-        return this.getHierarchyApprovers(tx, companyId, node.nodePath);
+        return this.getHierarchyApprovers(tx, companyId, node.nodePath, subModule);
 
       default:
         return [];
@@ -324,13 +325,19 @@ export class WorkflowApproverUtil {
     tx: TxClient,
     companyId: string,
     nodeId: string,
+    subModule: string,
   ): Promise<string[]> {
     const accesses = await (tx as any).userAccess.findMany({
       where: {
         companyId,
         nodeId,
         isGlobalAccess: false,
-        role: { approve: true },
+        role: { 
+          approve: true,
+          OR: [
+            { subCategory: subModule }
+          ],
+        },
         user: {
           userMappings: {
             some: { companyId, status: 'ACTIVE' },
@@ -356,6 +363,7 @@ export class WorkflowApproverUtil {
     tx: TxClient,
     companyId: string,
     nodePath: string,
+    subModule: string,
   ): Promise<string[]> {
     // Build parent paths from the ltree path
     const parts = nodePath.split('.');
@@ -387,7 +395,12 @@ export class WorkflowApproverUtil {
         companyId,
         nodeId: { in: parentNodeIds },
         isGlobalAccess: false,
-        role: { approve: true },
+        role: { 
+          approve: true,
+          OR: [
+            { subCategory: subModule }
+          ],
+        },
         user: {
           userMappings: {
             some: { companyId, status: 'ACTIVE' },
@@ -402,13 +415,17 @@ export class WorkflowApproverUtil {
 
   /**
    * Fetches all user IDs with Global Access for a company.
-   * Global-access users are automatically eligible as approvers across all levels.
-   * These users must have an ACTIVE mapping to the company.
+   * Global-access users are eligible as approvers across all levels,
+   * BUT only if they have `approve: true` on their linked role
+   * (or have no role assigned — roleCode is null).
+   * These users must also have an ACTIVE mapping to the company.
    */
   private static async getGlobalAccessUserIds(
     tx: TxClient,
     companyId: string,
+    subModule: string,
   ): Promise<string[]> {
+    // Fetch all global-access records with their linked role
     const accesses = await (tx as any).userAccess.findMany({
       where: {
         companyId,
@@ -419,10 +436,38 @@ export class WorkflowApproverUtil {
           },
         },
       },
-      select: { userId: true },
+      select: {
+        userId: true,
+        roleCode: true,
+        role: {
+          select: { 
+            approve: true,
+            subCategory: true,
+          },
+        },
+      },
     });
-
-    return [...new Set(accesses.map((a: any) => a.userId))];
+ 
+    // Include the user only if:
+    //   (a) they are global (isGlobalAccess: true)
+    //   AND
+    //   (b) (they have no role assigned OR their role has approve: true)
+    //   AND
+    //   (their role subCategory matches subModule)
+    const eligibleUserIds = accesses
+      .filter((a: any) => {
+        // If no role, assume super admin access
+        if (!a.roleCode) return true;
+        
+        const hasApprove = a.role?.approve === true;
+        const subCategoryMatches = 
+          a.role?.subCategory === subModule;
+          
+        return hasApprove && subCategoryMatches;
+      })
+      .map((a: any) => a.userId);
+ 
+    return [...new Set(eligibleUserIds)];
   }
 
   /**

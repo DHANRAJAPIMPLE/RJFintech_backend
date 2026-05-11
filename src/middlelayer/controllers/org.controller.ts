@@ -254,7 +254,7 @@ export class OrgController {
 
       res.status(200).json({
         success: true,
-        message: 'Org structure request approved and node created',
+        message: commitRes?.message || 'Org structure request approved and node created',
         nodePath: newNodePath,
       });
     } catch (error) {

@@ -180,7 +180,7 @@ export class WorkflowController {
 
       res
         .status(200)
-        .json({ message: `Workflow request ${action}ed successfully` });
+        .json({ message: commitRes?.message || `Workflow request ${action}ed successfully` });
     } catch (error) {
       next(error);
     }

@@ -137,7 +137,7 @@ export class OrgStructureDbController {
             });
           }
 
-          return updated;
+          return { ...updated, status: 'REJECTED' };
         }
 
         // --- APPROVE FLOW ---
@@ -252,18 +252,20 @@ export class OrgStructureDbController {
             },
           });
 
-          return updated;
+          return { ...updated, status: 'APPROVED' };
         }
 
         throw new Error('Invalid status value');
       });
 
+      let message = status === 'approved' ? 'Org structure request approved and node created' : 'Org structure request rejected';
+      if (result && result.status === 'PARTIAL_APPROVED') {
+        message = `Org structure request approved at Level ${result.level}, pending next level approval`;
+      }
+
       res.status(200).json({
         success: true,
-        message:
-          status === 'approved'
-            ? 'Org structure approved'
-            : 'Org structure rejected',
+        message,
         data: result,
       });
     } catch (error) {

@@ -282,7 +282,7 @@ export class UserController {
         );
       }
 
-      res.status(200).json({ message: 'User approved and onboarded' });
+      res.status(200).json({ message: commitRes?.message || 'User approved and onboarded' });
     } catch (error) {
       next(error);
     }
