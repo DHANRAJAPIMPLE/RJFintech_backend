@@ -455,7 +455,7 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, levelsHash } = req.body;
+      const { companyCode, companyId, levelsHash, module, subModule, nodePath } = req.body;
       let whereCondition: any = {};
 
       let resolvedCompanyId = companyId;
@@ -467,16 +467,35 @@ export class WorkflowDbController {
         resolvedCompanyId = company.id;
       }
 
-      if (levelsHash && resolvedCompanyId) {
-        const reqs = await prisma.workflowReq.findMany({
-          where: { levelsHash, companyId: resolvedCompanyId },
-          select: { id: true },
-        });
-        whereCondition = {
-          workflowReqId: { in: reqs.map((r) => r.id) },
-        };
-      } else if (resolvedCompanyId) {
-        whereCondition = { companyId: resolvedCompanyId };
+      if (resolvedCompanyId) {
+        // If specific identifiers are provided, filter the history strictly
+        if (levelsHash || module || subModule || nodePath) {
+          let nodeId: string | undefined;
+          if (nodePath) {
+            const node = await prisma.orgStructure.findFirst({
+              where: { nodePath, companyId: resolvedCompanyId },
+            });
+            nodeId = node?.id;
+          }
+
+          const reqs = await prisma.workflowReq.findMany({
+            where: {
+              companyId: resolvedCompanyId,
+              levelsHash: levelsHash || undefined,
+              module: module || undefined,
+              subModule: subModule || undefined,
+              nodeId: nodeId || undefined,
+            },
+            select: { id: true },
+          });
+
+          whereCondition = {
+            workflowReqId: { in: reqs.map((r) => r.id) },
+          };
+        } else {
+          // Default: Fetch all history for the company
+          whereCondition = { companyId: resolvedCompanyId };
+        }
       } else {
         return res
           .status(400)
@@ -617,9 +636,9 @@ export class WorkflowDbController {
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
-                name: h.user?.name || 'System',
-                email: h.user?.email || 'system@internal',
-              },
+              name: h.user?.name || 'System',
+              email: h.user?.email || 'system@internal',
+            },
         };
       });
 

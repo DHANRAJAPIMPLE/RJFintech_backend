@@ -119,9 +119,9 @@ export class UserDbController {
           approver: approve?.user || null,
           reportingManagerInfo: managerInfo
             ? {
-                name: managerInfo.name,
-                email: managerInfo.email,
-              }
+              name: managerInfo.name,
+              email: managerInfo.email,
+            }
             : null,
         };
       });
@@ -840,9 +840,9 @@ export class UserDbController {
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
-                name: h.user?.name || 'System',
-                email: h.user?.email || 'system@internal',
-              },
+              name: h.user?.name || 'System',
+              email: h.user?.email || 'system@internal',
+            },
         };
       });
 

@@ -225,7 +225,7 @@ export class WorkflowController {
     next: NextFunction,
   ) {
     try {
-      const { levelsHash } = zodParse(workflowHistorySchema, req.body);
+      const { levelsHash, module, subModule, nodePath } = zodParse(workflowHistorySchema, req.body);
       const companyId = req.user?.companyId;
 
       if (!companyId) {
@@ -234,7 +234,7 @@ export class WorkflowController {
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/workflow/history`,
-        { companyId, levelsHash },
+        { companyId, levelsHash, module, subModule, nodePath },
       );
 
       if (!ok) {

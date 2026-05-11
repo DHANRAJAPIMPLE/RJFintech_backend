@@ -638,9 +638,9 @@ export class OrgStructureDbController {
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
-                name: h.user?.name || 'System',
-                email: h.user?.email || 'system@internal',
-              },
+              name: h.user?.name || 'System',
+              email: h.user?.email || 'system@internal',
+            },
           newNodeName: data?.newNodeName || null,
           nodeType: data?._nodeType || data?.nodeType || null,
           parentNodePath: data?.parentNode?.nodePath || 'ROOT',
