@@ -18,7 +18,7 @@ export const orgOnboardingSchema = z
       nodeName: z.string().trim().min(1, 'Node name is required'),
       nodePath: z.string().trim().min(1, 'Node path is required'),
     }),
-      workflowId: z.string().uuid('Invalid workflow ID').nullable().optional(),
+      levelsHash: z.string().nullable().optional(),
   })
   .strict();
 

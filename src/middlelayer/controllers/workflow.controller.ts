@@ -29,7 +29,7 @@ export class WorkflowController {
     try {
       const validatedData = zodParse(workflowOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { companyCode, nodePath, workflowId } = validatedData;
+      const { companyCode, nodePath, levelsHash } = validatedData;
 
       if (!initiatorId) {
         throw new AppError('Unauthorized', 401);
@@ -89,7 +89,7 @@ export class WorkflowController {
         {
           initiatorId,
           companyId: company.id,
-          workflowId: workflowId || null,
+          levelsHash: levelsHash || null,
           data: validatedData,
           eligibleApprovers,
         },
@@ -114,14 +114,14 @@ export class WorkflowController {
   }
 
   static async actionWorkflow(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response,
     next: NextFunction,
   ) {
     try {
       const validatedData = zodParse(workflowActionSchema, req.body);
       const approverId = req.user?.id;
-      const { id, action, remark } = validatedData;
+      const { levelsHash, action, remark } = validatedData;
 
       if (!approverId) {
         throw new AppError('Unauthorized', 401);
@@ -130,7 +130,7 @@ export class WorkflowController {
       // 1. Fetch onboarding record
       const { data: onboarding, ok: fetchOk } = await internalPost<any>(
         `${config.backendUrl}/internal/workflow/get-request`,
-        { id },
+        { levelsHash, companyId: req.user?.companyId },
       );
 
       if (!fetchOk || !onboarding) {
@@ -163,7 +163,8 @@ export class WorkflowController {
         ok: commitOk,
         status: commitStatus,
       } = await internalPost(`${config.backendUrl}/internal/workflow/action`, {
-        id,
+        levelsHash,
+        companyId: req.user?.companyId,
         approverId,
         remark,
         status: action,
@@ -225,7 +226,7 @@ export class WorkflowController {
     next: NextFunction,
   ) {
     try {
-      const { workflowId } = zodParse(workflowHistorySchema, req.body);
+      const { levelsHash } = zodParse(workflowHistorySchema, req.body);
       const companyId = req.user?.companyId;
 
       if (!companyId) {
@@ -234,7 +235,7 @@ export class WorkflowController {
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/workflow/history`,
-        { companyId, workflowId },
+        { companyId, levelsHash },
       );
 
       if (!ok) {

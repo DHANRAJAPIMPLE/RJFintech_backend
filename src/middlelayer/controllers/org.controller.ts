@@ -37,7 +37,7 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, newNodeName, nodeType, parentNode, workflowId } = zodParse(
+      const { companyCode, newNodeName, nodeType, parentNode, levelsHash } = zodParse(
         orgOnboardingSchema,
         req.body,
       );
@@ -104,7 +104,7 @@ export class OrgController {
         {
           initiatorId,
           companyId: company?.id,
-          workflowId: workflowId || null,
+          levelsHash: levelsHash || null,
           data: {
             newNodeName,
             nodeType,

@@ -29,10 +29,10 @@ export class WorkflowDbController {
    * Fetches a single workflow request by its unique ID.
    * Includes the associated company details for context.
    */
-  static async getWorkflowRequestById(req: Request, res: Response) {
-    const { id } = req.body;
-    const request = await prisma.workflowReq.findUnique({
-      where: { id },
+  static async getWorkflowRequestByHash(req: Request, res: Response) {
+    const { levelsHash, companyId } = req.body;
+    const request = await prisma.workflowReq.findFirst({
+      where: { levelsHash, companyId, status: 'PENDING' },
       include: { company: true },
     });
     res.json(request);
@@ -54,7 +54,7 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyCode, companyId, data, eligibleApprovers, workflowId: parentWorkflowId } = req.body;
+      const { initiatorId, companyCode, companyId, data, eligibleApprovers, levelsHash: parentLevelsHash } = req.body;
       const { module, subModule, nodePath, levels } = data;
 
       let resolvedCompanyId = companyId;
@@ -134,7 +134,7 @@ export class WorkflowDbController {
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         if (initiatorId) {
           const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-            workflowId: parentWorkflowId || null,
+            levelsHash: parentLevelsHash || null,
             module: 'SYSTEM_ACCESS',
             subModule: 'WORK_FLOW',
             companyId: resolvedCompanyId,
@@ -185,7 +185,16 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { id, status, approverId, remark } = req.body;
+      const { levelsHash, companyId, status, approverId, remark } = req.body;
+
+      // ── Find the pending request by levelsHash ──────────────────────────
+      const request = await prisma.workflowReq.findFirst({
+        where: { levelsHash, companyId, status: 'PENDING' },
+        include: { company: true },
+      });
+
+      if (!request) throw new AppError('Workflow request not found or already processed', 404);
+      const id = request.id;
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
@@ -204,13 +213,6 @@ export class WorkflowDbController {
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        // 1. Fetch the request to validate existence and get company info
-        const request = await tx.workflowReq.findUnique({
-          where: { id },
-          include: { company: true },
-        });
-
-        if (!request) throw new Error('Request not found');
 
         // --- REJECT FLOW ---
         // Marks the request as REJECTED, rejects all levels, and logs the history.
@@ -424,40 +426,32 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, workflowId } = req.body;
+      const { companyCode, companyId, levelsHash } = req.body;
       let whereCondition: any = {};
 
-      // If workflowId is provided, we fetch history for all requests linked to that workflow
-      if (workflowId) {
-        const workflow = await prisma.workflow.findUnique({
-          where: { id: workflowId },
-          select: { workflowReqIds: true },
+      let resolvedCompanyId = companyId;
+      if (!resolvedCompanyId && companyCode) {
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
         });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
 
-        if (!workflow) {
-          return res.status(404).json({ error: 'Workflow not found' });
-        }
-
+      if (levelsHash && resolvedCompanyId) {
+        const reqs = await prisma.workflowReq.findMany({
+          where: { levelsHash, companyId: resolvedCompanyId },
+          select: { id: true },
+        });
         whereCondition = {
-          workflowReqId: { in: workflow.workflowReqIds },
+          workflowReqId: { in: reqs.map((r) => r.id) },
         };
-      } else if (companyCode || companyId) {
-        // Fallback to company-wide history
-        let resolvedCompanyId = companyId;
-
-        if (!resolvedCompanyId) {
-          const company = await prisma.company.findUnique({
-            where: { companyCode },
-          });
-          if (!company) throw new AppError('Company not found', 404);
-          resolvedCompanyId = company.id;
-        }
-
+      } else if (resolvedCompanyId) {
         whereCondition = { companyId: resolvedCompanyId };
       } else {
         return res
           .status(400)
-          .json({ error: 'companyCode or workflowId is required' });
+          .json({ error: 'companyCode, companyId or levelsHash is required' });
       }
 
       const histories = await prisma.workflowReqHistory.findMany({
@@ -617,7 +611,6 @@ export class WorkflowDbController {
       const activeWorkflows = await prisma.workflow.findMany({
         where: { companyId: resolvedCompanyId },
         select: {
-          id: true,
           name: true,
           alias: true,
           module: true,
@@ -629,6 +622,7 @@ export class WorkflowDbController {
               nodeType: true,
             },
           },
+          levelsHash: true,
           levels: {
             select: {
               level: true,
@@ -648,10 +642,10 @@ export class WorkflowDbController {
           status: 'PENDING',
         },
         select: {
-          id: true,
           data: true,
           status: true,
           approvalRemark: true,
+          levelsHash: true,
         },
         orderBy: { createdAt: 'desc' },
       });

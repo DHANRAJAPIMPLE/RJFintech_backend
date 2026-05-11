@@ -286,7 +286,7 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyCode, companyId, workflowId, ...rest } = req.body;
+      const { initiatorId, companyCode, companyId, levelsHash, ...rest } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -339,7 +339,7 @@ export class OrgStructureDbController {
 
         if (nodeId && initiatorId) {
           const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-            workflowId: workflowId || null,
+            levelsHash: levelsHash || null,
             module: 'SYSTEM_ACCESS',
             subModule: 'ORG_STR',
             companyId: resolvedCompanyId,

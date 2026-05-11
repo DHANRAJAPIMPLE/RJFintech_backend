@@ -73,7 +73,7 @@ export const userOnboardingSchema = z.object({
         path: ['permissions'],
       },
     ),
-  workflowId: z.string().uuid('Invalid workflow ID').nullable().optional(),
+  levelsHash: z.string().nullable().optional(),
 });
 
 export const userActionSchema = z

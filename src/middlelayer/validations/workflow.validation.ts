@@ -45,13 +45,13 @@ export const workflowOnboardingSchema = z
         l5: levelSchema,
       })
       .optional(),
-     workflowId: z.string().uuid('Invalid workflow ID').nullable().optional(),
+      levelsHash: z.string().nullable().optional(),
   })
   .strict();
 
 export const workflowActionSchema = z
   .object({
-    id: z.string().uuid('Invalid workflow request ID'),
+    levelsHash: z.string().min(1, 'Levels hash is required'),
     action: z.enum(['approve', 'reject']),
     remark: z
       .string()
@@ -63,7 +63,7 @@ export const workflowActionSchema = z
 
 export const workflowHistorySchema = z
   .object({
-    workflowId: z.string().uuid('Invalid workflow ID').optional(),
+    levelsHash: z.string().min(1, 'Levels hash is required').optional(),
   })
   .strict();
 

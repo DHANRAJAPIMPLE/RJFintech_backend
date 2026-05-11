@@ -530,8 +530,7 @@ export class CompanyDbController {
             },
           });
 
-          // Log the default workflow creation as a system-initiated event
-          console.log(`Default workflow '${dwf.name}' created for company ${newCompany.id}`);
+      
         }
 
         // 5. Signatories Setup

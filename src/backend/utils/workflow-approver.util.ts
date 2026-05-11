@@ -22,7 +22,7 @@ type TxClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transa
  * @property reqTable     - Table name identifier ('user_onboarding' | 'org_structure_req' | 'workflow_req').
  */
 interface ResolveApproversParams {
-  workflowId?: string | null;
+  levelsHash?: string | null;
   module: string;
   subModule: string;
   companyId: string;
@@ -63,7 +63,7 @@ export class WorkflowApproverUtil {
     params: ResolveApproversParams,
   ) {
     const {
-      workflowId,
+      levelsHash,
       module,
       subModule,
       companyId,
@@ -75,7 +75,7 @@ export class WorkflowApproverUtil {
 
     // ── Step 1: Resolve the workflow ─────────────────────────────────────────
     const workflow = await this.resolveWorkflow(tx, {
-      workflowId,
+      levelsHash,
       module,
       subModule,
       companyId,
@@ -210,19 +210,19 @@ export class WorkflowApproverUtil {
   private static async resolveWorkflow(
     tx: TxClient,
     opts: {
-      workflowId?: string | null;
+      levelsHash?: string | null;
       module: string;
       subModule: string;
       companyId: string;
     },
   ) {
-    // Explicit workflow ID provided — use it directly
-    if (opts.workflowId) {
-      const workflow = await (tx as any).workflow.findUnique({
-        where: { id: opts.workflowId },
+    // Explicit levelsHash provided — use it to find the unique workflow structure
+    if (opts.levelsHash) {
+      const workflow = await (tx as any).workflow.findFirst({
+        where: { levelsHash: opts.levelsHash, companyId: opts.companyId },
       });
       if (!workflow) {
-        throw new AppError(`Workflow '${opts.workflowId}' not found`, 404);
+        throw new AppError(`Workflow with hash '${opts.levelsHash}' not found for this company`, 404);
       }
       return workflow;
     }

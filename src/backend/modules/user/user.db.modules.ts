@@ -280,7 +280,7 @@ export class UserDbController {
    * 4. Log the INITIATE event in UserHistory with the reqId.
    */
   static async createUserOnboarding(req: Request, res: Response) {
-    const { initiatorId, companyCode, companyId, groupCode, workflowId, ...onboardingData } = req.body;
+    const { initiatorId, companyCode, companyId, groupCode, levelsHash, ...onboardingData } = req.body;
     let resolvedCompanyId = companyId;
 
     if (!resolvedCompanyId) {
@@ -346,7 +346,7 @@ export class UserDbController {
 
       if (nodeId && initiatorId) {
         const { workflowId: resolvedWorkflowId } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-          workflowId: workflowId || null,
+          levelsHash: levelsHash || null,
           module: 'SYSTEM_ACCESS',
           subModule: 'USER_ACC',
           companyId: resolvedCompanyId,
@@ -876,7 +876,7 @@ export class UserDbController {
           workflows: {
             where: { subModule: subCategory },
             select: {
-              id: true,
+              levelsHash: true,
               name: true,
               alias: true,
             },
@@ -906,7 +906,7 @@ export class UserDbController {
               workflows: {
                 where: { subModule: subCategory },
                 select: {
-                  id: true,
+                  levelsHash: true,
                   name: true,
                   alias: true,
                 },
@@ -915,14 +915,14 @@ export class UserDbController {
           },
         },
       });
-  console.log(userAccesses);
+
       const nodes = userAccesses
         .map((ua) => ua.orgStructure)
         .filter(
           (node, index, self) =>
             index === self.findIndex((t) => t.nodePath === node.nodePath),
         );
-    console.log(nodes);
+
       return res.status(200).json(nodes);
     }
   } catch (error) {

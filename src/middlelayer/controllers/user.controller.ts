@@ -58,7 +58,7 @@ export class UserController {
     try {
       const validatedData = zodParse(userOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { basicDetails, permissions, workflowId } = validatedData;
+      const { basicDetails, permissions, levelsHash } = validatedData;
       const { email, reportingManager } = basicDetails;
 
       if (!initiatorId) {
@@ -191,7 +191,7 @@ export class UserController {
         initiatorId,
         companyCode,
         groupCode,
-        workflowId: workflowId || null,
+        levelsHash: levelsHash || null,
         data: {
           basicDetails,
           permissions,
