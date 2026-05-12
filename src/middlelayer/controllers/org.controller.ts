@@ -320,14 +320,15 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, nodeName } = zodParse(orgHistory, req.body);
+      const { companyCode, nodeName, nodePath } = zodParse(orgHistory, req.body);
       const userId = req.user?.id;
 
       // Forward to Backend (5001)
       const { data, ok, status } = await internalPost(
         `${config.backendUrl}/internal/org/fetch-history`,
-        { companyCode, nodeName, userId },
+        { companyCode, nodeName, nodePath, userId },
       );
+
 
       if (!ok) {
         throw new AppError(

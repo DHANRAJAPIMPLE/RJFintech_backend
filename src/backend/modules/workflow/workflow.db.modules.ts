@@ -249,9 +249,10 @@ export class WorkflowDbController {
       }
 
       const result = await prisma.$transaction(async (tx) => {
+        const statusStr = status.toString().toLowerCase();
         // --- REJECT FLOW ---
         // Marks the request as REJECTED, rejects all levels, and logs the history.
-        if (status.toLowerCase() === 'reject') {
+        if (statusStr === 'reject' || statusStr === 'rejected') {
           // Reject all remaining approval levels
           await WorkflowApproverUtil.rejectAllLevels(tx, id, 'workflow_req');
 
@@ -279,7 +280,7 @@ export class WorkflowDbController {
 
         // --- APPROVE FLOW ---
         // Converts the request into an active Workflow and setup its approval levels.
-        if (status.toLowerCase() === 'approve') {
+        if (statusStr === 'approve' || statusStr === 'approved') {
           // ── Level-wise approval: mark current level as APPROVED ──────────
           let allLevelsApproved = true;
           const approvedLevel = currentLevel?.level || null;

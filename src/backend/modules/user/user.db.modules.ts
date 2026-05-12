@@ -528,9 +528,11 @@ export class UserDbController {
 
       const result = await prisma.$transaction(async (tx) => {
         // =========================
+        const statusStr = status.toString().toLowerCase();
+        // =========================
         // ✅ APPROVED FLOW
         // =========================
-        if (status === 'approve') {
+        if (statusStr === 'approve' || statusStr === 'approved') {
           // ── Level-wise approval: mark current level as APPROVED ──────────
           let allLevelsApproved = true;
           const approvedLevel = currentLevel?.level || null;
@@ -687,7 +689,7 @@ export class UserDbController {
         // =========================
         // ❌ REJECTED FLOW
         // =========================
-        else if (status === 'reject') {
+        else if (statusStr === 'reject' || statusStr === 'rejected') {
           // Reject all remaining approval levels
           await WorkflowApproverUtil.rejectAllLevels(tx, id, 'user_onboarding');
 

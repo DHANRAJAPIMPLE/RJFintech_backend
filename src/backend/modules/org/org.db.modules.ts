@@ -117,7 +117,8 @@ export class OrgStructureDbController {
         }
 
         // --- REJECT FLOW ---
-        if (status.toUpperCase() === 'REJECTED') {
+        const statusStr = status.toString().toUpperCase();
+        if (statusStr === 'REJECTED' || statusStr === 'REJECT') {
           // Reject all remaining approval levels
           await WorkflowApproverUtil.rejectAllLevels(
             tx,
@@ -150,7 +151,7 @@ export class OrgStructureDbController {
         }
 
         // --- APPROVE FLOW ---
-        if (status.toUpperCase() === 'APPROVED') {
+        if (statusStr === 'APPROVED' || statusStr === 'APPROVE') {
           // ── Level-wise approval: mark current level as APPROVED ──────────
           let allLevelsApproved = true;
           const approvedLevel = currentLevel?.level || null;
@@ -480,7 +481,7 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, nodeName } = req.body;
+      const { companyCode, companyId, nodeName, nodePath } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -496,15 +497,29 @@ export class OrgStructureDbController {
 
       let whereCondition: any = { companyId: resolvedCompanyId };
 
-      if (nodeName) {
+      if (nodeName || nodePath) {
         // 1. Find all matching OrgStructureReq IDs first
         const matchingReqs = await prisma.orgStructureReq.findMany({
           where: {
             companyId: resolvedCompanyId,
-            data: {
-              path: ['newNodeName'],
-              equals: nodeName,
-            },
+            AND: [
+              nodeName
+                ? {
+                    data: {
+                      path: ['newNodeName'],
+                      equals: nodeName,
+                    },
+                  }
+                : {},
+              nodePath
+                ? {
+                    data: {
+                      path: ['parentNode', 'nodePath'],
+                      equals: nodePath,
+                    },
+                  }
+                : {},
+            ].filter((obj) => Object.keys(obj).length > 0) as any,
           },
           select: { id: true },
         });
@@ -512,6 +527,7 @@ export class OrgStructureDbController {
         const reqIds = matchingReqs.map((r) => r.id);
         whereCondition.orgReqId = { in: reqIds };
       }
+
 
       const histories = await prisma.orgHistory.findMany({
         where: whereCondition,
