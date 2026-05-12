@@ -789,6 +789,7 @@ export class WorkflowDbController {
         },
         select: {
           id: true,
+          nodeId: true,
           data: true,
           status: true,
           alias: true,
@@ -798,6 +799,7 @@ export class WorkflowDbController {
           workflowHistories: {
             where: { event: 'INITIATE' },
             select: {
+              createdAt: true,
               user: {
                 select: {
                   name: true,
@@ -810,20 +812,33 @@ export class WorkflowDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      // 1. Resolve all unique workflow IDs from pending requests to get their names/aliases
+      // 1. Resolve all unique workflow IDs and node IDs from pending requests
       const workflowIds = Array.from(new Set(pendingRequestsRaw.map(req => req.workflowId).filter(Boolean))) as string[];
-      const workflowDetails = await prisma.workflow.findMany({
-        where: { id: { in: workflowIds } },
-        select: { id: true, name: true, alias: true }
-      });
-      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
+      const nodeIds = Array.from(new Set(pendingRequestsRaw.map(req => req.nodeId))) as string[];
 
-      // 2. Flatten initiator and workflow info for frontend
+      const [workflowDetails, nodeDetails] = await Promise.all([
+        prisma.workflow.findMany({
+          where: { id: { in: workflowIds } },
+          select: { id: true, name: true, alias: true }
+        }),
+        prisma.orgStructure.findMany({
+          where: { id: { in: nodeIds } },
+          select: { id: true, nodeType: true }
+        })
+      ]);
+
+      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
+      const nodeMap = new Map(nodeDetails.map(n => [n.id, n]));
+
+      // 2. Flatten initiator, node info, and workflow info for frontend
       const pendingRequests = pendingRequestsRaw.map((req) => {
-        const initiator = req.workflowHistories[0]?.user || {
+        const historyEntry = req.workflowHistories[0];
+        const initiator = historyEntry?.user || {
           name: '',
           email: '',
         };
+        const initiatorTimestamp = historyEntry?.createdAt || req.createdAt;
+        const nodeType = nodeMap.get(req.nodeId)?.nodeType || null;
         
         // Resolve workflow name and alias
         let workflowName = (req.data as any)?.name || 'New Workflow';
@@ -841,6 +856,8 @@ export class WorkflowDbController {
         return {
           ...rest,
           initiator,
+          initiatorTimestamp,
+          nodeType,
           workflowName,
           alias,
         };
