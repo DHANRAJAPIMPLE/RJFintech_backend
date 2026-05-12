@@ -498,7 +498,25 @@ export class OrgStructureDbController {
       let whereCondition: any = { companyId: resolvedCompanyId };
 
       if (nodeName || nodePath) {
-        // 1. Find all matching OrgStructureReq IDs first
+        // 1. Resolve parent path if nodePath is likely the node's own path
+        let parentPathForFilter = nodePath;
+        let isRootSearch = false;
+
+        if (nodeName && nodePath) {
+          const safeName = nodeName.trim().replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase();
+          if (nodePath.endsWith(safeName)) {
+            const parts = nodePath.split('.');
+            if (parts.length > 1) {
+              parentPathForFilter = parts.slice(0, -1).join('.');
+            } else {
+              // If it's a single part path and matches safeName, it's a ROOT node request
+              parentPathForFilter = undefined;
+              isRootSearch = true;
+            }
+          }
+        }
+
+        // 2. Find all matching OrgStructureReq IDs first
         const matchingReqs = await prisma.orgStructureReq.findMany({
           where: {
             companyId: resolvedCompanyId,
@@ -511,14 +529,21 @@ export class OrgStructureDbController {
                     },
                   }
                 : {},
-              nodePath
+              isRootSearch
                 ? {
                     data: {
-                      path: ['parentNode', 'nodePath'],
-                      equals: nodePath,
+                      path: ['nodeType'],
+                      equals: 'ROOT',
                     },
                   }
-                : {},
+                : (parentPathForFilter
+                  ? {
+                      data: {
+                        path: ['parentNode', 'nodePath'],
+                        equals: parentPathForFilter,
+                      },
+                    }
+                  : {}),
             ].filter((obj) => Object.keys(obj).length > 0) as any,
           },
           select: { id: true },
