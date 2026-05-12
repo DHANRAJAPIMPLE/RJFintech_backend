@@ -105,6 +105,15 @@ export class OrgStructureDbController {
 
         if (!request) throw new Error('Request not found');
 
+        // --- Prevent Self-Approval ---
+        // Block the initiator from approving their own request.
+        const initiatorLog = await prisma.orgHistory.findFirst({
+          where: { orgReqId: id, event: 'INITIATE' },
+        });
+        if (initiatorLog && initiatorLog.eventUserId === approverId) {
+          throw new AppError('Initiator cannot approve their own request', 403);
+        }
+
         // Fallback: Verify with legacy eligibleApprovers if no WorkflowApprover rows
         if (!currentLevel) {
           if (
@@ -580,19 +589,6 @@ export class OrgStructureDbController {
         orderBy: { level: 'asc' },
       });
 
-      // 2. Resolve approver details (names/emails)
-      const allApproverIds = new Set<string>();
-      workflowApprovers.forEach((wa) => {
-        if (Array.isArray(wa.approversList)) {
-          wa.approversList.forEach((id: any) => allApproverIds.add(String(id)));
-        }
-      });
-      const approverDetails = await prisma.user.findMany({
-        where: { id: { in: Array.from(allApproverIds) } },
-        select: { id: true, name: true, email: true },
-      });
-      const approverMap = new Map(approverDetails.map((u) => [u.id, u]));
-
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
       workflowApprovers.forEach((wa) => {
@@ -600,6 +596,64 @@ export class OrgStructureDbController {
         existing.push(wa);
         workflowMap.set(wa.reqId, existing);
       });
+
+      // Build initiator map: reqId -> initiatorUserId (maker can't be checker)
+      const initiatorMap = new Map<string, string>();
+      histories.forEach((h) => {
+        if (h.orgReqId && h.event === 'INITIATE' && h.eventUserId) {
+          initiatorMap.set(h.orgReqId, h.eventUserId);
+        }
+      });
+
+      // Enrich each level's approversList with global access users
+      for (const [reqId, levels] of workflowMap.entries()) {
+        const initiatorId = initiatorMap.get(reqId) || null;
+        for (const level of levels) {
+          const storedList = Array.isArray(level.approversList)
+            ? (level.approversList as string[])
+            : [];
+          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
+            resolvedCompanyId,
+            storedList,
+            initiatorId,
+          );
+        }
+      }
+
+      // 2. Resolve approver details (names/emails) from enriched lists
+      const allApproverIds = new Set<string>();
+      for (const levels of workflowMap.values()) {
+        for (const level of levels) {
+          (level.approversList as string[]).forEach((id: string) =>
+            allApproverIds.add(id),
+          );
+        }
+      }
+      const approverDetails = await prisma.user.findMany({
+        where: { id: { in: Array.from(allApproverIds) } },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          userAccesses: {
+            select: { roleCode: true },
+          },
+        },
+      });
+      const approverMap = new Map(
+        approverDetails.map((u) => {
+          const isSaasAdmin = u.userAccesses.some(
+            (a) => a.roleCode === 'SAAS_ADMIN',
+          );
+          return [
+            u.id,
+            {
+              name: isSaasAdmin ? 'Teams' : u.name,
+              email: isSaasAdmin ? 'Teams' : u.email,
+            },
+          ];
+        }),
+      );
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
@@ -674,6 +728,12 @@ export class OrgStructureDbController {
               .map((l: any) => ({
                 level: l.level,
                 status: l.status,
+                eligibleapprovers: (l.approversList as string[])
+                  .map((id: string) => {
+                    const u = approverMap.get(id);
+                    return u ? { name: u.name, email: u.email } : null;
+                  })
+                  .filter(Boolean),
               })),
           };
         }

@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { prisma } from '../../lib/prisma';
+import { prisma, ltree } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
 import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
@@ -561,6 +561,16 @@ export class UserDbController {
             403,
           );
         }
+
+        // --- Prevent Self-Approval ---
+        // Even if the initiator is in the approversList (for audit visibility),
+        // they are blocked from performing the approval action.
+        const initiatorLog = await prisma.userHistory.findFirst({
+          where: { reqId: id, event: 'INITIATE' },
+        });
+        if (initiatorLog && initiatorLog.eventUserId === approverId) {
+          throw new AppError('Initiator cannot approve their own request', 403);
+        }
       } else {
         // Fallback to legacy eligibleApprovers check if no WorkflowApprover rows exist
         if (
@@ -587,6 +597,7 @@ export class UserDbController {
           // ── Level-wise approval: mark current level as APPROVED ──────────
           let allLevelsApproved = true;
           const approvedLevel = currentLevel?.level || null;
+
 
           if (currentLevel) {
             const nextLevel = await WorkflowApproverUtil.approveLevel(
@@ -721,6 +732,89 @@ export class UserDbController {
                     isGlobalAccess: false,
                   },
                 });
+
+                // ─── A. UPWARD PROPAGATION: Existing parent-level users to this node ───
+                const parentPaths = ltree.getAncestors(nodePath);
+                if (parentPaths.length > 0) {
+                  const parentNodes = await tx.orgStructure.findMany({
+                    where: { companyId: company.id, nodePath: { in: parentPaths } },
+                  });
+                  const parentNodeIds = parentNodes.map((n) => n.id);
+                  const directParentPath = ltree.getParent(nodePath);
+                  const directParentId = parentNodes.find(
+                    (n) => n.nodePath === directParentPath,
+                  )?.id;
+
+                  if (parentNodeIds.length > 0) {
+                    const propagatingParentAccesses = await tx.userAccess.findMany({
+                      where: {
+                        companyId: company.id,
+                        nodeId: { in: parentNodeIds },
+                        isGlobalAccess: false,
+                        OR: [
+                          { accessCategory: 'ALL_CHILD' },
+                          directParentId
+                            ? { nodeId: directParentId, accessCategory: 'IMMEDIATE_CHILD' }
+                            : undefined,
+                        ].filter(Boolean) as any,
+                      },
+                    });
+
+                    const parentToChildAccesses = propagatingParentAccesses.map(
+                      (access) => ({
+                        userId: access.userId,
+                        roleCode: access.roleCode,
+                        nodeId: node.id,
+                        accessType: 'SECONDARY' as any,
+                        accessCategory:
+                          access.accessCategory === 'IMMEDIATE_CHILD'
+                            ? ('NODE' as any)
+                            : access.accessCategory,
+                        companyId: company.id,
+                        isGlobalAccess: false,
+                      }),
+                    );
+
+                    if (parentToChildAccesses.length > 0) {
+                      await tx.userAccess.createMany({
+                        data: parentToChildAccesses,
+                        skipDuplicates: true,
+                      });
+                    }
+                  }
+                }
+
+                // ─── B. DOWNWARD PROPAGATION: New user to existing child nodes ───
+                if (finalCategory === 'ALL_CHILD' || finalCategory === 'IMMEDIATE_CHILD') {
+                  const children = await tx.orgStructure.findMany({
+                    where: {
+                      companyId: company.id,
+                      ...(finalCategory === 'ALL_CHILD'
+                        ? { nodePath: { startsWith: `${nodePath}.` } }
+                        : { parent: { nodePath } }),
+                    },
+                  });
+
+                  if (children.length > 0) {
+                    const childAccesses = children.map((child) => ({
+                      userId: user.id,
+                      roleCode: role.roleCode,
+                      nodeId: child.id,
+                      accessType: 'SECONDARY' as any,
+                      accessCategory:
+                        finalCategory === 'IMMEDIATE_CHILD'
+                          ? ('NODE' as any)
+                          : ('ALL_CHILD' as any),
+                      companyId: company.id,
+                      isGlobalAccess: false,
+                    }));
+
+                    await tx.userAccess.createMany({
+                      data: childAccesses,
+                      skipDuplicates: true,
+                    });
+                  }
+                }
               }
             }
           }
@@ -836,7 +930,7 @@ export class UserDbController {
         },
         orderBy: { createdAt: 'desc' },
       });
-
+     console.log("history", history);
       // 1. Collect all unique request IDs to fetch their workflow approval status
       const reqIds = Array.from(
         new Set(history.map((h) => h.reqId).filter(Boolean)),
@@ -846,19 +940,7 @@ export class UserDbController {
         where: { reqId: { in: reqIds } },
         orderBy: { level: 'asc' },
       });
-
-      // 2. Resolve approver details (names/emails)
-      const allApproverIds = new Set<string>();
-      workflowApprovers.forEach((wa) => {
-        if (Array.isArray(wa.approversList)) {
-          wa.approversList.forEach((id: any) => allApproverIds.add(String(id)));
-        }
-      });
-      const approverDetails = await prisma.user.findMany({
-        where: { id: { in: Array.from(allApproverIds) } },
-        select: { id: true, name: true, email: true },
-      });
-      const approverMap = new Map(approverDetails.map((u) => [u.id, u]));
+      console.log("workflowApprovers", workflowApprovers);
 
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
@@ -867,6 +949,67 @@ export class UserDbController {
         existing.push(wa);
         workflowMap.set(wa.reqId, existing);
       });
+
+      // Build initiator map: reqId -> initiatorUserId (maker can't be checker)
+      const initiatorMap = new Map<string, string>();
+      history.forEach((h) => {
+        if (h.reqId && h.event === 'INITIATE' && h.eventUserId) {
+          initiatorMap.set(h.reqId, h.eventUserId);
+        }
+      });
+
+      // Enrich each level's approversList with global access users
+      for (const [reqId, levels] of workflowMap.entries()) {
+        const initiatorId = initiatorMap.get(reqId) || null;
+        for (const level of levels) {
+          const storedList = Array.isArray(level.approversList)
+            ? (level.approversList as string[])
+            : [];
+          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
+            resolvedCompanyId,
+            storedList,
+            initiatorId,
+          );
+        }
+      }
+
+      // 2. Resolve approver details (names/emails) from enriched lists
+      const allApproverIds = new Set<string>();
+      for (const levels of workflowMap.values()) {
+        for (const level of levels) {
+          (level.approversList as string[]).forEach((id: string) =>
+            allApproverIds.add(id),
+          );
+        }
+      }
+      console.log("allApproverIds", allApproverIds);
+      const approverDetails = await prisma.user.findMany({
+        where: { id: { in: Array.from(allApproverIds) } },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          userAccesses: {
+            select: { roleCode: true },
+          },
+        },
+      });
+      console.log("approverDetails", approverDetails);
+      const approverMap = new Map(
+        approverDetails.map((u) => {
+          const isSaasAdmin = u.userAccesses.some(
+            (a) => a.roleCode === 'SAAS_ADMIN',
+          );
+          return [
+            u.id,
+            {
+              name: isSaasAdmin ? 'Teams' : u.name,
+              email: isSaasAdmin ? 'Teams' : u.email,
+            },
+          ];
+        }),
+      );
+      console.log("approverMap", approverMap);
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
@@ -897,7 +1040,8 @@ export class UserDbController {
           handledPendingReqs.add(h.reqId);
         }
       });
-
+      console.log("resultList", resultList);
+      console.log("history", history);
       // 4. Add actual history entries
       const formattedHistory = history.map((h) => {
         const initiatorMapping = h.user?.userMappings?.[0];
@@ -937,6 +1081,12 @@ export class UserDbController {
               .map((l: any) => ({
                 level: l.level,
                 status: l.status,
+                eligibleapprovers: (l.approversList as string[])
+                  .map((id: string) => {
+                    const u = approverMap.get(id);
+                    return u ? { name: u.name, email: u.email } : null;
+                  })
+                  .filter(Boolean),
               })),
           };
         }
