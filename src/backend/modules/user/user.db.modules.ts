@@ -51,7 +51,11 @@ export class UserDbController {
           isGlobal = false;
           // Get all node-specific accesses to determine the visibility scope
           const requesterAccesses = await prisma.userAccess.findMany({
-            where: { userId, companyId: resolvedCompanyId },
+            where: {
+              userId,
+              companyId: resolvedCompanyId,
+              roleCode: { startsWith: 'USER_ACC' },
+            },
             include: { orgStructure: { select: { nodePath: true } } },
           });
 
