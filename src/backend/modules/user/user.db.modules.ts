@@ -35,8 +35,8 @@ export class UserDbController {
 
       // Check if requester is a global access user
       let isGlobal = true;
-      let userNodeIds: string[] = [];
-      let userNodePaths: string[] = [];
+      let allVisibleNodeIds: string[] = [];
+      let allVisibleNodePaths: string[] = [];
 
       if (userId) {
         const globalAccess = await prisma.userAccess.findFirst({
@@ -46,14 +46,59 @@ export class UserDbController {
             isGlobalAccess: true,
           },
         });
+
         if (!globalAccess) {
           isGlobal = false;
-          const accesses = await prisma.userAccess.findMany({
+          // Get all node-specific accesses to determine the visibility scope
+          const requesterAccesses = await prisma.userAccess.findMany({
             where: { userId, companyId: resolvedCompanyId },
-            select: { nodeId: true, orgStructure: { select: { nodePath: true } } },
+            include: { orgStructure: { select: { nodePath: true } } },
           });
-          userNodeIds = accesses.map((a) => a.nodeId);
-          userNodePaths = accesses.map((a) => a.orgStructure.nodePath);
+
+          if (requesterAccesses.length > 0) {
+            const nodePaths = requesterAccesses
+              .filter((a) => a.accessCategory === 'NODE')
+              .map((a) => a.orgStructure.nodePath);
+
+            const immediateChildPaths = requesterAccesses
+              .filter((a) => a.accessCategory === 'IMMEDIATE_CHILD')
+              .map((a) => a.orgStructure.nodePath);
+
+            const allChildPaths = requesterAccesses
+              .filter((a) => a.accessCategory === 'ALL_CHILD')
+              .map((a) => a.orgStructure.nodePath);
+
+            // Fetch all nodes that fall within the requester's visibility categories
+            const visibleNodes = await prisma.orgStructure.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                OR: [
+                  // 1. Direct nodes (for NODE, IMMEDIATE_CHILD, ALL_CHILD)
+                  {
+                    nodePath: {
+                      in: [
+                        ...nodePaths,
+                        ...immediateChildPaths,
+                        ...allChildPaths,
+                      ],
+                    },
+                  },
+                  // 2. All descendants (for ALL_CHILD)
+                  ...allChildPaths.map((path) => ({
+                    nodePath: { startsWith: `${path}.` },
+                  })),
+                  // 3. Immediate children only (for IMMEDIATE_CHILD)
+                  ...immediateChildPaths.map((path) => ({
+                    parent: { nodePath: path },
+                  })),
+                ],
+              },
+              select: { id: true, nodePath: true },
+            });
+
+            allVisibleNodeIds = visibleNodes.map((n) => n.id);
+            allVisibleNodePaths = visibleNodes.map((n) => n.nodePath);
+          }
         }
       }
 
@@ -65,13 +110,13 @@ export class UserDbController {
               companyId: resolvedCompanyId,
             },
           },
-          // If not global, only fetch users who share at least one node with the requester
+          // If not global, only fetch users who reside in nodes visible to the requester
           ...(isGlobal
             ? {}
             : {
               userAccesses: {
                 some: {
-                  nodeId: { in: userNodeIds },
+                  nodeId: { in: allVisibleNodeIds },
                 },
               },
             }),
@@ -100,12 +145,14 @@ export class UserDbController {
         },
       });
 
-      // Filter pending requests: if not global, only show those whose permissions match user's nodes
+      // Filter pending requests: if not global, only show those whose permissions match user's visible scope
       const pendingOnboardings = isGlobal
         ? allPendingOnboardings
         : allPendingOnboardings.filter((onb: any) => {
           const permissions = onb.data?.permissions || [];
-          return permissions.some((p: any) => userNodePaths.includes(p.nodePath));
+          return permissions.some((p: any) =>
+            allVisibleNodePaths.includes(p.nodePath),
+          );
         });
 
       // 3. Enhance pending records with audit trail and manager info
@@ -991,20 +1038,20 @@ export class UserDbController {
             companyId,
             role: {
               subCategory: subCategory,
-            },
-          },
+                },
+              },
           include: {
             orgStructure: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+            nodeType: true,
+            workflows: {
+              where: { subModule: subCategory },
               select: {
-                nodeName: true,
-                nodePath: true,
-                nodeType: true,
-                workflows: {
-                  where: { subModule: subCategory },
-                  select: {
-                    levelsHash: true,
-                    name: true,
-                    alias: true,
+                levelsHash: true,
+                name: true,
+                alias: true,
                   },
                 },
               },
