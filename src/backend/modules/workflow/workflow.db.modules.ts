@@ -683,8 +683,7 @@ export class WorkflowDbController {
       });
 
       // 4. Format the output for the UI
-      console.log(approverMap);
-      console.log(histories)
+
       const formattedHistories = histories.map((h) => {
         
         const companyId = h.company.id;

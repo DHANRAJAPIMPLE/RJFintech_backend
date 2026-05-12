@@ -930,7 +930,7 @@ export class UserDbController {
         },
         orderBy: { createdAt: 'desc' },
       });
-     console.log("history", history);
+  
       // 1. Collect all unique request IDs to fetch their workflow approval status
       const reqIds = Array.from(
         new Set(history.map((h) => h.reqId).filter(Boolean)),
@@ -940,7 +940,7 @@ export class UserDbController {
         where: { reqId: { in: reqIds } },
         orderBy: { level: 'asc' },
       });
-      console.log("workflowApprovers", workflowApprovers);
+   
 
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
@@ -982,7 +982,7 @@ export class UserDbController {
           );
         }
       }
-      console.log("allApproverIds", allApproverIds);
+ 
       const approverDetails = await prisma.user.findMany({
         where: { id: { in: Array.from(allApproverIds) } },
         select: {
@@ -994,7 +994,7 @@ export class UserDbController {
           },
         },
       });
-      console.log("approverDetails", approverDetails);
+
       const approverMap = new Map(
         approverDetails.map((u) => {
           const isSaasAdmin = u.userAccesses.some(
@@ -1009,7 +1009,7 @@ export class UserDbController {
           ];
         }),
       );
-      console.log("approverMap", approverMap);
+ 
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
@@ -1040,8 +1040,7 @@ export class UserDbController {
           handledPendingReqs.add(h.reqId);
         }
       });
-      console.log("resultList", resultList);
-      console.log("history", history);
+
       // 4. Add actual history entries
       const formattedHistory = history.map((h) => {
         const initiatorMapping = h.user?.userMappings?.[0];
