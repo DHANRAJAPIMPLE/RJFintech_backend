@@ -114,6 +114,12 @@ export class OrgStructureDbController {
           throw new AppError('Initiator cannot approve their own request', 403);
         }
 
+        // --- Prevent Double Approval ---
+        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'org_structure_req', approverId);
+        if (alreadyApproved) {
+          throw new AppError('You have already approved a previous level of this request', 403);
+        }
+
         // Fallback: Verify with legacy eligibleApprovers if no WorkflowApprover rows
         if (!currentLevel) {
           if (
@@ -333,12 +339,15 @@ export class OrgStructureDbController {
         resolvedCompanyId = company.id;
       }
 
+      // Fetch all global access users for this company to ensure they are in the master eligible list
+      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'ORG_STR');
+
       // Filter out the initiator from eligible approvers — initiator cannot approve their own request
-      if (initiatorId && rest.eligibleApprovers) {
-        rest.eligibleApprovers = rest.eligibleApprovers.filter(
-          (id: string) => id !== initiatorId,
-        );
+      const masterEligible = new Set([...(rest.eligibleApprovers || []), ...globalUsers]);
+      if (initiatorId) {
+        masterEligible.delete(initiatorId);
       }
+      rest.eligibleApprovers = Array.from(masterEligible);
 
       const request = await prisma.$transaction(async (tx) => {
         const reqRecord = await tx.orgStructureReq.create({
@@ -604,6 +613,7 @@ export class OrgStructureDbController {
           initiatorMap.set(h.orgReqId, h.eventUserId);
         }
       });
+      console.log(`[OrgHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
       // Enrich each level's approversList with global access users
       for (const [reqId, levels] of workflowMap.entries()) {
@@ -616,6 +626,7 @@ export class OrgStructureDbController {
             resolvedCompanyId,
             storedList,
             initiatorId,
+            'ORG_STR',
           );
         }
       }

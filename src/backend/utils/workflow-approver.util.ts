@@ -162,6 +162,7 @@ export class WorkflowApproverUtil {
         subModule,
         isRestrictedWorkflow,
       );
+      console.log(`[WorkflowApprover] Level ${level.level}: Found ${approver1Users.length} primary approvers`);
       approver1Users.forEach((id: string) => approverSet.add(id));
 
       // Resolve approver2 (optional)
@@ -175,42 +176,30 @@ export class WorkflowApproverUtil {
           subModule,
           isRestrictedWorkflow,
         );
+        console.log(`[WorkflowApprover] Level ${level.level}: Found ${approver2Users.length} secondary approvers`);
         approver2Users.forEach((id: string) => approverSet.add(id));
       }
 
-      // Always add global access users as potential approvers
+      // Always add permission-matched global access users as potential approvers
+      console.log(`[WorkflowApprover] Level ${level.level}: Adding ${globalAccessUsers.length} global access users`);
       globalAccessUsers.forEach((id: string) => approverSet.add(id));
 
-      // Also add cross-subModule approvers (users with approve access on USER_ACC, ORG_STR, WORK_FLOW)
-      // This ensures the stored approversList in WorkflowApprover covers ALL eligible users
-      const crossSubModuleUsers = await this.getCrossSubModuleApproverIds(
-        tx,
-        companyId,
-        requestNode.id,
-        requestNode.nodePath,
-      );
-      crossSubModuleUsers.forEach((id: string) => approverSet.add(id));
-      
-
-      // ── Step 5b: Exclude approvers already assigned to a previous level ────
-      // Each user can only be an eligible approver at ONE level per request
-      for (const usedId of usedApprovers) {
-        approverSet.delete(usedId);
-      }
+      // A user should only approve one level in the same request.
+      usedApprovers.forEach((id) => approverSet.delete(id));
+      approverSet.delete(initiatorId);
 
       // ── Step 6: Determine mandatoryCount from AND/OR logic ─────────────────
-      // AND = both approver types must approve → count how many distinct approver types we have
-      // OR  = only one approver needed
       let mandatoryCount = 1;
       if (level.approverType === 'AND' && level.approver2) {
         mandatoryCount = 2;
       }
 
       // Logic: The initiator cannot be an approver in their own workflow.
-      // We check if there are enough unique approvers EXCLUDING the initiator.
-      const availableUniqueApprovers = approverSet.has(initiatorId)
-        ? approverSet.size - 1
-        : approverSet.size;
+      const poolSize = approverSet.size;
+      const isInitiatorInPool = false;
+      const availableUniqueApprovers = poolSize;
+
+      console.log(`[WorkflowApprover] Level ${level.level}: Final Pool Size=${poolSize}, InitiatorExcluded=${isInitiatorInPool}, Available=${availableUniqueApprovers}`);
 
       if (availableUniqueApprovers < mandatoryCount) {
         throw new AppError(
@@ -312,7 +301,13 @@ export class WorkflowApproverUtil {
     isRestricted: boolean = false,
   ): Promise<string[]> {
     if (isRestricted) {
-      return this.getSignatoryIds(tx, companyId);
+      return this.getAllEligibleApproverIds(
+        tx,
+        companyId,
+        node,
+        rmChain,
+        subModule,
+      );
     }
 
     switch (type) {
@@ -322,7 +317,12 @@ export class WorkflowApproverUtil {
 
       case 'REPORTING_MANAGER':
         // Return the RM chain — these are the user IDs up the reporting hierarchy
-        return rmChain;
+        return this.filterUserIdsBySubModuleApproval(
+          tx,
+          companyId,
+          rmChain,
+          subModule,
+        );
 
       case 'NODE_APPROVER':
         // Users who have approve permission on the SAME node
@@ -415,7 +415,7 @@ export class WorkflowApproverUtil {
       select: { userId: true },
     });
 
-    return [...new Set(accesses.map((a: any) => a.userId))];
+    return Array.from(new Set<string>(accesses.map((a: any) => a.userId)));
   }
 
   /**
@@ -451,13 +451,13 @@ export class WorkflowApproverUtil {
         companyId,
         nodePath: { in: parentPaths },
       },
-      select: { id: true },
+      select: { id: true, nodePath: true },
     });
 
     const parentNodeIds = parentNodes.map((n: any) => n.id);
     if (parentNodeIds.length === 0) return [];
 
-    // Find users with approve roles on these parent nodes
+    // Find users with approve roles on these parent nodes, respecting propagation rules
     const accesses = await (tx as any).userAccess.findMany({
       where: {
         companyId,
@@ -465,7 +465,7 @@ export class WorkflowApproverUtil {
         isGlobalAccess: false,
         role: {
           approve: true,
-          OR: [{ subCategory: subModule }],
+          subCategory: subModule,
         },
         user: {
           userMappings: {
@@ -473,10 +473,29 @@ export class WorkflowApproverUtil {
           },
         },
       },
-      select: { userId: true },
+      select: {
+        userId: true,
+        nodeId: true,
+        accessCategory: true,
+      },
     });
 
-    return [...new Set(accesses.map((a: any) => a.userId))];
+    // Filter by propagation rules:
+    // 1. ALL_CHILD: Valid for any node in the path below the parent.
+    // 2. IMMEDIATE_CHILD: Valid ONLY if the parent is the direct parent of the request node.
+    const directParentPath = parentPaths[parentPaths.length - 1];
+    const directParentNode = parentNodes.find((n: any) => n.nodePath === directParentPath);
+    const directParentId = directParentNode?.id;
+
+    const filteredUserIds = accesses
+      .filter((acc: any) => {
+        if (acc.accessCategory === 'ALL_CHILD') return true;
+        if (acc.accessCategory === 'IMMEDIATE_CHILD' && acc.nodeId === directParentId) return true;
+        return false;
+      })
+      .map((acc: any) => acc.userId);
+
+    return Array.from(new Set<string>(filteredUserIds));
   }
 
   /**
@@ -513,18 +532,16 @@ export class WorkflowApproverUtil {
     }
 
     // 4. Reporting manager chain
-    rmChain.forEach((id) => allIds.add(id));
+    const managerIds = await this.filterUserIdsBySubModuleApproval(
+      tx,
+      companyId,
+      rmChain,
+      subModule,
+    );
+    managerIds.forEach((id) => allIds.add(id));
 
     // 5. Cross-subModule approvers — users who have approve access on
     //    USER_ACC, ORG_STR, or WORK_FLOW for this company (not just the current subModule)
-    const crossSubModuleIds = await this.getCrossSubModuleApproverIds(
-      tx,
-      companyId,
-      node.id,
-      node.nodePath,
-    );
-    crossSubModuleIds.forEach((id) => allIds.add(id));
-
     return Array.from(allIds);
   }
 
@@ -533,58 +550,34 @@ export class WorkflowApproverUtil {
    * (USER_ACC, ORG_STR, WORK_FLOW) for the given company and node.
    * Includes hierarchy-based access (ALL_CHILD on parent nodes).
    */
-  private static async getCrossSubModuleApproverIds(
+  private static async filterUserIdsBySubModuleApproval(
     tx: TxClient,
     companyId: string,
-    nodeId: string,
-    nodePath?: string,
+    userIds: string[],
+    subModule: string,
   ): Promise<string[]> {
-    const subModules = ['USER_ACC', 'ORG_STR', 'WORK_FLOW'];
-
-    // 1. Resolve parent node IDs for hierarchy support
-    let parentNodeIds: string[] = [];
-    if (nodePath) {
-      const parts = nodePath.split('.');
-      const parentPaths: string[] = [];
-      let current = '';
-      for (let i = 0; i < parts.length - 1; i++) {
-        current += (i === 0 ? '' : '.') + parts[i];
-        parentPaths.push(current);
-      }
-      if (parentPaths.length > 0) {
-        const nodes = await (tx as any).orgStructure.findMany({
-          where: { companyId, nodePath: { in: parentPaths } },
-          select: { id: true },
-        });
-        parentNodeIds = nodes.map((n: any) => n.id);
-      }
-    }
+    if (userIds.length === 0) return [];
 
     // 2. Fetch users with approve access on any of the target subModules
     const accesses = await (tx as any).userAccess.findMany({
       where: {
         companyId,
-        role: {
-          approve: true,
-          subCategory: { in: subModules },
-        },
+        userId: { in: userIds },
         user: {
           userMappings: {
             some: { companyId, status: 'ACTIVE' },
           },
         },
         OR: [
-          { isGlobalAccess: true },
-          { nodeId },
-          parentNodeIds.length > 0
-            ? { nodeId: { in: parentNodeIds }, accessCategory: 'ALL_CHILD' }
-            : undefined,
-        ].filter(Boolean) as any,
+          { roleCode: null, isGlobalAccess: true },
+          { role: { category: 'SAAS_ADMIN', approve: true } },
+          { role: { approve: true, subCategory: subModule } },
+        ],
       },
       select: { userId: true },
     });
 
-    return [...new Set(accesses.map((a: any) => a.userId))];
+    return Array.from(new Set<string>(accesses.map((a: any) => a.userId)));
   }
 
   /**
@@ -594,7 +587,7 @@ export class WorkflowApproverUtil {
    * (or have no role assigned — roleCode is null).
    * These users must also have an ACTIVE mapping to the company.
    */
-  private static async getGlobalAccessUserIds(
+  static async getGlobalAccessUserIds(
     tx: TxClient,
     companyId: string,
     subModule: string,
@@ -631,24 +624,24 @@ export class WorkflowApproverUtil {
     // Include the user only if:
     //   (a) they are global (isGlobalAccess: true)
     //   AND
-    //   (b) (they have no role assigned OR their role has approve: true)
-    //   AND
-    //   (their role subCategory matches subModule OR they are a SAAS_ADMIN)
+    //   (b) they are a role-less signatory, SAAS_ADMIN, or their role can
+    //       approve this exact subModule
     const eligibleUserIds = accesses
       .filter((a: any) => {
-        // If no role, assume super admin access
+        // If no role, they are a pure signatory (role-less isGlobalAccess: true)
         if (!a.roleCode) return true;
 
         const hasApprove = a.role?.approve === true;
-        const subCategoryMatches = a.role?.subCategory === subModule || a.isGlobalAccess === true;
+        const subCategoryMatches = a.role?.subCategory === subModule;
+        const isSaasAdmin = a.role?.category === 'SAAS_ADMIN' || a.role?.subCategory === 'SAAS_ADMIN';
 
-        return hasApprove && subCategoryMatches;
+        return hasApprove && (subCategoryMatches || isSaasAdmin);
       })
       .map((a: any) => a.userId);
 
   
 
-    return [...new Set(eligibleUserIds)];
+    return Array.from(new Set<string>(eligibleUserIds));
   }
 
   /**
@@ -672,7 +665,7 @@ export class WorkflowApproverUtil {
       select: { userId: true },
     });
 
-    return [...new Set(accesses.map((a: any) => a.userId))];
+    return Array.from(new Set<string>(accesses.map((a: any) => a.userId)));
   }
 
   /**
@@ -776,31 +769,19 @@ export class WorkflowApproverUtil {
     companyId: string,
     storedApproverIds: string[],
     initiatorId: string | null,
+    subModule: string,
   ): Promise<string[]> {
-    const subModules = ['USER_ACC', 'ORG_STR', 'WORK_FLOW'];
-
     // Fetch all users who are eligible as approvers:
     // 1. Global access users
-    // 2. Users with approve-capable roles across any subModule
-    const [globalAccesses, subModuleAccesses] = await Promise.all([
-      prisma.userAccess.findMany({
-        where: {
-          companyId,
-          isGlobalAccess: true,
-          user: {
-            userMappings: {
-              some: { companyId, status: 'ACTIVE' },
-            },
-          },
-        },
-        select: { userId: true },
-      }),
+    // 2. Users with approve-capable roles for this SPECIFIC subModule
+    const [globalUserIds, subModuleAccesses] = await Promise.all([
+      this.getGlobalAccessUserIds(prisma as any, companyId, subModule),
       prisma.userAccess.findMany({
         where: {
           companyId,
           role: {
             approve: true,
-            subCategory: { in: subModules },
+            subCategory: subModule,
           },
           user: {
             userMappings: {
@@ -813,14 +794,48 @@ export class WorkflowApproverUtil {
     ]);
 
     const enrichedSet = new Set(storedApproverIds);
-    globalAccesses.forEach((a) => enrichedSet.add(a.userId));
+    globalUserIds.forEach((id) => enrichedSet.add(id));
     subModuleAccesses.forEach((a) => enrichedSet.add(a.userId));
 
     // Maker can't be checker
     if (initiatorId) {
-      enrichedSet.delete(initiatorId);
+      const beforeCount = enrichedSet.size;
+      const wasDeleted = enrichedSet.delete(initiatorId);
+      console.log(`[WorkflowApprover] Enriching for SubModule=${subModule}: InitiatorId=${initiatorId}, FoundInPool=${wasDeleted}, Before=${beforeCount}, After=${enrichedSet.size}`);
+    } else {
+      console.log(`[WorkflowApprover] Enriching for SubModule=${subModule}: WARNING - InitiatorId is NULL, skipping exclusion`);
     }
 
     return Array.from(enrichedSet);
+  }
+
+  /**
+   * Checks if a user has already approved a previous level for the given request.
+   * Used to enforce 'unique individuals per level' even when approver lists overlap.
+   */
+  static async isAlreadyApproved(
+    tx: TxClient,
+    reqId: string,
+    reqTable: string,
+    approverId: string,
+  ): Promise<boolean> {
+    const historyMap: Record<string, { table: string; field: string }> = {
+      user_onboarding: { table: 'userHistory', field: 'reqId' },
+      org_structure_req: { table: 'orgHistory', field: 'orgReqId' },
+      workflow_req: { table: 'workflowReqHistory', field: 'workflowReqId' },
+    };
+
+    const config = historyMap[reqTable];
+    if (!config) return false;
+
+    const previous = await (tx as any)[config.table].findFirst({
+      where: {
+        [config.field]: reqId,
+        event: 'APPROVED',
+        eventUserId: approverId,
+      },
+    });
+
+    return !!previous;
   }
 }

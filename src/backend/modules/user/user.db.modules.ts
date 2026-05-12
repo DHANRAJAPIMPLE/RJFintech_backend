@@ -411,13 +411,15 @@ export class UserDbController {
 
     const email = onboardingData.data?.basicDetails?.email;
 
+    // Fetch all global access users for this company to ensure they are in the master eligible list
+    const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'USER_ACC');
+
     // Filter out the initiator from eligible approvers — initiator cannot approve their own request
-    if (initiatorId && onboardingData.eligibleApprovers) {
-      onboardingData.eligibleApprovers =
-        onboardingData.eligibleApprovers.filter(
-          (id: string) => id !== initiatorId,
-        );
+    const masterEligible = new Set([...(onboardingData.eligibleApprovers || []), ...globalUsers]);
+    if (initiatorId) {
+      masterEligible.delete(initiatorId);
     }
+    onboardingData.eligibleApprovers = Array.from(masterEligible);
 
     const onboarding = await prisma.$transaction(async (tx) => {
       let groupId: string | null = null;
@@ -570,6 +572,12 @@ export class UserDbController {
         });
         if (initiatorLog && initiatorLog.eventUserId === approverId) {
           throw new AppError('Initiator cannot approve their own request', 403);
+        }
+
+        // --- Prevent Double Approval ---
+        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(prisma as any, id, 'user_onboarding', approverId);
+        if (alreadyApproved) {
+          throw new AppError('You have already approved a previous level of this request', 403);
         }
       } else {
         // Fallback to legacy eligibleApprovers check if no WorkflowApprover rows exist
@@ -957,6 +965,7 @@ export class UserDbController {
           initiatorMap.set(h.reqId, h.eventUserId);
         }
       });
+      console.log(`[UserHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
       // Enrich each level's approversList with global access users
       for (const [reqId, levels] of workflowMap.entries()) {
@@ -969,6 +978,7 @@ export class UserDbController {
             resolvedCompanyId,
             storedList,
             initiatorId,
+            'USER_ACC',
           );
         }
       }

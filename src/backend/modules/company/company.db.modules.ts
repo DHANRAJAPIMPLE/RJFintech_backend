@@ -534,7 +534,7 @@ export class CompanyDbController {
                 create: [
                   {
                     level: 1,
-                    approver1: 'GLOBAL_APPROVER',
+                    approver1: 'NODE_APPROVER',
                     approverType: 'OR',
                   },
                 ],

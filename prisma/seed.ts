@@ -456,7 +456,7 @@ async function main() {
             create: [
               {
                 level: 1,
-                approver1: 'GLOBAL_APPROVER',
+                approver1: 'NODE_APPROVER',
                 approverType: 'OR',
               },
             ],
@@ -515,7 +515,7 @@ async function main() {
       'USER_ACC_USER', 'ORG_STR_USER', 'WORK_FLOW_USER',
       'USER_ACC_VIEWER', 'ORG_STR_VIEWER', 'WORK_FLOW_VIEWER'
     ];
-    const roleCode = systemAccessRoles[(i - 1) % systemAccessRoles.length];
+    const roleCode = systemAccessRoles[(i - 1) % systemAccessRoles.length]!;
 
     const accessExists = await prisma.userAccess.findUnique({
       where: {

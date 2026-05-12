@@ -119,10 +119,15 @@ export class WorkflowDbController {
         throw new AppError(`Already pending: ${alreadyPending.id}`, 409);
       }
 
+      // Fetch all global access users for this company to ensure they are in the master eligible list
+      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'WORK_FLOW');
+
       // Filter out the initiator from eligible approvers — initiator cannot approve their own request
-      const filteredApprovers = initiatorId
-        ? eligibleApprovers.filter((id: string) => id !== initiatorId)
-        : eligibleApprovers;
+      const masterEligible = new Set([...(eligibleApprovers || []), ...globalUsers]);
+      if (initiatorId) {
+        masterEligible.delete(initiatorId);
+      }
+      const filteredApprovers = Array.from(masterEligible);
 
       // ── Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels} ───────
       let totalApprovers = 0;
@@ -258,6 +263,12 @@ export class WorkflowDbController {
         });
         if (initiatorLog && initiatorLog.eventUserId === approverId) {
           throw new AppError('Initiator cannot approve their own request', 403);
+        }
+
+        // --- Prevent Double Approval ---
+        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'workflow_req', approverId);
+        if (alreadyApproved) {
+          throw new AppError('You have already approved a previous level of this request', 403);
         }
         // --- REJECT FLOW ---
         // Marks the request as REJECTED, rejects all levels, and logs the history.
@@ -592,17 +603,25 @@ export class WorkflowDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
-      // Build initiator map: reqId -> initiatorUserId (maker can't be checker)
+      // Build initiator map and submodule map: reqId -> ...
       const initiatorMap = new Map<string, string>();
+      const subModuleMap = new Map<string, string>();
       histories.forEach((h) => {
-        if (h.workflowReqId && h.event === 'INITIATE' && h.eventUserId) {
-          initiatorMap.set(h.workflowReqId, h.eventUserId);
+        if (h.workflowReqId) {
+          if (h.event === 'INITIATE' && h.eventUserId) {
+            initiatorMap.set(h.workflowReqId, h.eventUserId);
+          }
+          if (h.workflowReq?.subModule) {
+            subModuleMap.set(h.workflowReqId, h.workflowReq.subModule);
+          }
         }
       });
+      console.log(`[WorkflowHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
       // Enrich each level's approversList with global access users
       for (const [reqId, levels] of workflowMap.entries()) {
         const initiatorId = initiatorMap.get(reqId) || null;
+        const subModule = subModuleMap.get(reqId) || 'WORK_FLOW';
         for (const level of levels) {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
@@ -611,6 +630,7 @@ export class WorkflowDbController {
             resolvedCompanyId,
             storedList,
             initiatorId,
+            subModule,
           );
         }
       }
@@ -852,6 +872,7 @@ export class WorkflowDbController {
         select: {
           id: true,
           nodeId: true,
+          workflowId: true,
           data: true,
           status: true,
           alias: true,
