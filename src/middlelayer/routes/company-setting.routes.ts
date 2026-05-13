@@ -55,7 +55,6 @@ router.post(
 );
 router.post(
   '/user/fetch-users-by-nodepath-count',
-  authorize('view', 'USER_ACC'),
   UserController.fetchUsersByNodePathCount,
 );
 
