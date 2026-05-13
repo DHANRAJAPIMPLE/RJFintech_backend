@@ -416,12 +416,10 @@ export class UserDbController {
     // Fetch all global access users for this company to ensure they are in the master eligible list
     const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'USER_ACC');
 
-    // Filter out the initiator from eligible approvers — initiator cannot approve their own request
+    // Master eligible list includes both configured and global approvers.
+    // Initiator is excluded from all active approval lists.
     const masterEligible = new Set([...(onboardingData.eligibleApprovers || []), ...globalUsers]);
-    if (initiatorId) {
-      masterEligible.delete(initiatorId);
-    }
-    onboardingData.eligibleApprovers = Array.from(masterEligible);
+    onboardingData.eligibleApprovers = Array.from(masterEligible).filter((id) => id !== initiatorId);
 
     const onboarding = await prisma.$transaction(async (tx) => {
       let groupId: string | null = null;
@@ -565,22 +563,6 @@ export class UserDbController {
             403,
           );
         }
-
-        // --- Prevent Self-Approval ---
-        // Even if the initiator is in the approversList (for audit visibility),
-        // they are blocked from performing the approval action.
-        const initiatorLog = await prisma.userHistory.findFirst({
-          where: { reqId: id, event: 'INITIATE' },
-        });
-        if (initiatorLog && initiatorLog.eventUserId === approverId) {
-          throw new AppError('Initiator cannot approve their own request', 403);
-        }
-
-        // --- Prevent Double Approval ---
-        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(prisma as any, id, 'user_onboarding', approverId);
-        if (alreadyApproved) {
-          throw new AppError('You have already approved this request once', 403);
-        }
       } else {
         // Fallback to legacy eligibleApprovers check if no WorkflowApprover rows exist
         if (
@@ -590,6 +572,20 @@ export class UserDbController {
         ) {
           throw new AppError('Unauthorized to process this request', 403);
         }
+      }
+
+      // --- Prevent Self-Approval ---
+      const initiatorLog = await prisma.userHistory.findFirst({
+        where: { reqId: id, event: 'INITIATE' },
+      });
+      if (initiatorLog && initiatorLog.eventUserId === approverId) {
+        throw new AppError('Initiator cannot approve their own request', 403);
+      }
+
+      // --- Prevent Double Approval ---
+      const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(prisma as any, id, 'user_onboarding', approverId);
+      if (alreadyApproved) {
+        throw new AppError('You have already approved this request once', 403);
       }
 
       const data = onboarding.data as any;
@@ -961,18 +957,30 @@ export class UserDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
-      // Build initiator map: reqId -> initiatorUserId (maker can't be checker)
+      // Build request-level maps used to filter displayed approvers.
       const initiatorMap = new Map<string, string>();
+      const approvedUserMap = new Map<string, Set<string>>();
       history.forEach((h) => {
-        if (h.reqId && h.event === 'INITIATE' && h.eventUserId) {
-          initiatorMap.set(h.reqId, h.eventUserId);
+        if (h.reqId) {
+          if (h.event === 'INITIATE' && h.eventUserId) {
+            initiatorMap.set(h.reqId, h.eventUserId);
+          }
+          if (h.event === 'APPROVED' && h.eventUserId) {
+            const approvedUsers =
+              approvedUserMap.get(h.reqId) || new Set<string>();
+            approvedUsers.add(h.eventUserId);
+            approvedUserMap.set(h.reqId, approvedUsers);
+          }
         }
       });
       console.log(`[UserHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
-      // Enrich each level's approversList with global access users
+      // Filter each stored approver list for active display only. The DB row is not mutated.
       for (const [reqId, levels] of workflowMap.entries()) {
         const initiatorId = initiatorMap.get(reqId) || null;
+        const approvedUserIds = Array.from(
+          approvedUserMap.get(reqId) ?? new Set<string>(),
+        );
         for (const level of levels) {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
@@ -982,6 +990,7 @@ export class UserDbController {
             storedList,
             initiatorId,
             'USER_ACC',
+            approvedUserIds,
           );
         }
       }

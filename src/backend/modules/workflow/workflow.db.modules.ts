@@ -122,12 +122,10 @@ export class WorkflowDbController {
       // Fetch all global access users for this company to ensure they are in the master eligible list
       const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'WORK_FLOW');
 
-      // Filter out the initiator from eligible approvers — initiator cannot approve their own request
+      // Master eligible list includes both configured and global approvers.
+      // Initiator is excluded from all active approval lists.
       const masterEligible = new Set([...(eligibleApprovers || []), ...globalUsers]);
-      if (initiatorId) {
-        masterEligible.delete(initiatorId);
-      }
-      const filteredApprovers = Array.from(masterEligible);
+      const filteredApprovers = Array.from(masterEligible).filter((id) => id !== initiatorId);
 
       // ── Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels} ───────
       let totalApprovers = 0;
@@ -604,13 +602,20 @@ export class WorkflowDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
-      // Build initiator map and submodule map: reqId -> ...
+      // Build request-level maps used to filter displayed approvers.
       const initiatorMap = new Map<string, string>();
       const subModuleMap = new Map<string, string>();
+      const approvedUserMap = new Map<string, Set<string>>();
       histories.forEach((h) => {
         if (h.workflowReqId) {
           if (h.event === 'INITIATE' && h.eventUserId) {
             initiatorMap.set(h.workflowReqId, h.eventUserId);
+          }
+          if (h.event === 'APPROVED' && h.eventUserId) {
+            const approvedUsers =
+              approvedUserMap.get(h.workflowReqId) || new Set<string>();
+            approvedUsers.add(h.eventUserId);
+            approvedUserMap.set(h.workflowReqId, approvedUsers);
           }
           if (h.workflowReq?.subModule) {
             subModuleMap.set(h.workflowReqId, h.workflowReq.subModule);
@@ -619,10 +624,13 @@ export class WorkflowDbController {
       });
       console.log(`[WorkflowHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
-      // Enrich each level's approversList with global access users
+      // Filter each stored approver list for active display only. The DB row is not mutated.
       for (const [reqId, levels] of workflowMap.entries()) {
         const initiatorId = initiatorMap.get(reqId) || null;
         const subModule = subModuleMap.get(reqId) || 'WORK_FLOW';
+        const approvedUserIds = Array.from(
+          approvedUserMap.get(reqId) ?? new Set<string>(),
+        );
         for (const level of levels) {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
@@ -632,6 +640,7 @@ export class WorkflowDbController {
             storedList,
             initiatorId,
             subModule,
+            approvedUserIds,
           );
         }
       }

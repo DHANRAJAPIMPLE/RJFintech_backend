@@ -125,7 +125,7 @@ export class WorkflowApproverUtil {
 
     // Global access users are added to every level because they are company
     // wide approvers. They are still excluded if they initiated the request,
-    // and they are pruned from later levels after approving once.
+    // and history-based eligibility prevents them from approving twice.
     const globalAccessUsers = await this.getGlobalAccessUserIds(
       tx,
       companyId,
@@ -162,9 +162,8 @@ export class WorkflowApproverUtil {
 
       globalAccessUsers.forEach((id) => approverSet.add(id));
 
-      // Maker-checker separation is enforced at creation time and again during
-      // approval. Keeping it here prevents the initiator from appearing in any
-      // request-level eligible approver list.
+      // Maker-checker separation starts at persisted approver resolution so
+      // the initiator never appears as an eligible approver for the request.
       approverSet.delete(initiatorId);
 
       const mandatoryCount = this.getMandatoryCount(level);
@@ -196,6 +195,7 @@ export class WorkflowApproverUtil {
     this.assertApprovalPathIsFeasible(
       approverRows,
       'Workflow approver setup is not feasible.',
+      initiatorId,
     );
 
     const created = [];
@@ -555,8 +555,8 @@ export class WorkflowApproverUtil {
 
   /**
    * Global access users can appear in every pending row for both default and
-   * custom workflows. They are still limited to one approval per request by
-   * approveLevel, which prunes them from later pending rows after approval.
+   * custom workflows. Runtime eligibility still limits them to one approval
+   * per request without rewriting stored approver rows.
    */
   static async getGlobalAccessUserIds(
     tx: TxClient,
@@ -594,9 +594,12 @@ export class WorkflowApproverUtil {
       orderBy: { level: 'asc' },
     });
 
+    const initiatorId = await this.getInitiatorId(prisma as any, reqId, reqTable);
     const approvedUsers = new Set(
       await this.getApprovedUserIds(prisma as any, reqId, reqTable),
     );
+    if (initiatorId) approvedUsers.add(initiatorId);
+
     const allApprovers = new Set<string>();
 
     for (const row of approverRows) {
@@ -625,8 +628,8 @@ export class WorkflowApproverUtil {
   /**
    * Applies one approval to a level. The row is marked APPROVED only after the
    * number of distinct approval history entries for that level reaches
-   * mandatoryCount. The approver is removed from later pending levels so the
-   * same person cannot approve more than one level of the same request.
+   * mandatoryCount. Stored approver rows are not pruned; active eligibility is
+   * filtered from approval history so the same person can approve only once.
    */
   static async approveLevel(
     tx: TxClient,
@@ -651,6 +654,18 @@ export class WorkflowApproverUtil {
       );
     }
 
+    const initiatorId = await this.getInitiatorId(tx, reqId, reqTable);
+    if (approverId && initiatorId === approverId) {
+      throw new AppError('Initiator cannot approve their own request', 403);
+    }
+
+    if (
+      approverId &&
+      (await this.isAlreadyApproved(tx, reqId, reqTable, approverId))
+    ) {
+      throw new AppError('You have already approved this request once', 403);
+    }
+
     const approvedUsersForLevel = new Set(
       await this.getApprovedUserIds(tx, reqId, reqTable, level),
     );
@@ -661,7 +676,7 @@ export class WorkflowApproverUtil {
     const mandatoryCount = currentLevel.mandatoryCount || 1;
     const levelSatisfied = approvedUsersForLevel.size >= mandatoryCount;
 
-    // Before accepting the approval, simulate the "one user, one level" prune.
+    // Before accepting the approval, simulate "one user, one level" consumption.
     // This prevents a valid click from leaving later levels with no possible
     // unique approver path.
     if (approverId) {
@@ -682,17 +697,15 @@ export class WorkflowApproverUtil {
       });
     }
 
-    if (approverId) {
-      await this.pruneApproverFromLaterPendingLevels(
-        tx,
-        reqId,
-        reqTable,
-        level,
-        approverId,
-      );
-    }
+    // No pruning: all eligible users remain in the list even after approval
+    // to maintain a complete audit trail of potential approvers.
 
-    await this.syncPendingEligibleApprovers(tx, reqTable, reqId);
+    await this.syncPendingEligibleApprovers(
+      tx,
+      reqTable,
+      reqId,
+      approverId ? [approverId] : [],
+    );
 
     return this.getNextPendingLevel(tx, reqId, reqTable);
   }
@@ -711,23 +724,23 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * History views should display the stored approver rows as they are. We avoid
-   * re-adding global users here because approveLevel intentionally removes an
-   * approver from later rows after they approve once.
+   * History views should show currently actionable approvers only. The stored
+   * row remains complete for audit/debugging, while this filters the initiator
+   * and users who have already approved this request.
    */
   static async getEnrichedApproverIds(
     _companyId: string,
     storedApproverIds: string[],
     initiatorId: string | null,
     _subModule: string,
+    approvedUserIds: string[] = [],
   ): Promise<string[]> {
-    const enrichedSet = new Set(storedApproverIds);
+    const excludedUsers = new Set(approvedUserIds);
+    if (initiatorId) excludedUsers.add(initiatorId);
 
-    if (initiatorId) {
-      enrichedSet.delete(initiatorId);
-    }
-
-    return Array.from(enrichedSet);
+    return this.unique(storedApproverIds).filter(
+      (userId) => !excludedUsers.has(userId),
+    );
   }
 
   /**
@@ -806,6 +819,25 @@ export class WorkflowApproverUtil {
     return this.unique(approvals.map((approval: any) => approval.eventUserId));
   }
 
+  private static async getInitiatorId(
+    tx: TxClient,
+    reqId: string,
+    reqTable: string,
+  ): Promise<string | null> {
+    const config = this.getHistoryConfig(reqTable);
+    if (!config) return null;
+
+    const initiatorLog = await (tx as any)[config.table].findFirst({
+      where: {
+        [config.field]: reqId,
+        event: 'INITIATE',
+      },
+      select: { eventUserId: true },
+    });
+
+    return initiatorLog?.eventUserId || null;
+  }
+
   private static async getNextPendingLevel(
     tx: TxClient,
     reqId: string,
@@ -817,49 +849,26 @@ export class WorkflowApproverUtil {
     });
   }
 
-  private static async pruneApproverFromLaterPendingLevels(
-    tx: TxClient,
-    reqId: string,
-    reqTable: string,
-    approvedLevel: number,
-    approverId: string,
-  ) {
-    const laterRows = await (tx as any).workflowApprover.findMany({
-      where: {
-        reqId,
-        reqTable,
-        status: 'PENDING',
-        level: { gt: approvedLevel },
-      },
-      select: { id: true, approversList: true },
-    });
 
-    for (const row of laterRows) {
-      const currentList = this.toStringArray(row.approversList);
-      const nextList = currentList.filter((id) => id !== approverId);
-
-      if (nextList.length !== currentList.length) {
-        await (tx as any).workflowApprover.update({
-          where: { id: row.id },
-          data: { approversList: nextList },
-        });
-      }
-    }
-  }
 
   private static async syncPendingEligibleApprovers(
     tx: TxClient,
     reqTable: string,
     reqId: string,
+    extraExcludedUserIds: string[] = [],
   ) {
     const pendingRows = await (tx as any).workflowApprover.findMany({
       where: { reqId, reqTable, status: 'PENDING' },
       select: { approversList: true },
     });
 
+    const initiatorId = await this.getInitiatorId(tx, reqId, reqTable);
     const approvedUsers = new Set(
       await this.getApprovedUserIds(tx, reqId, reqTable),
     );
+    if (initiatorId) approvedUsers.add(initiatorId);
+    extraExcludedUserIds.forEach((userId) => approvedUsers.add(userId));
+
     const eligible = new Set<string>();
 
     for (const row of pendingRows) {
@@ -907,14 +916,18 @@ export class WorkflowApproverUtil {
   private static assertApprovalPathIsFeasible(
     rows: ApprovalPathRow[],
     failurePrefix: string,
+    initiatorId: string | null = null,
   ) {
     const slots: { level: number; candidates: string[] }[] = [];
 
     for (const row of rows) {
       for (let slot = 0; slot < row.mandatoryCount; slot++) {
+        const candidates = this.unique(row.approversList);
         slots.push({
           level: row.level,
-          candidates: this.unique(row.approversList),
+          candidates: initiatorId
+            ? candidates.filter((id) => id !== initiatorId)
+            : candidates,
         });
       }
     }
@@ -981,6 +994,9 @@ export class WorkflowApproverUtil {
       await this.getApprovedUserIds(tx, opts.reqId, opts.reqTable),
     );
     consumedApprovers.add(opts.approverId);
+
+    const initiatorId = await this.getInitiatorId(tx, opts.reqId, opts.reqTable);
+    if (initiatorId) consumedApprovers.add(initiatorId);
 
     for (const row of pendingRows) {
       if (row.level < opts.level) continue;

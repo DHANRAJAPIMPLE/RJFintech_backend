@@ -343,12 +343,10 @@ export class OrgStructureDbController {
       // Fetch all global access users for this company to ensure they are in the master eligible list
       const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'ORG_STR');
 
-      // Filter out the initiator from eligible approvers — initiator cannot approve their own request
+      // Master eligible list includes both configured and global approvers.
+      // Initiator is excluded from all active approval lists.
       const masterEligible = new Set([...(rest.eligibleApprovers || []), ...globalUsers]);
-      if (initiatorId) {
-        masterEligible.delete(initiatorId);
-      }
-      rest.eligibleApprovers = Array.from(masterEligible);
+      rest.eligibleApprovers = Array.from(masterEligible).filter((id) => id !== initiatorId);
 
       const request = await prisma.$transaction(async (tx) => {
         const reqRecord = await tx.orgStructureReq.create({
@@ -607,18 +605,30 @@ export class OrgStructureDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
-      // Build initiator map: reqId -> initiatorUserId (maker can't be checker)
+      // Build request-level maps used to filter displayed approvers.
       const initiatorMap = new Map<string, string>();
+      const approvedUserMap = new Map<string, Set<string>>();
       histories.forEach((h) => {
-        if (h.orgReqId && h.event === 'INITIATE' && h.eventUserId) {
-          initiatorMap.set(h.orgReqId, h.eventUserId);
+        if (h.orgReqId) {
+          if (h.event === 'INITIATE' && h.eventUserId) {
+            initiatorMap.set(h.orgReqId, h.eventUserId);
+          }
+          if (h.event === 'APPROVED' && h.eventUserId) {
+            const approvedUsers =
+              approvedUserMap.get(h.orgReqId) || new Set<string>();
+            approvedUsers.add(h.eventUserId);
+            approvedUserMap.set(h.orgReqId, approvedUsers);
+          }
         }
       });
       console.log(`[OrgHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
-      // Enrich each level's approversList with global access users
+      // Filter each stored approver list for active display only. The DB row is not mutated.
       for (const [reqId, levels] of workflowMap.entries()) {
         const initiatorId = initiatorMap.get(reqId) || null;
+        const approvedUserIds = Array.from(
+          approvedUserMap.get(reqId) ?? new Set<string>(),
+        );
         for (const level of levels) {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
@@ -628,6 +638,7 @@ export class OrgStructureDbController {
             storedList,
             initiatorId,
             'ORG_STR',
+            approvedUserIds,
           );
         }
       }
