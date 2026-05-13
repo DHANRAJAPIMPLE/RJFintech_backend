@@ -16,7 +16,7 @@ import { internalPost } from '../utils/internal-fetch.util';
  */
 
 export const adminMiddleware = async (
-  req: Request,
+  req: Request & { user?: { id: string } },
   res: Response,
   next: NextFunction,
 ) => {

@@ -73,7 +73,7 @@ export class RoleController {
       }
 
       // 1. Fetch raw data from Backend
-      const { data, ok, status } = await internalPost<any[]>(
+      const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/roles/fetch-all`,
       );
 
@@ -85,7 +85,8 @@ export class RoleController {
       }
 
       // 2. Logic: Apply formatting
-      const formattedRoles = data.map((role) => ({
+      const roles = Array.isArray(data) ? data : [];
+      const formattedRoles = roles.map((role) => ({
         roleName: role.roleName,
         category: role.category,
         subCategory: role.subCategory,

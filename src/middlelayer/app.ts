@@ -41,8 +41,9 @@ app.get('/', (req, res) => {
 
 app.use(createErrorMiddleware('MiddleLayer'));
 app.use((req, res, next) => {
-  if (allowedOrigins.includes(req.headers.origin)) {
-    res.header('Access-Control-Allow-Origin', req.headers.origin);
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
   }
   next();

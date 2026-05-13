@@ -117,7 +117,7 @@ export class OrgStructureDbController {
         // --- Prevent Double Approval ---
         const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'org_structure_req', approverId);
         if (alreadyApproved) {
-          throw new AppError('You have already approved a previous level of this request', 403);
+          throw new AppError('You have already approved this request once', 403);
         }
 
         // Fallback: Verify with legacy eligibleApprovers if no WorkflowApprover rows
@@ -177,6 +177,7 @@ export class OrgStructureDbController {
               id,
               'org_structure_req',
               currentLevel.level,
+              approverId,
             );
             if (nextLevel) {
               allLevelsApproved = false;
@@ -294,7 +295,7 @@ export class OrgStructureDbController {
 
       let message = 'Org structure request processed';
       if (result && result.status === 'PARTIAL_APPROVED') {
-        message = `Org structure request approved at Level ${result.level}, pending next level approval`;
+        message = `Org structure request approved at Level ${result.level}, pending remaining approval`;
       } else if (result && result.status === 'APPROVED') {
         message = 'Org structure request approved and node created';
       } else if (result && result.status === 'REJECTED') {

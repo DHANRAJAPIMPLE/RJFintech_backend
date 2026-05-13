@@ -22,7 +22,7 @@ import {
 } from '../validations/org.validation';
 
 export class OrgController {
-  private static formatDate(date: Date | string | null): string {
+  private static formatDate(date: Date | string | null): string | null {
     if (!date) return null;
     const d = new Date(date);
     const day = String(d.getDate()).padStart(2, '0');

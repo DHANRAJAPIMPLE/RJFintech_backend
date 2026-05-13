@@ -54,6 +54,7 @@ export class UserDbController {
             where: {
               userId,
               companyId: resolvedCompanyId,
+              accessType: 'PRIMARY',
               roleCode: { startsWith: 'USER_ACC' },
             },
             include: { orgStructure: { select: { nodePath: true } } },
@@ -577,7 +578,7 @@ export class UserDbController {
         // --- Prevent Double Approval ---
         const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(prisma as any, id, 'user_onboarding', approverId);
         if (alreadyApproved) {
-          throw new AppError('You have already approved a previous level of this request', 403);
+          throw new AppError('You have already approved this request once', 403);
         }
       } else {
         // Fallback to legacy eligibleApprovers check if no WorkflowApprover rows exist
@@ -613,6 +614,7 @@ export class UserDbController {
               id,
               'user_onboarding',
               currentLevel.level,
+              approverId,
             );
             // If there's a next pending level, the request is NOT fully approved yet
             if (nextLevel) {
@@ -883,7 +885,7 @@ export class UserDbController {
 
       let message = `User onboarding ${status}d successfully`;
       if (result && result.status === 'PARTIAL_APPROVED') {
-        message = `User request approved at Level ${result.level}, pending next level approval`;
+        message = `User request approved at Level ${result.level}, pending remaining approval`;
       } else if (result && result.status === 'APPROVED') {
         message = 'User approved and onboarded';
       } else if (result && result.status === 'REJECTED') {

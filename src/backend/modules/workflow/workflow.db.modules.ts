@@ -80,7 +80,7 @@ export class WorkflowDbController {
 
       // 1. Resolve Node ID
       const node = await prisma.orgStructure.findFirst({
-        where: { nodePath, companyId },
+        where: { nodePath, companyId: resolvedCompanyId },
       });
       if (!node)
         throw new Error(`Node path '${nodePath}' not found for this company`);
@@ -92,7 +92,7 @@ export class WorkflowDbController {
       const alreadyActive = await prisma.workflow.findUnique({
         where: {
           companyId_nodeId_module_subModule_levelsHash: {
-            companyId,
+            companyId: resolvedCompanyId,
             nodeId,
             module,
             subModule,
@@ -107,7 +107,7 @@ export class WorkflowDbController {
       // 3. Block if PENDING duplicate exists
       const alreadyPending = await prisma.workflowReq.findFirst({
         where: {
-          companyId,
+          companyId: resolvedCompanyId,
           nodeId,
           module,
           subModule,
@@ -268,7 +268,7 @@ export class WorkflowDbController {
         // --- Prevent Double Approval ---
         const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'workflow_req', approverId);
         if (alreadyApproved) {
-          throw new AppError('You have already approved a previous level of this request', 403);
+          throw new AppError('You have already approved this request once', 403);
         }
         // --- REJECT FLOW ---
         // Marks the request as REJECTED, rejects all levels, and logs the history.
@@ -311,6 +311,7 @@ export class WorkflowDbController {
               id,
               'workflow_req',
               currentLevel.level,
+              approverId,
             );
             if (nextLevel) {
               allLevelsApproved = false;
@@ -469,7 +470,7 @@ export class WorkflowDbController {
 
       let message = `Workflow request ${status.toLowerCase()}ed successfully`;
       if (result && result.status === 'PARTIAL_APPROVED') {
-        message = `Workflow request approved at Level ${result.level}, pending next level approval`;
+        message = `Workflow request approved at Level ${result.level}, pending remaining approval`;
       } else if (result && result.status === 'APPROVED') {
         message = 'Workflow request approved successfully';
       } else if (result && result.status === 'REJECTED') {
@@ -705,7 +706,7 @@ export class WorkflowDbController {
       // 4. Format the output for the UI
 
       const formattedHistories = histories.map((h) => {
-        
+
         const companyId = h.company.id;
         const initiatorAccesses =
           h.user?.userAccesses?.filter((a) => a.companyId === companyId) || [];
@@ -828,14 +829,21 @@ export class WorkflowDbController {
             select: { nodeId: true },
           });
           userNodeIds = accesses.map((a) => a.nodeId);
-        }
+          }
       }
 
       // Active production workflows
       const activeWorkflows = await prisma.workflow.findMany({
         where: {
           companyId: resolvedCompanyId,
-          ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
+          ...(isGlobal
+            ? {}
+            : {
+                OR: [
+                  { nodeId: { in: userNodeIds } },
+                  { name: { contains: 'DEFAULT' } },
+                ],
+              }),
         },
         select: {
           name: true,
@@ -922,7 +930,7 @@ export class WorkflowDbController {
         };
         const initiatorTimestamp = historyEntry?.createdAt || req.createdAt;
         const nodeType = nodeMap.get(req.nodeId)?.nodeType || null;
-        
+
         // Resolve workflow name and alias
         let workflowName = (req.data as any)?.name || 'New Workflow';
         let alias = req.alias || (req.data as any)?.alias || 'N/A';
