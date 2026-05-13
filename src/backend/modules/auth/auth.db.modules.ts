@@ -223,25 +223,23 @@ export class AuthDbController {
           .status(400)
           .json({ error: 'userId, companyId, module and action are required' });
       }
- 
-      // 1. For 'initiate' actions, perform granular node-level body inspection
+
+      // For 'initiate', use the node-aware utility as the source of truth.
       if (action === 'initiate') {
-        const isNodeAuthorized = await NodeAccessUtil.verifyInitiationAccess(
+        const authorized = await NodeAccessUtil.verifyInitiationAccess(
           userId,
           companyId,
           module,
           body,
         );
-        if (!isNodeAuthorized) {
-          return res.status(200).json({ authorized: false });
-        }
+        return res.status(200).json({ authorized });
       }
- 
-      // 2. Fallback to general role-based check (SAAS_ADMIN, GlobalAccess, or specific node role)
+
+      // Fallback to general role-based check (SAAS_ADMIN, GlobalAccess, or specific node role)
       const resolvedNodeId = targetNode
         ? await AuthDbController.resolveNodeId(companyId, targetNode)
         : null;
- 
+
       const userAccess = await prisma.userAccess.findMany({
         where: {
           userId,
@@ -269,13 +267,13 @@ export class AuthDbController {
           ],
         },
       });
- 
+
       res.status(200).json({ authorized: userAccess.length > 0 });
     } catch (error) {
       next(error);
     }
   }
- 
+
   /**
    * Resolves a node identifier (ID or Path) to a specific nodeId.
    */
@@ -284,18 +282,18 @@ export class AuthDbController {
     targetNode: string,
   ): Promise<string | null> {
     if (!targetNode) return null;
- 
+
     const uuidRegex =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidRegex.test(targetNode)) {
       return targetNode;
     }
- 
+
     const node = await prisma.orgStructure.findFirst({
       where: { companyId, nodePath: targetNode },
       select: { id: true },
     });
- 
+
     return node?.id || null;
   }
 }

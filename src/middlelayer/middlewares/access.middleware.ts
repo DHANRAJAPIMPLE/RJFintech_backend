@@ -33,21 +33,30 @@ export const authorize = (
         req.body?.subModule ||
         req.body?.module;
 
-      // Extract node context if available (used for node-level authorization e.g. 'initiate')
+      // Extract node context if available. Initiate requests also send the
+      // full body so the backend can inspect nested org/workflow/user nodes.
       const targetNode =
         req.body?.nodeId ||
         req.body?.parentId ||
         req.body?.nodePath ||
-        req.body?.node?.id;
- 
+        req.body?.node?.id ||
+        req.body?.parentNode?.id ||
+        req.body?.parentNode?.nodeId ||
+        req.body?.parentNode?.nodePath ||
+        req.body?.data?.nodeId ||
+        req.body?.data?.nodePath ||
+        req.body?.data?.parentNode?.id ||
+        req.body?.data?.parentNode?.nodeId ||
+        req.body?.data?.parentNode?.nodePath;
+
       if (!userId || !companyId) {
         throw new AppError('Unauthorized: User information missing', 401);
       }
- 
+
       if (!module) {
         throw new AppError('Authorization Denied: Module context missing', 400);
       }
- 
+
       // Fetch authorization status from the backend
       const response = await internalPost<{ authorized: boolean }>(
         `${config.backendAuthUrl}/get-user-access`,

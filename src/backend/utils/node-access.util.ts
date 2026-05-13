@@ -1,10 +1,27 @@
-import { prisma } from '../lib/prisma';
 import { Status } from '@prisma/client';
+import { prisma } from '../lib/prisma';
+
+interface TargetNode {
+  id: string;
+  nodePath: string;
+}
+
+interface ResolvedTargetNodes {
+  nodes: TargetNode[];
+  unresolved: string[];
+}
 
 export class NodeAccessUtil {
+  private static readonly NODE_SCOPED_INITIATE_MODULES = new Set([
+    'ORG_STR',
+    'USER_ACC',
+    'WORK_FLOW',
+  ]);
+
   /**
-   * Verifies if a user has 'initiate' permission for the specific node(s) 
-   * involved in a request.
+   * Verifies if a user has 'initiate' permission for the specific node(s)
+   * involved in a request. Node-scoped initiation never falls back to a broad
+   * module permission when the target node cannot be resolved.
    */
   static async verifyInitiationAccess(
     userId: string,
@@ -13,101 +30,249 @@ export class NodeAccessUtil {
     body: any,
   ): Promise<boolean> {
     try {
-      // 1. Resolve target nodes based on module logic
-      const targetNodeIds = await this.resolveTargetNodeIds(companyId, module, body);
+      const { nodes, unresolved } = await this.resolveTargetNodes(
+        companyId,
+        module,
+        body,
+      );
 
-      // If no node context is found, we fall back to the general module-level check 
-      // (handled by the caller) or allow it if the module doesn't require node context.
-      if (targetNodeIds.length === 0) {
-        return true; 
+      if (unresolved.length > 0) {
+        console.warn(
+          `[NodeAccess] Unable to resolve initiate node(s) for module ${module}: ${unresolved.join(', ')}`,
+        );
+        return false;
       }
 
-      // 2. Check if user has initiate permission for ALL target nodes
-      // (A global admin or global access user bypasses this)
-      for (const nodeId of targetNodeIds) {
-        const hasAccess = await prisma.userAccess.findFirst({
-          where: {
-            userId,
-            companyId,
-            user: {
-              userMappings: {
-                some: { companyId, status: Status.ACTIVE },
-              },
-            },
-            OR: [
-              { roleCode: 'SAAS_ADMIN' },
-              { isGlobalAccess: true },
-              {
-                nodeId,
-                role: {
-                  subCategory: module,
-                  initiate: true,
-                },
-              },
-            ],
-          },
-        });
-
-        if (!hasAccess) {
-          console.warn(`[NodeAccess] User ${userId} denied 'initiate' for node ${nodeId} in module ${module}`);
+      if (nodes.length === 0) {
+        if (this.NODE_SCOPED_INITIATE_MODULES.has(module)) {
+          console.warn(
+            `[NodeAccess] Missing node context for '${module}' initiate request`,
+          );
           return false;
         }
+
+        return this.hasCompanyInitiateAccess(userId, companyId, module);
       }
 
-      return true;
+      const accessRecords = await this.getInitiateAccessRecords(
+        userId,
+        companyId,
+        module,
+      );
+
+      const hasEveryNode = nodes.every((node) =>
+        accessRecords.some((access: any) => this.coversNode(access, node)),
+      );
+
+      if (!hasEveryNode) {
+        console.warn(
+          `[NodeAccess] User ${userId} denied 'initiate' for ${module} node(s): ${nodes
+            .map((node) => node.nodePath)
+            .join(', ')}`,
+        );
+      }
+
+      return hasEveryNode;
     } catch (error) {
-      console.error('[NodeAccess] Error during initiation access check:', error);
+      console.error(
+        '[NodeAccess] Error during initiation access check:',
+        error,
+      );
       return false;
     }
   }
 
   /**
-   * Extracts relevant node IDs from the request body based on the module.
+   * Extracts and resolves relevant nodes from the request body based on module.
    */
-  private static async resolveTargetNodeIds(
+  private static async resolveTargetNodes(
     companyId: string,
     module: string,
     body: any,
-  ): Promise<string[]> {
-    const nodes = new Set<string>();
+  ): Promise<ResolvedTargetNodes> {
+    const identifiers = new Set<string>();
+    const data = body?.data ?? {};
 
-    // Helper to resolve ID from path or ID
-    const resolve = async (val: any) => {
-      if (!val) return;
-      if (this.isUUID(val)) {
-        nodes.add(val);
-      } else {
-        const node = await prisma.orgStructure.findFirst({
-          where: { companyId, nodePath: val },
-          select: { id: true },
-        });
-        if (node) nodes.add(node.id);
+    const addIdentifier = (value: unknown) => {
+      if (typeof value === 'string' && value.trim()) {
+        identifiers.add(value.trim());
       }
     };
 
     if (module === 'ORG_STR') {
-      // For creating a node: parentId is the target
-      await resolve(body.parentId);
-      // For updating/deleting: nodeId or nodePath
-      await resolve(body.nodeId);
-      await resolve(body.nodePath);
+      const parentNode = body?.parentNode ?? data?.parentNode ?? {};
+      addIdentifier(body?.parentId);
+      addIdentifier(data?.parentId);
+      addIdentifier(parentNode?.id);
+      addIdentifier(parentNode?.nodeId);
+      addIdentifier(parentNode?.nodePath);
+      addIdentifier(body?.nodeId);
+      addIdentifier(data?.nodeId);
+      addIdentifier(body?.nodePath);
+      addIdentifier(data?.nodePath);
     } else if (module === 'WORK_FLOW') {
-      await resolve(body.nodeId);
+      addIdentifier(body?.nodeId);
+      addIdentifier(data?.nodeId);
+      addIdentifier(body?.nodePath);
+      addIdentifier(data?.nodePath);
     } else if (module === 'USER_ACC') {
-      // For user onboarding: check all nodes in permissions array
-      if (Array.isArray(body.permissions)) {
-        for (const perm of body.permissions) {
-          await resolve(perm.nodeId);
-          await resolve(perm.nodePath);
-        }
+      const permissions = Array.isArray(body?.permissions)
+        ? body.permissions
+        : Array.isArray(data?.permissions)
+          ? data.permissions
+          : [];
+
+      for (const permission of permissions) {
+        addIdentifier(permission?.nodeId);
+        addIdentifier(permission?.nodePath);
       }
+    } else {
+      addIdentifier(body?.nodeId);
+      addIdentifier(data?.nodeId);
+      addIdentifier(body?.nodePath);
+      addIdentifier(data?.nodePath);
     }
 
-    return Array.from(nodes);
+    const resolvedNodes = new Map<string, TargetNode>();
+    const unresolved: string[] = [];
+
+    for (const identifier of identifiers) {
+      const node = await prisma.orgStructure.findFirst({
+        where: this.isUUID(identifier)
+          ? { id: identifier, companyId }
+          : { nodePath: identifier, companyId },
+        select: { id: true, nodePath: true },
+      });
+
+      if (!node) {
+        unresolved.push(identifier);
+        continue;
+      }
+
+      resolvedNodes.set(node.id, node);
+    }
+
+    return {
+      nodes: Array.from(resolvedNodes.values()),
+      unresolved,
+    };
   }
 
-  private static isUUID(val: string): boolean {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    return typeof val === 'string' && uuidRegex.test(val);
+  private static async hasCompanyInitiateAccess(
+    userId: string,
+    companyId: string,
+    module: string,
+  ): Promise<boolean> {
+    const access = await prisma.userAccess.findFirst({
+      where: {
+        userId,
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: Status.ACTIVE },
+          },
+        },
+        OR: [
+          { roleCode: 'SAAS_ADMIN' },
+          { isGlobalAccess: true },
+          {
+            role: {
+              subCategory: module,
+              initiate: true,
+            },
+          },
+        ],
+      },
+    });
+
+    return !!access;
+  }
+
+  private static async getInitiateAccessRecords(
+    userId: string,
+    companyId: string,
+    module: string,
+  ) {
+    return prisma.userAccess.findMany({
+      where: {
+        userId,
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: Status.ACTIVE },
+          },
+        },
+        OR: [
+          { roleCode: 'SAAS_ADMIN' },
+          { isGlobalAccess: true },
+          {
+            role: {
+              subCategory: module,
+              initiate: true,
+            },
+          },
+        ],
+      },
+      include: {
+        orgStructure: {
+          select: { id: true, nodePath: true },
+        },
+        role: {
+          select: {
+            subCategory: true,
+            initiate: true,
+          },
+        },
+      },
+    });
+  }
+
+  private static coversNode(access: any, targetNode: TargetNode): boolean {
+    if (access.roleCode === 'SAAS_ADMIN' || access.isGlobalAccess) {
+      return true;
+    }
+
+    if (!access.role?.initiate || !access.orgStructure?.nodePath) {
+      return false;
+    }
+
+    const accessPath = access.orgStructure.nodePath;
+    const targetPath = targetNode.nodePath;
+
+    switch (access.accessCategory) {
+      case 'ALL_CHILD':
+        return (
+          targetPath === accessPath || targetPath.startsWith(`${accessPath}.`)
+        );
+
+      case 'IMMEDIATE_CHILD':
+        return (
+          targetPath === accessPath ||
+          this.getParentPath(targetPath) === accessPath
+        );
+
+      case 'NODE':
+      default:
+        return targetNode.id === access.nodeId;
+    }
+  }
+
+  private static getParentPath(nodePath: string): string | null {
+    const parts = nodePath.split('.');
+    if (parts.length <= 1) {
+      return null;
+    }
+
+    return parts.slice(0, -1).join('.');
+  }
+
+  private static isUUID(val: unknown): boolean {
+    if (typeof val !== 'string') {
+      return false;
+    }
+
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(val);
   }
 }
