@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { Status } from '@prisma/client';
+import { NodeAccessUtil } from '../../utils/node-access.util';
 
 /**
  * Controller for handling authentication and low-level authorization database operations.
@@ -210,16 +211,37 @@ export class AuthDbController {
    * 2. Have 'isGlobalAccess' enabled.
    * 3. Have a specific Role that grants the requested 'action' (view/modify/approve/initiate)
    *    for the specified 'module'.
+   *
+   * If 'targetNode' is provided, the permission must specifically exist for that node
+   * (or be granted by a global role).
    */
   static async getUserAccess(req: Request, res: Response, next: NextFunction) {
     try {
-      const { userId, companyId, module, action } = req.body;
+      const { userId, companyId, module, action, targetNode, body } = req.body;
       if (!userId || !companyId || !module || !action) {
         return res
           .status(400)
           .json({ error: 'userId, companyId, module and action are required' });
       }
-
+ 
+      // 1. For 'initiate' actions, perform granular node-level body inspection
+      if (action === 'initiate') {
+        const isNodeAuthorized = await NodeAccessUtil.verifyInitiationAccess(
+          userId,
+          companyId,
+          module,
+          body,
+        );
+        if (!isNodeAuthorized) {
+          return res.status(200).json({ authorized: false });
+        }
+      }
+ 
+      // 2. Fallback to general role-based check (SAAS_ADMIN, GlobalAccess, or specific node role)
+      const resolvedNodeId = targetNode
+        ? await AuthDbController.resolveNodeId(companyId, targetNode)
+        : null;
+ 
       const userAccess = await prisma.userAccess.findMany({
         where: {
           userId,
@@ -241,14 +263,39 @@ export class AuthDbController {
                 subCategory: module,
                 [action]: true,
               },
+              // If node context is provided, role must be assigned to that specific node
+              ...(resolvedNodeId ? { nodeId: resolvedNodeId } : {}),
             },
           ],
         },
       });
-
+ 
       res.status(200).json({ authorized: userAccess.length > 0 });
     } catch (error) {
       next(error);
     }
+  }
+ 
+  /**
+   * Resolves a node identifier (ID or Path) to a specific nodeId.
+   */
+  private static async resolveNodeId(
+    companyId: string,
+    targetNode: string,
+  ): Promise<string | null> {
+    if (!targetNode) return null;
+ 
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(targetNode)) {
+      return targetNode;
+    }
+ 
+    const node = await prisma.orgStructure.findFirst({
+      where: { companyId, nodePath: targetNode },
+      select: { id: true },
+    });
+ 
+    return node?.id || null;
   }
 }
