@@ -1235,4 +1235,44 @@ export class UserDbController {
       next(error);
     }
   }
+
+  /**
+   * Counts unique users assigned to a specific node path for a company.
+   */
+  static async fetchUsersByNodePathCount(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { nodePath, companyId } = req.body;
+
+      if (!nodePath) {
+        throw new AppError('Node path is required', 400);
+      }
+
+      const uniqueUsers = await prisma.userAccess.findMany({
+        where: {
+          orgStructure: {
+            nodePath: nodePath,
+          },
+          ...(companyId ? { companyId } : {}),
+        },
+        distinct: ['userId'],
+        select: {
+          userId: true,
+        },
+      });
+
+      res.status(200).json({
+        message: 'User count fetched successfully!',
+        code: 200,
+        data: {
+          count: uniqueUsers.length,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }

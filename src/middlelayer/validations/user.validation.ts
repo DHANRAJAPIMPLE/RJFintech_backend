@@ -110,3 +110,7 @@ export const userCompanyNodesSchema = z.object({
     .nullable()
     .optional(),
 });
+
+export const userFetchByNodePathCountSchema = z.object({
+  nodePath: z.string().trim().min(1, 'Node path is required'),
+});

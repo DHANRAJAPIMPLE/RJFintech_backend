@@ -53,6 +53,11 @@ router.post(
   authorize('view'),
   UserController.fetchCompanyNodes,
 );
+router.post(
+  '/user/fetch-users-by-nodepath-count',
+  authorize('view', 'USER_ACC'),
+  UserController.fetchUsersByNodePathCount,
+);
 
 // ----------------------------------------------------------
 

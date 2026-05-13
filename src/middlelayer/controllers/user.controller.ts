@@ -22,6 +22,7 @@ import {
   userStatusUpdateSchema,
   userHistory,
   userCompanyNodesSchema,
+  userFetchByNodePathCountSchema,
 } from '../validations/user.validation';
 
 export class UserController {
@@ -404,6 +405,36 @@ export class UserController {
         code: 200,
         data,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async fetchUsersByNodePathCount(
+    req: Request & { user?: { id: string; companyId: string } },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { nodePath } = zodParse(userFetchByNodePathCountSchema, req.body);
+      const companyId = req.user?.companyId;
+
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendUrl}/internal/user/fetch-users-by-nodepath-count`,
+        {
+          nodePath,
+          companyId,
+        },
+      );
+
+      if (!ok) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch user count',
+          status,
+        );
+      }
+
+      res.status(200).json(data);
     } catch (error) {
       next(error);
     }
