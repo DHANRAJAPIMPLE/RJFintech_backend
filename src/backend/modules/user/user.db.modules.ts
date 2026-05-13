@@ -122,6 +122,7 @@ export class UserDbController {
               userAccesses: {
                 some: {
                   nodeId: { in: allVisibleNodeIds },
+                  accessType: 'PRIMARY',
                 },
               },
             }),
@@ -156,7 +157,7 @@ export class UserDbController {
         : allPendingOnboardings.filter((onb: any) => {
           const permissions = onb.data?.permissions || [];
           return permissions.some((p: any) =>
-            allVisibleNodePaths.includes(p.nodePath),
+            p.accessType === 'PRIMARY' && allVisibleNodePaths.includes(p.nodePath),
           );
         });
 
