@@ -53,12 +53,18 @@ interface ResolveApproversParams {
  */
 export class WorkflowApproverUtil {
   /**
-   * Main entry point — call inside a Prisma $transaction.
-   * Creates WorkflowApprover rows for the given request.
+   * Main entry point for resolving and persisting the approval chain for a new request.
+   * This method is designed to be called within a Prisma transaction to ensure atomic
+   * creation of the request and its associated approver rows.
    *
-   * @param tx     - Prisma transaction client
-   * @param params - Approver resolution parameters
-   * @returns      - Array of created WorkflowApprover records
+   * Why we use it:
+   * - It transforms the abstract workflow definition (levels, rules) into concrete
+   *   assignments (specific user IDs) based on the current organization state.
+   * - It enforces business rules like one-person-per-level and initiator exclusion.
+   *
+   * @param tx     - Prisma transaction client (TxClient) to maintain atomicity.
+   * @param params - Configuration including levelsHash, module context, and initiator details.
+   * @returns      - An object containing the resolved workflowId and the list of created approver records.
    */
   static async resolveAndCreateApprovers(
     tx: TxClient,
@@ -76,6 +82,8 @@ export class WorkflowApproverUtil {
     } = params;
 
     // ── Step 1: Resolve the workflow ─────────────────────────────────────────
+    // We first determine which workflow applies. It could be an explicit structure
+    // (identified by levelsHash) or a default workflow assigned to the company module.
     let workflow = await this.resolveWorkflow(tx, {
       levelsHash,
       module,
@@ -89,12 +97,16 @@ export class WorkflowApproverUtil {
       'WORK_FLOW_WORKFLOW_DEFAULT',
     ];
 
+    // Check if the workflow is a system-restricted "DEFAULT" workflow.
+    // This affects how strictly we resolve approvers (Restricted = Signatories only).
     const isRestrictedWorkflow =
       workflow &&
       (defaultWorkflowNames.includes(workflow.name) ||
         workflow.name.includes('DEFAULT'));
 
     // ── Step 2: Fetch workflow levels (ordered by level number) ──────────────
+    // The levels define the sequence of approvals (Level 1, Level 2, etc.).
+    // We order by level 'asc' to process the chain chronologically.
     let levels = workflow
       ? await (tx as any).workflowLevel.findMany({
           where: { workflowId: workflow.id },
@@ -102,7 +114,8 @@ export class WorkflowApproverUtil {
         })
       : [];
 
-    // Fallback: If no workflow or levels found, use 1M_1C_1 pattern
+    // Fallback logic: If no specific workflow is found, we apply a hardcoded
+    // "1M_1C_1" (1 Maker, 1 Checker, 1 Level) pattern to avoid blocking the request.
     if (!workflow || levels.length === 0) {
       if (!workflow) {
         workflow = { id: 'SYSTEM_DEFAULT', name: '1M_1C_1_WORKFLOW' };
@@ -116,8 +129,9 @@ export class WorkflowApproverUtil {
       ];
     }
 
-    // ── Step 3: Fetch contextual data for approver resolution ────────────────
-    // 3a. Get the initiator's org node path for RM and hierarchy lookups
+    // 3a. Get the initiator's org node path. This is critical for:
+    // - NODE_APPROVER: Finding managers in the same department/team.
+    // - HIERARCHY_APPROVER: Identifying managers higher up the org tree (Ancestors).
     const requestNode = await (tx as any).orgStructure.findUnique({
       where: { id: nodeId },
     });
@@ -129,7 +143,8 @@ export class WorkflowApproverUtil {
       );
     }
 
-    // 3b. Fetch global access users for this company (always eligible as approvers)
+    // 3b. Fetch global access users (Signatories/Admins).
+    // These users are "Wildcard" approvers who can approve any request within their scope.
     const globalAccessUsers = await this.getGlobalAccessUserIds(
       tx,
       companyId,
@@ -137,7 +152,8 @@ export class WorkflowApproverUtil {
       isRestrictedWorkflow,
     );
 
-    // 3c. Fetch the initiator's reporting manager chain
+    // 3c. Fetch the initiator's Reporting Manager (RM) chain.
+    // This resolves the immediate and secondary managers for 'REPORTING_MANAGER' types.
     const rmChain = await this.getReportingManagerChain(
       tx,
       initiatorId,
@@ -152,7 +168,8 @@ export class WorkflowApproverUtil {
     for (const level of levels) {
       const approverSet = new Set<string>();
 
-      // Resolve approver1 (always present)
+      // Resolve primary approver type (e.g., NODE_APPROVER).
+      // We perform a specific database lookup based on the strategy defined in the level.
       const approver1Users = await this.resolveByApproverType(
         tx,
         level.approver1,
@@ -180,15 +197,23 @@ export class WorkflowApproverUtil {
         approver2Users.forEach((id: string) => approverSet.add(id));
       }
 
-      // Always add permission-matched global access users as potential approvers
+      // Always add global access users to every level.
+      // Signatories and SaaS Admins act as ultimate fallback approvers for any level.
       console.log(`[WorkflowApprover] Level ${level.level}: Adding ${globalAccessUsers.length} global access users`);
       globalAccessUsers.forEach((id: string) => approverSet.add(id));
 
-      // A user should only approve one level in the same request.
+      // ── Enforce Maker-Checker Separation & Uniqueness ─────────────────────
+      // 1. One user per level: A user who is an approver for Level 1 cannot be
+      //    an approver for Level 2. This prevents a single user from self-approving
+      //    the entire chain.
       usedApprovers.forEach((id) => approverSet.delete(id));
+      // 2. Maker cannot be Checker: The initiator (Maker) can never approve
+      //    their own request (Checker).
       approverSet.delete(initiatorId);
 
       // ── Step 6: Determine mandatoryCount from AND/OR logic ─────────────────
+      // If the level type is 'AND', we require two unique approvals (approver1 + approver2).
+      // If 'OR', any one approval from the pool is sufficient.
       let mandatoryCount = 1;
       if (level.approverType === 'AND' && level.approver2) {
         mandatoryCount = 2;
@@ -201,6 +226,8 @@ export class WorkflowApproverUtil {
 
       console.log(`[WorkflowApprover] Level ${level.level}: Final Pool Size=${poolSize}, InitiatorExcluded=${isInitiatorInPool}, Available=${availableUniqueApprovers}`);
 
+      // Final validation: Ensure the pool of unique eligible approvers meets
+      // the minimum mandatory count required for this level.
       if (availableUniqueApprovers < mandatoryCount) {
         throw new AppError(
           `Insufficient approvers at level ${level.level}. Need at least ${mandatoryCount} unique approver(s), found ${availableUniqueApprovers}. The initiator cannot be an approver in their own workflow.`,
@@ -239,11 +266,13 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Resolves the correct Workflow to use.
-   * Priority:
-   * 1. If workflowId is provided, use that exact workflow.
-   * 2. Otherwise, fetch the default workflow for this module + subModule in the company.
-   *    Default workflows are identified by name pattern '{SUBMODULE}_WORKFLOW_DEFAULT'.
+   * Resolves the correct Workflow to use for a specific company context.
+   *
+   * Logic:
+   * 1. If 'levelsHash' is provided (customized workflow via UI), we fetch that
+   *    specific version to ensure structure integrity.
+   * 2. Otherwise, we fetch the 'DEFAULT' workflow assigned to that company module.
+   *    Default workflows act as global templates (e.g. "USER_ACC_WORKFLOW_DEFAULT").
    */
   private static async resolveWorkflow(
     tx: TxClient,
@@ -254,7 +283,7 @@ export class WorkflowApproverUtil {
       companyId: string;
     },
   ) {
-    // Explicit levelsHash provided — use it to find the unique workflow structure
+    // Priority 1: Fetch by explicit structure hash
     if (opts.levelsHash) {
       const workflow = await (tx as any).workflow.findFirst({
         where: { levelsHash: opts.levelsHash, companyId: opts.companyId },
@@ -268,8 +297,7 @@ export class WorkflowApproverUtil {
       return workflow;
     }
 
-    // No explicit workflow — find the default for this section
-    // Default workflows are named like 'USER_ACC_WORKFLOW_DEFAULT'
+    // Priority 2: Fetch the default template for the module/subModule
     const defaultWorkflow = await (tx as any).workflow.findFirst({
       where: {
         companyId: opts.companyId,
@@ -284,12 +312,14 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Resolves user IDs based on the ApproverType enum.
+   * Router for approver resolution strategies.
+   * It maps the abstract ApproverType enum to specific database lookup functions.
    *
-   * @param type       - GLOBAL_APPROVER | REPORTING_MANAGER | NODE_APPROVER | HIERARCHY_APPROVER
-   * @param companyId  - Company context
-   * @param node       - The org node the request is scoped to
-   * @param rmChain    - Pre-fetched reporting manager chain for the initiator
+   * Strategies:
+   * - GLOBAL_APPROVER: Uses company-wide signatories.
+   * - REPORTING_MANAGER: Uses the initiator's manager chain.
+   * - NODE_APPROVER: Uses managers assigned to the SAME org node.
+   * - HIERARCHY_APPROVER: Uses managers assigned to PARENT org nodes.
    */
   private static async resolveByApproverType(
     tx: TxClient,
@@ -351,9 +381,14 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Walks up the reporting manager chain for a user within a company.
-   * Returns an array of manager user IDs (excludes the user themselves).
-   * Stops when no further manager is found or a cycle is detected.
+   * Resolves the reporting lineage for a user.
+   * It recursively fetches managers up the chain using the 'reportingManager' field
+   * in UserMapping. This is vital for hierarchical approvals.
+   *
+   * Logic:
+   * - Recursive walk up the 'user_mapping' table.
+   * - Includes cycle detection to prevent infinite loops (Set<visited>).
+   * - Limited to 10 levels to prevent deep recursion performance issues.
    */
   private static async getReportingManagerChain(
     tx: TxClient,
@@ -419,13 +454,17 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Fetches user IDs who have an approve-capable role on any PARENT node
-   * in the ltree path hierarchy.
+   * Resolves managers from the parent levels of the organizational hierarchy.
+   * Uses ltree paths to identify ancestor nodes.
    *
-   * For example, if node path is 'COMPANY.DIVISION.DEPT', this checks:
-   * - 'COMPANY'
-   * - 'COMPANY.DIVISION'
-   * (Excludes the node itself — that's covered by NODE_APPROVER.)
+   * Example: For a request at 'NEXORA.HR.RECRUITMENT', it checks 'NEXORA' and 'NEXORA.HR'.
+   *
+   * Logic:
+   * - Splits the nodePath into parts to reconstruct parent paths.
+   * - Fetches users with 'approve: true' on these parent nodes.
+   * - Enforces Propagation Rules:
+   *   - ALL_CHILD: Access propagates to all descendants.
+   *   - IMMEDIATE_CHILD: Access propagates ONLY to direct children.
    */
   private static async getHierarchyApprovers(
     tx: TxClient,
@@ -581,11 +620,14 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Fetches all user IDs with Global Access for a company.
-   * Global-access users are eligible as approvers across all levels,
-   * BUT only if they have `approve: true` on their linked role
-   * (or have no role assigned — roleCode is null).
-   * These users must also have an ACTIVE mapping to the company.
+   * Resolves Global Access users (SaaS Admins, Signatories).
+   * Global access users have visibility across the entire company.
+   *
+   * Logic:
+   * - Filters by `isGlobalAccess: true` in the 'user_access' table.
+   * - Validates that the user's role has `approve: true` for the target subModule.
+   * - SaaS Admins are always included as they have super-admin privileges.
+   * - Role-less global users (Signatories) are always included as ultimate approvers.
    */
   static async getGlobalAccessUserIds(
     tx: TxClient,
@@ -594,6 +636,7 @@ export class WorkflowApproverUtil {
     isRestricted: boolean = false,
   ): Promise<string[]> {
     if (isRestricted) {
+      // In restricted (Default) workflows, we only allow pure Signatories (role-less global users).
       return this.getSignatoryIds(tx, companyId);
     }
     // Fetch all global-access records with their linked role
@@ -621,14 +664,12 @@ export class WorkflowApproverUtil {
       },
     });
 
-    // Include the user only if:
-    //   (a) they are global (isGlobalAccess: true)
-    //   AND
-    //   (b) they are a role-less signatory, SAAS_ADMIN, or their role can
-    //       approve this exact subModule
+    // Inclusion Logic:
+    // 1. Role-less Signatory (Pure Global Access)
+    // 2. SaaS Admin (Super Admin context)
+    // 3. Department Admin (Role matches subModule + Approve permission)
     const eligibleUserIds = accesses
       .filter((a: any) => {
-        // If no role, they are a pure signatory (role-less isGlobalAccess: true)
         if (!a.roleCode) return true;
 
         const hasApprove = a.role?.approve === true;
@@ -638,8 +679,6 @@ export class WorkflowApproverUtil {
         return hasApprove && (subCategoryMatches || isSaasAdmin);
       })
       .map((a: any) => a.userId);
-
-  
 
     return Array.from(new Set<string>(eligibleUserIds));
   }
@@ -670,11 +709,16 @@ export class WorkflowApproverUtil {
 
   /**
    * Retrieves all eligible approver IDs for a specific request across all pending levels.
-   * Used by the action endpoints to verify if a user is authorized to approve.
+   * This is used by the authorization middleware and controllers to verify if a user
+   * has the right to take action on a request.
    *
-   * @param reqId    - The request record ID
-   * @param reqTable - Table identifier ('user_onboarding' | 'org_structure_req' | 'workflow_req')
-   * @returns        - Flat array of unique approver user IDs across all pending levels
+   * Logic:
+   * - Queries the 'workflow_approver' table for all 'PENDING' rows tied to the reqId.
+   * - Collects and deduplicates all user IDs from the 'approversList' JSON column.
+   *
+   * @param reqId    - The request record ID (UserOnboarding, etc.).
+   * @param reqTable - Table identifier.
+   * @returns        - Flat array of unique approver user IDs.
    */
   static async getEligibleApproversForRequest(
     reqId: string,
@@ -697,9 +741,12 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Gets the current pending level for a request.
-   * Returns the lowest-numbered level that is still PENDING.
-   * Returns null if all levels are approved.
+   * Identifies the current active approval level for a request.
+   * In a multi-level workflow, approvals must happen sequentially (Level 1 then Level 2).
+   *
+   * Logic:
+   * - Fetches the first 'PENDING' level ordered by level number ascending.
+   * - If Level 1 is APPROVED, it will return Level 2.
    */
   static async getCurrentPendingLevel(reqId: string, reqTable: string) {
     const pendingLevel = await prisma.workflowApprover.findFirst({
@@ -711,14 +758,20 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Marks a specific approval level as APPROVED.
-   * Returns the next pending level if it exists, or null if all levels are now approved.
+   * Transitions a specific workflow level to the 'APPROVED' state.
+   * After marking a level as approved, it checks if there are any subsequent levels.
    *
-   * @param reqId    - Request ID
-   * @param reqTable - Table identifier
-   * @param level    - The level number being approved
-   * @param tx       - Transaction client
-   * @returns        - The next pending level row, or null if all done
+   * Logic:
+   * 1. Updates the target level row to 'APPROVED'.
+   * 2. Searches for the next level in the sequence that is still 'PENDING'.
+   * 3. Returns the next level metadata to the caller (so they can decide if the
+   *    entire request is finished or just partially approved).
+   *
+   * @param tx       - Transaction client.
+   * @param reqId    - Request ID.
+   * @param reqTable - Table identifier.
+   * @param level    - The level number being processed.
+   * @returns        - The next pending level row, or null if this was the final level.
    */
   static async approveLevel(
     tx: TxClient,
@@ -742,11 +795,9 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Marks ALL levels for a request as REJECTED.
-   *
-   * @param tx       - Transaction client
-   * @param reqId    - Request ID
-   * @param reqTable - Table identifier
+   * Transitions ALL levels for a request to the 'REJECTED' state.
+   * Rejection is immediate and terminal — if one level rejects, the entire
+   * workflow stops.
    */
   static async rejectAllLevels(tx: TxClient, reqId: string, reqTable: string) {
     await (tx as any).workflowApprover.updateMany({
@@ -756,14 +807,13 @@ export class WorkflowApproverUtil {
   }
 
   /**
-   * Enriches a stored approversList with all global access users for the company.
-   * Excludes the initiator (maker can't be checker).
-   * Used by history APIs to ensure complete approver visibility.
+   * Enriches a basic approvers list with global company approvers.
+   * Used primarily for history and audit logs to show everyone who *could*
+   * have approved the request at that time.
    *
-   * @param companyId         - The company ID
-   * @param storedApproverIds - The approver IDs stored in WorkflowApprover.approversList
-   * @param initiatorId       - The user who initiated the request (to exclude)
-   * @returns                 - Complete array of unique eligible approver IDs
+   * Logic:
+   * - Combines the stored IDs with active global users and subModule admins.
+   * - Ensures the initiator is always excluded from the final list.
    */
   static async getEnrichedApproverIds(
     companyId: string,

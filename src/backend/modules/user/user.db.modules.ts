@@ -938,7 +938,7 @@ export class UserDbController {
         },
         orderBy: { createdAt: 'desc' },
       });
-  
+
       // 1. Collect all unique request IDs to fetch their workflow approval status
       const reqIds = Array.from(
         new Set(history.map((h) => h.reqId).filter(Boolean)),
@@ -948,7 +948,7 @@ export class UserDbController {
         where: { reqId: { in: reqIds } },
         orderBy: { level: 'asc' },
       });
-   
+
 
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
@@ -992,7 +992,7 @@ export class UserDbController {
           );
         }
       }
- 
+
       const approverDetails = await prisma.user.findMany({
         where: { id: { in: Array.from(allApproverIds) } },
         select: {
@@ -1019,7 +1019,7 @@ export class UserDbController {
           ];
         }),
       );
- 
+
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
@@ -1201,20 +1201,20 @@ export class UserDbController {
             companyId,
             role: {
               subCategory: subCategory,
-                },
-              },
+            },
+          },
           include: {
             orgStructure: {
-          select: {
-            nodeName: true,
-            nodePath: true,
-            nodeType: true,
-            workflows: {
-              where: { subModule: subCategory },
               select: {
-                levelsHash: true,
-                name: true,
-                alias: true,
+                nodeName: true,
+                nodePath: true,
+                nodeType: true,
+                workflows: {
+                  where: { subModule: subCategory },
+                  select: {
+                    levelsHash: true,
+                    name: true,
+                    alias: true,
                   },
                 },
               },
@@ -1237,7 +1237,7 @@ export class UserDbController {
   }
 
   /**
-   * Counts unique users assigned to a specific node path for a company.
+   * Counts unique users assigned to a specific node path for a company, grouped by subCategory.
    */
   static async fetchUsersByNodePathCount(
     req: Request,
@@ -1251,25 +1251,81 @@ export class UserDbController {
         throw new AppError('Node path is required', 400);
       }
 
-      const uniqueUsers = await prisma.userAccess.findMany({
+      // Fetch all user accesses for this node path, including their roles
+      const userAccesses = await prisma.userAccess.findMany({
         where: {
           orgStructure: {
             nodePath: nodePath,
           },
           ...(companyId ? { companyId } : {}),
         },
-        distinct: ['userId'],
-        select: {
-          userId: true,
+        include: {
+          role: true,
         },
       });
 
+      // Group unique user IDs by subCategory and permissionLevel
+      const countsMap: Record<
+        string,
+        { MANAGER: Set<string>; USER: Set<string>; VIEWER: Set<string> }
+      > = {};
+
+      userAccesses.forEach((ua) => {
+        const subCat = ua.role?.subCategory;
+        const pLevel = ua.role?.permissionLevel?.toUpperCase();
+
+        if (
+          subCat &&
+          pLevel &&
+          (pLevel === 'MANAGER' || pLevel === 'USER' || pLevel === 'VIEWER')
+        ) {
+          if (!countsMap[subCat]) {
+            countsMap[subCat] = {
+              MANAGER: new Set(),
+              USER: new Set(),
+              VIEWER: new Set(),
+            };
+          }
+          countsMap[subCat][pLevel as 'MANAGER' | 'USER' | 'VIEWER'].add(
+            ua.userId,
+          );
+        }
+      });
+
+      // Transform the map into the desired response format and filter out zero-count sub-categories
+      const finalData: Record<string, any> = {};
+
+      Object.entries(countsMap).forEach(([subCat, levels]) => {
+        const managerCount = levels.MANAGER.size;
+        const userCount = levels.USER.size;
+        const viewerCount = levels.VIEWER.size;
+
+        // Only include sub-categories that have at least one user in any level
+        if (managerCount > 0 || userCount > 0 || viewerCount > 0) {
+          finalData[subCat] = [
+            {
+              label: 'Checker',
+              count: managerCount,
+              permissionlevel: 'MANAGER',
+            },
+            {
+              label: 'Maker',
+              count: userCount,
+              permissionlevel: 'USER',
+            },
+            {
+              label: 'Viewer',
+              count: viewerCount,
+              permissionlevel: 'VIEWER',
+            },
+          ];
+        }
+      });
+
       res.status(200).json({
-        message: 'User count fetched successfully!',
+        message: 'User counts fetched successfully!',
         code: 200,
-        data: {
-          count: uniqueUsers.length,
-        },
+        data: finalData,
       });
     } catch (error) {
       next(error);
