@@ -236,9 +236,24 @@ export class AuthDbController {
       }
 
       // Fallback to general role-based check (SAAS_ADMIN, GlobalAccess, or specific node role)
-      const resolvedNodeId = targetNode
-        ? await AuthDbController.resolveNodeId(companyId, targetNode)
+      const targetNodeIdentifier =
+        AuthDbController.normalizeNodeIdentifier(targetNode);
+      const resolvedNodeId = targetNodeIdentifier
+        ? await AuthDbController.resolveNodeId(companyId, targetNodeIdentifier)
         : null;
+      const roleAccessFilters =
+        targetNodeIdentifier && !resolvedNodeId
+          ? []
+          : [
+              {
+                role: {
+                  subCategory: module,
+                  [action]: true,
+                },
+                // If node context is provided, role must be assigned to that specific node
+                ...(resolvedNodeId ? { nodeId: resolvedNodeId } : {}),
+              },
+            ];
 
       const userAccess = await prisma.userAccess.findMany({
         where: {
@@ -256,14 +271,7 @@ export class AuthDbController {
           OR: [
             { roleCode: 'SAAS_ADMIN' },
             { isGlobalAccess: true },
-            {
-              role: {
-                subCategory: module,
-                [action]: true,
-              },
-              // If node context is provided, role must be assigned to that specific node
-              ...(resolvedNodeId ? { nodeId: resolvedNodeId } : {}),
-            },
+            ...roleAccessFilters,
           ],
         },
       });
@@ -275,25 +283,34 @@ export class AuthDbController {
   }
 
   /**
-   * Resolves a node identifier (ID or Path) to a specific nodeId.
+   * Resolves a node path to a specific nodeId.
    */
   private static async resolveNodeId(
     companyId: string,
-    targetNode: string,
+    targetNode: unknown,
   ): Promise<string | null> {
-    if (!targetNode) return null;
-
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(targetNode)) {
-      return targetNode;
-    }
+    const nodeIdentifier = AuthDbController.normalizeNodeIdentifier(targetNode);
+    if (!nodeIdentifier) return null;
 
     const node = await prisma.orgStructure.findFirst({
-      where: { companyId, nodePath: targetNode },
+      where: { companyId, nodePath: nodeIdentifier },
       select: { id: true },
     });
 
     return node?.id || null;
+  }
+
+  private static normalizeNodeIdentifier(targetNode: unknown): string | null {
+    if (typeof targetNode === 'string') {
+      const trimmed = targetNode.trim();
+      return trimmed || null;
+    }
+
+    if (!targetNode || typeof targetNode !== 'object') {
+      return null;
+    }
+
+    const node = targetNode as Record<string, unknown>;
+    return AuthDbController.normalizeNodeIdentifier(node.nodePath);
   }
 }

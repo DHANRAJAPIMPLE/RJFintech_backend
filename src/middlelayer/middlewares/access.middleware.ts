@@ -4,16 +4,59 @@ import { internalPost } from '../utils/internal-fetch.util';
 import { config } from '../config';
 import type { AuthRequest } from './auth.middleware';
 
+const normalizeNodeIdentifier = (value: unknown): string | undefined => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const node = value as Record<string, unknown>;
+  return normalizeNodeIdentifier(node.nodePath);
+};
+
+const getTargetNode = (body: any): string | undefined => {
+  const data = body?.data;
+  const candidates = [
+    body?.nodePath,
+    body?.parentNode,
+    body?.node,
+    data?.nodePath,
+    data?.parentNode,
+    data?.node,
+  ];
+
+  for (const candidate of candidates) {
+    const identifier = normalizeNodeIdentifier(candidate);
+    if (identifier) {
+      return identifier;
+    }
+  }
+
+  return undefined;
+};
+
 /**
  * Access Engine Middleware:
  * This middleware is used to enforce granular role-based access control (RBAC).
  * It validates if a user has the necessary permissions (view, modify, approve, initiate)
  * for a specific functional module within a company.
  *
- * Why we use it:
- * - To centralize permission checks.
- * - To ensure that users can only perform actions they are authorized for.
- * - It delegates the actual permission evaluation logic to the backend for consistency.
+ * Why we implement this:
+ * - Centralized Security: Instead of writing 'if' checks in every controller, we use this middleware.
+ * - Context Awareness: It automatically detects the module and target node from the request body,
+ *   making it highly flexible across different features (Users, Org Structure, Workflows).
+ * - Backend Delegation: It sends the request context to the backend, ensuring that complex
+ *   hierarchy logic is evaluated in a single source of truth.
+ *
+ * Logic:
+ * 1. Identifies the user and company from the JWT (via AuthRequest).
+ * 2. Dynamically extracts the module name and target node identifier from the request body.
+ * 3. For 'initiate' actions, it passes the entire request body to the backend to allow for
+ *    deep inspection of multi-node operations (like assigning multiple user permissions).
  *
  * Usage: router.post('/some-route', authorize('initiate', 'ORG_STR'), controller.method);
  */
@@ -35,19 +78,7 @@ export const authorize = (
 
       // Extract node context if available. Initiate requests also send the
       // full body so the backend can inspect nested org/workflow/user nodes.
-      const targetNode =
-        req.body?.nodeId ||
-        req.body?.parentId ||
-        req.body?.nodePath ||
-        req.body?.node?.id ||
-        req.body?.parentNode?.id ||
-        req.body?.parentNode?.nodeId ||
-        req.body?.parentNode?.nodePath ||
-        req.body?.data?.nodeId ||
-        req.body?.data?.nodePath ||
-        req.body?.data?.parentNode?.id ||
-        req.body?.data?.parentNode?.nodeId ||
-        req.body?.data?.parentNode?.nodePath;
+      const targetNode = getTargetNode(req.body);
 
       if (!userId || !companyId) {
         throw new AppError('Unauthorized: User information missing', 401);

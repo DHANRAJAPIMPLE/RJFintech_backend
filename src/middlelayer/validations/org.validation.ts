@@ -48,4 +48,3 @@ export const orgHistory = z
     nodePath: z.string().trim().optional(),
   })
   .strict();
-

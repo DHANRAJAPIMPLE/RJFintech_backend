@@ -11,6 +11,18 @@ interface ResolvedTargetNodes {
   unresolved: string[];
 }
 
+/**
+ * NodeAccessUtil:
+ * This utility centralizes the logic for hierarchical, node-scoped access control.
+ *
+ * Why we implement this:
+ * 1. Granular Permissions: Our system requires permissions to be restricted to specific parts
+ *    of the organizational hierarchy (e.g., a manager only having access to their department).
+ * 2. Multi-Context Logic: Different modules (ORG_STR, USER_ACC, etc.) store node information
+ *    differently in request bodies. This utility abstracts that complexity.
+ * 3. Inheritance Support: It handles 'ltree' based path logic, allowing for permissions
+ *    that can apply to a node and its descendants (ALL_CHILD) or just direct children (IMMEDIATE_CHILD).
+ */
 export class NodeAccessUtil {
   private static readonly NODE_SCOPED_INITIATE_MODULES = new Set([
     'ORG_STR',
@@ -19,9 +31,14 @@ export class NodeAccessUtil {
   ]);
 
   /**
-   * Verifies if a user has 'initiate' permission for the specific node(s)
-   * involved in a request. Node-scoped initiation never falls back to a broad
-   * module permission when the target node cannot be resolved.
+   * Verifies if a user has 'initiate' permission for the specific node(s) involved in a request.
+   *
+   * Logic:
+   * - First, it resolves "target nodes" from the request body (e.g., where a user is being created).
+   * - For security-critical modules (NODE_SCOPED_INITIATE_MODULES), it enforces that a valid
+   *   node context MUST be present.
+   * - It then matches these target nodes against the user's assigned access records,
+   *   considering the hierarchy rules (coversNode).
    */
   static async verifyInitiationAccess(
     userId: string,
@@ -44,14 +61,23 @@ export class NodeAccessUtil {
       }
 
       if (nodes.length === 0) {
+        // If no specific nodes were resolved, check if the user has broad
+        // company-level initiation access (Global Access or SAAS_ADMIN).
+        const hasGlobal = await this.hasGlobalInitiateAccess(userId, companyId);
+
+        if (hasGlobal) {
+          return true;
+        }
+
+        // Only enforce node-scoped restriction if the user DOES NOT have global access.
         if (this.NODE_SCOPED_INITIATE_MODULES.has(module)) {
           console.warn(
-            `[NodeAccess] Missing node context for '${module}' initiate request`,
+            `[NodeAccess] Missing node context for '${module}' initiate request and user ${userId} lacks global access`,
           );
           return false;
         }
 
-        return this.hasCompanyInitiateAccess(userId, companyId, module);
+        return false;
       }
 
       const accessRecords = await this.getInitiateAccessRecords(
@@ -84,6 +110,14 @@ export class NodeAccessUtil {
 
   /**
    * Extracts and resolves relevant nodes from the request body based on module.
+   *
+   * Why this logic is complex:
+   * Each module has a different payload structure. For example:
+   * - ORG_STR: Looks for parentNode.nodePath to verify where a new node is being added.
+   * - USER_ACC: Scans an array of permissions because a user might be assigned to multiple nodes.
+   * - WORK_FLOW: Typically has a single nodePath context.
+   *
+   * It resolves dot-separated node paths to ensure consistency.
    */
   private static async resolveTargetNodes(
     companyId: string,
@@ -93,28 +127,28 @@ export class NodeAccessUtil {
     const identifiers = new Set<string>();
     const data = body?.data ?? {};
 
-    const addIdentifier = (value: unknown) => {
-      if (typeof value === 'string' && value.trim()) {
-        identifiers.add(value.trim());
+    const addFirstIdentifier = (...values: unknown[]) => {
+      for (const value of values) {
+        const identifier = this.normalizeNodeIdentifier(value);
+        if (identifier) {
+          identifiers.add(identifier);
+          return;
+        }
       }
     };
 
     if (module === 'ORG_STR') {
-      const parentNode = body?.parentNode ?? data?.parentNode ?? {};
-      addIdentifier(body?.parentId);
-      addIdentifier(data?.parentId);
-      addIdentifier(parentNode?.id);
-      addIdentifier(parentNode?.nodeId);
-      addIdentifier(parentNode?.nodePath);
-      addIdentifier(body?.nodeId);
-      addIdentifier(data?.nodeId);
-      addIdentifier(body?.nodePath);
-      addIdentifier(data?.nodePath);
+      // The frontend sends parent context as parentNode.nodePath for org creates.
+      addFirstIdentifier(
+        body?.parentNode,
+        data?.parentNode,
+        body?.node,
+        data?.node,
+        body?.nodePath,
+        data?.nodePath,
+      );
     } else if (module === 'WORK_FLOW') {
-      addIdentifier(body?.nodeId);
-      addIdentifier(data?.nodeId);
-      addIdentifier(body?.nodePath);
-      addIdentifier(data?.nodePath);
+      addFirstIdentifier(body, data, body?.nodePath, data?.nodePath);
     } else if (module === 'USER_ACC') {
       const permissions = Array.isArray(body?.permissions)
         ? body.permissions
@@ -123,14 +157,14 @@ export class NodeAccessUtil {
           : [];
 
       for (const permission of permissions) {
-        addIdentifier(permission?.nodeId);
-        addIdentifier(permission?.nodePath);
+        addFirstIdentifier(
+          permission,
+          permission?.node,
+          permission?.orgStructure,
+        );
       }
     } else {
-      addIdentifier(body?.nodeId);
-      addIdentifier(data?.nodeId);
-      addIdentifier(body?.nodePath);
-      addIdentifier(data?.nodePath);
+      addFirstIdentifier(body, data, body?.nodePath, data?.nodePath);
     }
 
     const resolvedNodes = new Map<string, TargetNode>();
@@ -138,9 +172,7 @@ export class NodeAccessUtil {
 
     for (const identifier of identifiers) {
       const node = await prisma.orgStructure.findFirst({
-        where: this.isUUID(identifier)
-          ? { id: identifier, companyId }
-          : { nodePath: identifier, companyId },
+        where: { nodePath: identifier, companyId },
         select: { id: true, nodePath: true },
       });
 
@@ -158,10 +190,9 @@ export class NodeAccessUtil {
     };
   }
 
-  private static async hasCompanyInitiateAccess(
+  private static async hasGlobalInitiateAccess(
     userId: string,
     companyId: string,
-    module: string,
   ): Promise<boolean> {
     const access = await prisma.userAccess.findFirst({
       where: {
@@ -172,20 +203,25 @@ export class NodeAccessUtil {
             some: { companyId, status: Status.ACTIVE },
           },
         },
-        OR: [
-          { roleCode: 'SAAS_ADMIN' },
-          { isGlobalAccess: true },
-          {
-            role: {
-              subCategory: module,
-              initiate: true,
-            },
-          },
-        ],
+        OR: [{ roleCode: 'SAAS_ADMIN' }, { isGlobalAccess: true }],
       },
     });
 
     return !!access;
+  }
+
+  private static normalizeNodeIdentifier(value: unknown): string | null {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed || null;
+    }
+
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+
+    const node = value as Record<string, unknown>;
+    return this.normalizeNodeIdentifier(node.nodePath);
   }
 
   private static async getInitiateAccessRecords(
@@ -227,6 +263,16 @@ export class NodeAccessUtil {
     });
   }
 
+  /**
+   * Evaluates if a specific UserAccess record covers a target node based on hierarchical rules.
+   *
+   * The logic implements three types of scoping:
+   * 1. ALL_CHILD: Permission propagates to the node and all its descendants using path prefix matching.
+   * 2. IMMEDIATE_CHILD: Permission applies to the node and its direct children only.
+   * 3. NODE: Permission is strictly limited to that specific node.
+   *
+   * Global access (SAAS_ADMIN/isGlobalAccess) bypasses these checks.
+   */
   private static coversNode(access: any, targetNode: TargetNode): boolean {
     if (access.roleCode === 'SAAS_ADMIN' || access.isGlobalAccess) {
       return true;
@@ -264,15 +310,5 @@ export class NodeAccessUtil {
     }
 
     return parts.slice(0, -1).join('.');
-  }
-
-  private static isUUID(val: unknown): boolean {
-    if (typeof val !== 'string') {
-      return false;
-    }
-
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    return uuidRegex.test(val);
   }
 }
