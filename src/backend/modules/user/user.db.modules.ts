@@ -709,8 +709,8 @@ export class UserDbController {
               });
 
               if (role && node) {
-                // Check if this specific access already exists to enforce uniqueness
-                const existingAccess = await tx.userAccess.findUnique({
+                // Use upsert to handle overlapping permissions (e.g. explicit child node vs propagated from parent)
+                await tx.userAccess.upsert({
                   where: {
                     userId_roleCode_companyId_nodeId: {
                       userId: user.id,
@@ -719,22 +719,16 @@ export class UserDbController {
                       nodeId: node.id,
                     },
                   },
-                });
-
-                if (existingAccess) {
-                  throw new AppError(
-                    `User already has role '${role.roleName}' assigned for this node`,
-                    400,
-                  );
-                }
-
-                await tx.userAccess.create({
-                  data: {
+                  update: {
+                    accessType: accessType as any,
+                    accessCategory: finalCategory as any,
+                  },
+                  create: {
                     userId: user.id,
                     roleCode: role.roleCode,
                     nodeId: node.id,
-                    accessType,
-                    accessCategory: finalCategory,
+                    accessType: accessType as any,
+                    accessCategory: finalCategory as any,
                     companyId: company.id,
                     isGlobalAccess: false,
                   },
@@ -973,7 +967,7 @@ export class UserDbController {
           }
         }
       });
-      console.log(`[UserHistory] Built initiatorMap with ${initiatorMap.size} entries`);
+      // console.log(`[UserHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
       // Filter each stored approver list for active display only. The DB row is not mutated.
       for (const [reqId, levels] of workflowMap.entries()) {

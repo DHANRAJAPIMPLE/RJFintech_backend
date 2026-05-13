@@ -621,7 +621,7 @@ export class OrgStructureDbController {
           }
         }
       });
-      console.log(`[OrgHistory] Built initiatorMap with ${initiatorMap.size} entries`);
+      // console.log(`[OrgHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
       // Filter each stored approver list for active display only. The DB row is not mutated.
       for (const [reqId, levels] of workflowMap.entries()) {
