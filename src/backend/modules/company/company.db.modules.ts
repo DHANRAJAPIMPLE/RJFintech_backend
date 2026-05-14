@@ -599,7 +599,7 @@ export class CompanyDbController {
           const existingAccess = await tx.userAccess.findFirst({
             where: {
               userId: user.id,
-              roleCode: null,
+              roleCode: "CORP_ADMIN",
               companyId: newCompany.id,
               nodeId: rootNode.id,
             },

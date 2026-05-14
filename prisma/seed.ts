@@ -27,6 +27,17 @@ async function main() {
       initiate: true,
     },
     {
+      roleCode: 'CORP_ADMIN',
+      roleName: 'Corp Admin',
+      category: 'ALL',
+      subCategory: 'ALL',
+      permissionLevel: 'ALL',
+      view: true,
+      modify: true,
+      approve: true,
+      initiate: true,
+    },
+    {
       roleCode: 'ACCOUNTS_VIEWER',
       roleName: 'Accounts Viewer',
       category: 'TRANSACTIONAL',
@@ -400,7 +411,7 @@ async function main() {
     where: {
       userId_roleCode_companyId_nodeId: {
         userId: superAdmin.id,
-        roleCode: "SAAS_ADMIN",
+        roleCode: "CORP_ADMIN",
         companyId: company.id,
         nodeId: rootNode.id,
       },
@@ -411,7 +422,7 @@ async function main() {
     await prisma.userAccess.create({
       data: {
         userId: superAdmin.id,
-        roleCode: "SAAS_ADMIN",
+        roleCode: "CORP_ADMIN",
         nodeId: rootNode.id,
         accessType: null,
         companyId: company.id,

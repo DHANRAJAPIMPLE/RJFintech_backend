@@ -346,32 +346,6 @@
       "response": []
     },
     {
-      "name": "{{baseUrl}}/roles/fetch-all",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/roles/fetch-all",
-          "host": [
-            "{{baseUrl}}/roles"
-          ],
-          "path": [
-            "fetch-all"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
       "name": "{{baseUrl}}/company-settings/org/fetch",
       "request": {
         "method": "POST",

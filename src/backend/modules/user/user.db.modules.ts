@@ -412,6 +412,25 @@ export class UserDbController {
     }
 
     const email = onboardingData.data?.basicDetails?.email;
+    const permissions = onboardingData.data?.permissions || [];
+    const hasCorpAdminRole = Array.isArray(permissions) && permissions.some((p: any) => p.roleName === 'Corp Admin');
+
+    // ── Initiator Restriction for Corp Admin ──
+    if (hasCorpAdminRole) {
+      const initiatorAccess = await prisma.userAccess.findFirst({
+        where: {
+          userId: initiatorId,
+          companyId: resolvedCompanyId,
+          isGlobalAccess: true,
+        },
+      });
+      if (!initiatorAccess) {
+        throw new AppError(
+          'Unauthorized: Only a signatory (Global Access user) can initiate a request containing the Corp Admin role',
+          403,
+        );
+      }
+    }
 
     // Fetch all global access users for this company to ensure they are in the master eligible list
     const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'USER_ACC');
@@ -500,104 +519,6 @@ export class UserDbController {
     res.status(201).json(onboarding);
   }
 
-  /**
-   * Creates a new global signatory onboarding request.
-   * This is a specialized version of createUserOnboarding for users with global access.
-   */
-  static async createGlobalSignatoryOnboarding(req: Request, res: Response) {
-    const {
-      initiatorId,
-      companyCode,
-      companyId,
-      groupCode,
-      ...onboardingData
-    } = req.body;
-    let resolvedCompanyId = companyId;
-
-    if (!resolvedCompanyId) {
-      if (!companyCode) {
-        throw new AppError('companyCode or companyId is required', 400);
-      }
-      const company = await prisma.company.findUnique({
-        where: { companyCode },
-      });
-      if (!company) {
-        throw new AppError('Company not found', 404);
-      }
-      resolvedCompanyId = company.id;
-    }
-
-    const email = onboardingData.data?.basicDetails?.email;
-
-    // Fetch all global access users for this company as eligible approvers
-    const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
-      prisma as any,
-      resolvedCompanyId,
-      'USER_ACC',
-    );
-
-    onboardingData.eligibleApprovers = Array.from(new Set(globalUsers)).filter(
-      (id) => id !== initiatorId,
-    );
-
-    const onboarding = await prisma.$transaction(async (tx) => {
-      let groupId: string | null = null;
-      if (groupCode) {
-        const group = await tx.groupCompany.findUnique({
-          where: { groupCode },
-        });
-        if (group) {
-          groupId = group.id;
-        }
-      }
-
-      const onb = await tx.userOnboarding.create({
-        data: {
-          ...onboardingData,
-          companyId: resolvedCompanyId,
-          groupId: groupId,
-        },
-      });
-
-      // Find root node for workflow resolution
-      const rootNode = await tx.orgStructure.findFirst({
-        where: { companyId: resolvedCompanyId, nodeType: 'ROOT' },
-      });
-
-      if (rootNode && initiatorId) {
-        const { workflowId: resolvedWorkflowId } =
-          await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-            module: 'SYSTEM_ACCESS',
-            subModule: 'USER_ACC',
-            companyId: resolvedCompanyId,
-            nodeId: rootNode.id,
-            initiatorId,
-            reqId: onb.id,
-            reqTable: 'user_onboarding',
-          });
-
-        await tx.userOnboarding.update({
-          where: { id: onb.id },
-          data: { workflowId: resolvedWorkflowId },
-        });
-      }
-
-      if (initiatorId && email) {
-        await tx.userHistory.create({
-          data: {
-            email,
-            event: 'INITIATE',
-            eventUserId: initiatorId,
-            companyId: resolvedCompanyId,
-            reqId: onb.id,
-          },
-        });
-      }
-      return onb;
-    });
-
-    res.status(201).json(onboarding);
-  }
 
   /**
    * Fetches a single user onboarding request by its ID.
@@ -691,6 +612,29 @@ export class UserDbController {
       const { basicDetails, permissions } = data || {};
       const { name, email, phone, reportingManager, designation, employeeId } =
         basicDetails || {};
+
+      // ── Approver Restriction and Signatory Check ──
+      const statusStr = status.toString().toLowerCase();
+      const isApproving = statusStr === 'approve' || statusStr === 'approved';
+      const hasCorpAdminRole = Array.isArray(permissions) && permissions.some((p: any) => p.roleName === 'Corp Admin');
+
+      const approverAccess = await prisma.userAccess.findFirst({
+        where: {
+          userId: approverId,
+          companyId: onboarding.companyId,
+          isGlobalAccess: true,
+        },
+      });
+      const approverIsSignatory = !!approverAccess;
+
+      if (hasCorpAdminRole && isApproving) {
+        if (!approverIsSignatory) {
+          throw new AppError(
+            'Unauthorized: Only a signatory (Global Access user) can approve a request containing the Corp Admin role',
+            403,
+          );
+        }
+      }
 
       const result = await prisma.$transaction(async (tx) => {
         // =========================
@@ -800,9 +744,11 @@ export class UserDbController {
           });
 
           // 3. Setup Granular Access Permissions
-          if (basicDetails.isGlobalUser === true) {
+          // Rule 1: isGlobalUser flag OR assigning Corp Admin role grants global access
+          // Rule 2: If approved by a signatory, the user gets global access
+          if (basicDetails.isGlobalUser === true || hasCorpAdminRole || approverIsSignatory) {
             // Use nodePath from permissions if available, otherwise fallback to company ROOT node
-            const globalPerm = Array.isArray(permissions) ? permissions[0] : null;
+            const globalPerm = Array.isArray(permissions) ? permissions.find((p: any) => p.roleName === 'Corp Admin' || p.isGlobalAccess) : null;
             const rootNode = await tx.orgStructure.findFirst({
               where: {
                 companyId: company.id,
@@ -813,11 +759,10 @@ export class UserDbController {
             });
 
             if (rootNode) {
-
               const existingAccess = await tx.userAccess.findFirst({
                 where: {
                   userId: user.id,
-                  roleCode: null,
+                  roleCode: "CORP_ADMIN",
                   companyId: company.id,
                   nodeId: rootNode.id,
                 },
@@ -836,7 +781,7 @@ export class UserDbController {
                 await tx.userAccess.create({
                   data: {
                     userId: user.id,
-                    roleCode: null,
+                    roleCode: "CORP_ADMIN",
                     nodeId: rootNode.id,
                     companyId: company.id,
                     isGlobalAccess: true,
@@ -845,13 +790,12 @@ export class UserDbController {
                   },
                 });
               }
-
             }
           }
           if (Array.isArray(permissions)) {
             for (const perm of permissions) {
               const { accessType, roleName, nodePath, accessCategory } = perm;
-              if (!roleName) continue;
+              if (!roleName || roleName === 'Corp Admin') continue; // Skip Corp Admin as it's handled above
               const finalCategory = accessCategory;
 
 

@@ -28,11 +28,7 @@ router.post(
   authorize('initiate', 'USER_ACC'),
   UserController.initiateUserOnboarding,
 );
-router.post(
-  '/user/initiate-global-signatory',
-  checkGlobalUser(),
-  UserController.initiateGlobalSignatoryOnboarding,
-);
+
 router.post(
   '/user/action',
   authorize('approve', 'USER_ACC'),

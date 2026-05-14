@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 test_collection
+Initate.postman_collection.json
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

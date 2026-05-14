@@ -246,7 +246,7 @@ model Roles {
 model UserAccess {
   id             String       @id @default(uuid())
   userId         String       @map("user_id")
-  roleCode       String?      @map("role_code")
+  roleCode       String       @map("role_code")
   nodeId         String       @map("node_id")
   accessType     AccessType?  @map("access_type")
   accessCategory UserCategory @default(NODE) @map("user_category")
