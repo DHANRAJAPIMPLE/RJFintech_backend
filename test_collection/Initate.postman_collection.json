@@ -8,14 +8,14 @@
     "_collection_link": "https://go.postman.co/collection/53507780-a8673ddb-5999-4f2e-b62f-54606196813f?source=collection_link"
   },
   "item": [
-    {
-      "name": "{{baseUrl}}/auth/register",
+  {
+      "name": "{{baseUrl}}/auth/login",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"email\":\"test4@gmail.com\",\r\n    \"password\":\"Test@123\", \r\n    \"name\":\"test1\",\r\n     \"phone\":\"9146890521\"\r\n}",
+          "raw": "{\r\n    \"email\": \"{{adminEmail}}\",\r\n    \"password\": \"{{adminPassword}}\",\r\n    \"action\": 0\r\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -23,12 +23,12 @@
           }
         },
         "url": {
-          "raw": "{{baseUrl}}/auth/register",
+          "raw": "{{baseUrl}}/auth/login",
           "host": [
             "{{baseUrl}}/auth"
           ],
           "path": [
-            "register"
+            "login"
           ]
         }
       },
@@ -61,32 +61,7 @@
       },
       "response": []
     },
-    {
-      "name": "{{baseUrl}}/auth/login",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\r\n    \"email\": \"{{adminEmail}}\",\r\n    \"password\": \"{{adminPassword}}\",\r\n    \"action\": 0\r\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/login",
-          "host": [
-            "{{baseUrl}}/auth"
-          ],
-          "path": [
-            "login"
-          ]
-        }
-      },
-      "response": []
-    },
+  
     {
       "name": "{{baseUrl}}/admin/initiate",
       "request": {
@@ -118,32 +93,6 @@
           ],
           "path": [
             "initiate"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "{{baseUrl}}/auth/logout",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/auth/logout",
-          "host": [
-            "{{baseUrl}}/auth"
-          ],
-          "path": [
-            "logout"
           ]
         }
       },
@@ -267,59 +216,6 @@
           ],
           "path": [
             "action"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "{{baseUrl}}/roles/create",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": " [\r\n        {\r\n            \r\n            \"roleName\": \"Accounts Viewer\",\r\n            \"category\": \"TRANSACTIONAL\",\r\n            \"permissionLevel\": \"VIEWER\",\r\n            \"roleCode\":\"ACCOUNTS_VIEWRS\",\r\n            \"subCategory\": \"ACCOUNTS\",\r\n            \"capabilities\": {\r\n                \"view\": true,\r\n                \"modify\": false,\r\n                \"approve\": false,\r\n                \"initiate\": false\r\n            },\r\n            \"isActive\": true\r\n}\r\n    ]",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/roles/create",
-          "host": [
-            "{{baseUrl}}/roles"
-          ],
-          "path": [
-            "create"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "{{baseUrl}}/roles/fetch-all",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/company-settings/role/fetch-all",
-          "host": [
-            "{{baseUrl}}/company-settings"
-          ],
-          "path": [
-            "role",
-            "fetch-all"
           ]
         }
       },
@@ -497,33 +393,6 @@
           "path": [
             "org",
             "fetch"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "{{baseUrl}}/company-settings/user/update-status",
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\r\n  \"email\": \"admin@globaltech.com\"\r\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": "{{baseUrl}}/company-settings/user/update-status",
-          "host": [
-            "{{baseUrl}}/company-settings"
-          ],
-          "path": [
-            "user",
-            "update-status"
           ]
         }
       },
@@ -736,29 +605,6 @@
       "response": []
     },
     {
-      "name": "Untitled Request",
-      "protocolProfileBehavior": {
-        "disableBodyPruning": true
-      },
-      "request": {
-        "method": "GET",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": "{\r\n name:\"\"\r\n module:\"\"\r\n submodule:\"\"\r\n level:[\r\n{\r\n    id:1;\r\n    approver1:\r\n    approvetype: \r\n    approver2\r\n\r\n},\r\n{\r\n    id:2;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n}\r\n,{\r\n    id:3;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n}{\r\n    id:4;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n},\r\n{\r\n    id:5;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n}\r\n ]\r\n\r\n\r\n}",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
-        },
-        "url": {
-          "raw": ""
-        }
-      },
-      "response": []
-    },
-    {
       "name": "{{baseUrl}}/company-settings/user/initiate-global-signatory",
       "request": {
         "method": "POST",
@@ -852,6 +698,32 @@
           "path": [
             "user",
             "fetch-company-nodes"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "{{baseUrl}}/auth/logout",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/logout",
+          "host": [
+            "{{baseUrl}}/auth"
+          ],
+          "path": [
+            "logout"
           ]
         }
       },
