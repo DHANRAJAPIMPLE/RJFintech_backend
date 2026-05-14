@@ -115,17 +115,32 @@ export class UserDbController {
               companyId: resolvedCompanyId,
             },
           },
-          // If not global, only fetch users who reside in nodes visible to the requester
+          // Visibility Rule: 
+          // - Global users (Signatories) can see all users.
+          // - Non-global users can ONLY see users within their assigned node scope.
+          // - Non-global users CANNOT see any user who has isGlobalAccess: true.
           ...(isGlobal
             ? {}
             : {
-              userAccesses: {
-                some: {
-                  nodeId: { in: allVisibleNodeIds },
-                  accessType: 'PRIMARY',
-                },
-              },
-            }),
+                AND: [
+                  {
+                    userAccesses: {
+                      some: {
+                        nodeId: { in: allVisibleNodeIds },
+                        accessType: 'PRIMARY',
+                      },
+                    },
+                  },
+                  {
+                    userAccesses: {
+                      none: {
+                        isGlobalAccess: true,
+                        companyId: resolvedCompanyId,
+                      },
+                    },
+                  },
+                ],
+              }),
         },
         include: {
           userMappings: {
@@ -151,15 +166,29 @@ export class UserDbController {
         },
       });
 
-      // Filter pending requests: if not global, only show those whose permissions match user's visible scope
+      // Filter pending requests:
+      // - Global users can see all pending requests.
+      // - Non-global users can ONLY see requests within their assigned node scope.
+      // - Non-global users CANNOT see any pending request for a Global Access user (isGlobalUser: true or Corp Admin role).
       const pendingOnboardings = isGlobal
         ? allPendingOnboardings
         : allPendingOnboardings.filter((onb: any) => {
-          const permissions = onb.data?.permissions || [];
-          return permissions.some((p: any) =>
-            p.accessType === 'PRIMARY' && allVisibleNodePaths.includes(p.nodePath),
-          );
-        });
+            const data = onb.data as any;
+            const basic = data?.basicDetails || {};
+            const permissions = data?.permissions || [];
+
+            // Rule: Exclude global signatory onboarding requests from non-global view
+            const isGlobalRequest =
+              basic.isGlobalUser === true ||
+              permissions.some((p: any) => p.roleName === 'Corp Admin');
+            if (isGlobalRequest) return false;
+
+            return permissions.some(
+              (p: any) =>
+                p.accessType === 'PRIMARY' &&
+                allVisibleNodePaths.includes(p.nodePath),
+            );
+          });
 
       // 3. Enhance pending records with audit trail and manager info
       const pendingEmails = pendingOnboardings

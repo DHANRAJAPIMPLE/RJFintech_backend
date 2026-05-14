@@ -385,7 +385,8 @@ async function main() {
   });
   console.log('Root Org Structure node created.');
 
-  // 5. Map Super Admin to Company and give Global Access
+  // 5. Map Super Admin to Company and give Global Access (Signatory Status)
+  // This user will have unrestricted visibility across all nodes and can approve highly privileged requests (like Corp Admin).
   const superAdminMappingExists = await prisma.userMapping.findUnique({
     where: {
       userId_companyId: {
@@ -422,17 +423,17 @@ async function main() {
     await prisma.userAccess.create({
       data: {
         userId: superAdmin.id,
-        roleCode: "CORP_ADMIN",
+        roleCode: "CORP_ADMIN", // This is the primary signatory role
         nodeId: rootNode.id,
         accessType: null,
         companyId: company.id,
-        isGlobalAccess: true,
+        isGlobalAccess: true,   // Grants global visibility and approval authority
         accessCategory: 'ALL_CHILD',
       },
     });
   }
   
-  console.log('Super Admin mapping and global access configured.');
+  console.log('Super Admin mapping and global access configured (Signatory seeded).');
 
   // 5b. Seed Default Workflows
   // These are the fallback workflows used when no explicit workflowId is provided

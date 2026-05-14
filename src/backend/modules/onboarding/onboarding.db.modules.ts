@@ -55,6 +55,9 @@ export class OnboardingDbController {
    */
   static async getManagerInfo(req: Request, res: Response) {
     const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
     const manager = await prisma.user.findUnique({
       where: { email },
       include: {
@@ -79,6 +82,9 @@ export class OnboardingDbController {
    */
   static async getUserByEmail(req: Request, res: Response) {
     const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
     const user = await prisma.user.findUnique({ where: { email } });
     res.json(user);
   }

@@ -65,19 +65,21 @@ export class UserController {
         throw new AppError('Unauthorized', 401);
       }
 
-      // 1. Logic: Validate reporting manager exists and get their company info
-      const { data: manager, ok: managerOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/onboarding/user/check-manager`,
-        { email: reportingManager },
-      );
-
-      if (!managerOk || !manager) {
-        throw new AppError(
-          manager?.message ||
-            manager?.error ||
-            'Reporting manager email not found',
-          400,
+      // 1. Logic: Validate reporting manager exists (if provided) and get their company info
+      let manager: any = null;
+      if (reportingManager) {
+        const { data: m, ok: managerOk } = await internalPost<any>(
+          `${config.backendUrl}/internal/onboarding/user/check-manager`,
+          { email: reportingManager },
         );
+
+        if (!managerOk || !m) {
+          throw new AppError(
+            m?.message || m?.error || 'Reporting manager email not found',
+            400,
+          );
+        }
+        manager = m;
       }
 
       // 2. Logic: Check if user already exists
@@ -115,6 +117,12 @@ export class UserController {
       }
 
       // 4. Logic: Validate Permissions (Roles and Nodes)
+      const targetCompanyId =
+        manager?.userMappings?.[0]?.companyId || (req as any).user?.companyId;
+
+      if (!targetCompanyId) {
+        throw new AppError('Unable to determine target company', 400);
+      }
 
       for (const permission of permissions) {
         const { data: roles, ok: rolesOk } = await internalPost<any>(
@@ -134,7 +142,7 @@ export class UserController {
           `${config.backendUrl}/internal/org/get-node-by-path-companyid`,
           {
             nodePath: permission.nodePath,
-            companyId: manager?.userMappings?.[0]?.companyId,
+            companyId: targetCompanyId,
           },
         );
 
@@ -153,13 +161,36 @@ export class UserController {
       let companyCode: string | undefined;
       let groupCode: string | undefined;
 
-      const managerMapping = manager.userMappings?.[0];
-      if (managerMapping && managerMapping.company) {
-        companyCode = managerMapping.company.companyCode;
-        const compMapping = managerMapping.company.companyMappings?.[0];
-        if (compMapping && compMapping.group) {
-          groupCode = compMapping.group.groupCode;
+      if (manager) {
+        const managerMapping = manager.userMappings?.[0];
+        if (managerMapping && managerMapping.company) {
+          companyCode = managerMapping.company.companyCode;
+          const compMapping = managerMapping.company.companyMappings?.[0];
+          if (compMapping && compMapping.group) {
+            groupCode = compMapping.group.groupCode;
+          }
         }
+      } else {
+        // Resolve from body companyId or initiator's session companyId
+        const resolveId = req.body.companyId || (req as any).user?.companyId;
+
+        if (resolveId) {
+          const { data: initiatorCompany, ok: initOk } = await internalPost<any>(
+            `${config.backendUrl}/internal/company/get-by-id`,
+            { id: resolveId },
+          );
+          if (initOk && initiatorCompany) {
+            companyCode = initiatorCompany.companyCode;
+            const compMapping = initiatorCompany.companyMappings?.[0];
+            if (compMapping && compMapping.group) {
+              groupCode = compMapping.group.groupCode;
+            }
+          }
+        }
+      }
+
+      if (!companyCode) {
+        throw new AppError('Unable to resolve company code', 400);
       }
 
       // 6. Logic: Get eligible approver IDs (Global Access + User Access Managers + SAAS_ADMIN)

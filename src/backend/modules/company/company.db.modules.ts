@@ -615,9 +615,9 @@ export class CompanyDbController {
           await tx.userAccess.create({
             data: {
               userId: user.id,
-              roleCode: null,
+              roleCode: "CORP_ADMIN",
               nodeId: rootNode.id,
-              accessType: null,
+              accessType: 'PRIMARY',
               companyId: newCompany.id,
               isGlobalAccess: true,
               accessCategory: 'ALL_CHILD',
