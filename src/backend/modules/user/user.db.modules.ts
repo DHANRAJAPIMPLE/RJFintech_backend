@@ -801,11 +801,19 @@ export class UserDbController {
 
           // 3. Setup Granular Access Permissions
           if (basicDetails.isGlobalUser === true) {
+            // Use nodePath from permissions if available, otherwise fallback to company ROOT node
+            const globalPerm = Array.isArray(permissions) ? permissions[0] : null;
             const rootNode = await tx.orgStructure.findFirst({
-              where: { companyId: company.id, nodeType: 'ROOT' },
+              where: {
+                companyId: company.id,
+                ...(globalPerm?.nodePath
+                  ? { nodePath: globalPerm.nodePath }
+                  : { nodeType: 'ROOT' }),
+              },
             });
 
             if (rootNode) {
+
               const existingAccess = await tx.userAccess.findFirst({
                 where: {
                   userId: user.id,
@@ -820,7 +828,7 @@ export class UserDbController {
                   where: { id: existingAccess.id },
                   data: {
                     isGlobalAccess: true,
-                    accessCategory: 'ALL_CHILD',
+                    accessCategory: globalPerm?.accessCategory || 'ALL_CHILD',
                     accessType: 'PRIMARY',
                   },
                 });
@@ -832,17 +840,20 @@ export class UserDbController {
                     nodeId: rootNode.id,
                     companyId: company.id,
                     isGlobalAccess: true,
-                    accessCategory: 'ALL_CHILD',
+                    accessCategory: globalPerm?.accessCategory || 'ALL_CHILD',
                     accessType: 'PRIMARY',
                   },
                 });
               }
+
             }
           }
           if (Array.isArray(permissions)) {
             for (const perm of permissions) {
               const { accessType, roleName, nodePath, accessCategory } = perm;
+              if (!roleName) continue;
               const finalCategory = accessCategory;
+
 
               const role = await tx.roles.findUnique({
                 where: { roleName },
@@ -1523,9 +1534,13 @@ export class UserDbController {
           companyId,
           isGlobalAccess: true,
         },
+        include: {
+          orgStructure: true,
+        },
       });
 
-      res.status(200).json({ isGlobal: !!globalAccess });
+      res.status(200).json({ isGlobal: !!globalAccess, globalAccess });
+
     } catch (error) {
       next(error);
     }

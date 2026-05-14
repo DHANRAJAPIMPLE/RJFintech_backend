@@ -268,14 +268,39 @@ export class UserController {
       const companyCode = company.companyCode;
       const groupCode = company.companyMappings?.[0]?.group?.groupCode;
 
-      // 3. Logic: Get eligible approver IDs (Global Access users only as per request)
+      // 3. Logic: Get initiator's own global access node to replicate it
+      const { data: initiatorAccessRes, ok: initiatorAccessOk } =
+        await internalPost<any>(
+          `${config.backendUrl}/internal/user/check-global`,
+          { userId: initiatorId, companyId },
+        );
+
+      if (!initiatorAccessOk || !initiatorAccessRes?.globalAccess) {
+        throw new AppError(
+          'Initiator global access permissions not found',
+          403,
+        );
+      }
+
+      const { orgStructure, accessCategory } = initiatorAccessRes.globalAccess;
+      const replicatedPermissions = [
+        {
+          nodeName: orgStructure.nodeName,
+          nodePath: orgStructure.nodePath,
+          nodeType: orgStructure.nodeType,
+          accessCategory: accessCategory,
+          accessType: 'PRIMARY',
+        },
+      ];
+
+      // 4. Logic: Get eligible approver IDs (Global Access users only as per request)
       const { data: eligibleApprovers, ok: globalOk } = await internalPost<
         string[]
       >(`${config.backendUrl}/internal/onboarding/global-access-ids`, {
         companyCode,
       });
 
-      // 4. Call Backend to create the record
+      // 5. Call Backend to create the record
       const {
         data: createRes,
         ok: createOk,
@@ -295,12 +320,13 @@ export class UserController {
               employeeId: validatedData.employeeId,
               isGlobalUser: true,
             },
-            permissions: [], // Global user doesn't need explicit permissions yet
+            permissions: replicatedPermissions,
           },
           status: 'PENDING',
           eligibleApprovers: eligibleApprovers || [],
         },
       );
+
 
       if (!createOk) {
         throw new AppError(
