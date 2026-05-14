@@ -773,9 +773,8 @@ export class UserDbController {
           });
 
           // 3. Setup Granular Access Permissions
-          // Rule 1: isGlobalUser flag OR assigning Corp Admin role grants global access
-          // Rule 2: If approved by a signatory, the user gets global access
-          if (basicDetails.isGlobalUser === true || hasCorpAdminRole || approverIsSignatory) {
+          // Rule: isGlobalUser flag OR assigning Corp Admin role grants global access
+          if (hasCorpAdminRole) {
             // Use nodePath from permissions if available, otherwise fallback to company ROOT node
             const globalPerm = Array.isArray(permissions) ? permissions.find((p: any) => p.roleName === 'Corp Admin' || p.isGlobalAccess) : null;
             const rootNode = await tx.orgStructure.findFirst({
