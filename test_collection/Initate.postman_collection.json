@@ -1,0 +1,861 @@
+{
+  "info": {
+    "_postman_id": "a8673ddb-5999-4f2e-b62f-54606196813f",
+    "name": "Initate",
+    "description": "### Welcome to Postman! This is your first collection. \n\nCollections are your starting point for building and testing APIs. You can use this one to:\n\n• Group related requests\n• Test your API in real-world scenarios\n• Document and share your requests\n\nUpdate the name and overview whenever you’re ready to make it yours.\n\n[Learn more about Postman Collections.](https://learning.postman.com/docs/collections/collections-overview/)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "53507780",
+    "_collection_link": "https://go.postman.co/collection/53507780-a8673ddb-5999-4f2e-b62f-54606196813f?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "http://localhost:5000/api/v1/auth/register",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"email\":\"test4@gmail.com\",\r\n    \"password\":\"Test@123\", \r\n    \"name\":\"test1\",\r\n     \"phone\":\"9146890521\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/register",
+          "host": [
+            "http://localhost:5000/api/v1/auth"
+          ],
+          "path": [
+            "register"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/fetch-all-users",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"companyCode\":\"TEST28042026\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-all-users",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "fetch-all-users"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/auth/login",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"email\": \"employee1@testtech.com\",\r\n    \"password\": \"Admin@123\",\r\n    \"action\": 0\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/login",
+          "host": [
+            "http://localhost:5000/api/v1/auth"
+          ],
+          "path": [
+            "login"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/admin/initiate",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Cookie",
+            "value": "accessToken=YOUR_ACCESS_TOKEN",
+            "disabled": true
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"group\": {\n    \"name\": \"DPGR CHsdfECKING\",\n    \"groupCode\": null,\n    \"remarks\": null\n  },\n  \"company\": {\n    \"name\": \"TESTTECH\",\n    \"gst\": \"GDFz1dd23LKSE\",\n    \"brand\": \"TEST\",\n    \"ieCode\": \"1392643478\",\n    \"registeredAt\": \"2026-04-07\",\n    \"address\": \"123 Business Park, Andheri East, Mumbai, Maharashtra\"\n  },\n  \"signatories\": [\n    {\n      \"name\": \"Arham Vipul Mehta\",\n      \"email\": \"checking8@gmail.com\",\n      \"phone\": \"9870062344\",\n      \"designation\": \"CEO\",\n      \"employeeId\": null\n    },\n    {\n      \"name\": \"Second Signatory\",\n      \"email\": \"checking9@gmail.com\",\n      \"phone\": \"9876543210\",\n      \"designation\": \"Chairman\",\n      \"employeeId\": \"null\"\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/admin/initiate",
+          "host": [
+            "http://localhost:5000/api/v1/admin"
+          ],
+          "path": [
+            "initiate"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/auth/logout",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/logout",
+          "host": [
+            "http://localhost:5000/api/v1/auth"
+          ],
+          "path": [
+            "logout"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/auth/me",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/auth/me",
+          "host": [
+            "http://localhost:5000/api/v1/auth"
+          ],
+          "path": [
+            "me"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/admin/groups",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:5000/api/v1/admin/groups",
+          "host": [
+            "http://localhost:5000/api/v1/admin"
+          ],
+          "path": [
+            "groups"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/initiate",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"basicDetails\": {\r\n        \"name\": \"fetchorg\",\r\n        \"email\": \"fetchorgd@gmail.com\",\r\n        \"phone\": \"9002332678\",\r\n        \"designation\": \"developer\",\r\n        \"employeeId\": \"RJ123\",\r\n        \"reportingManager\": \"admin@globaltech.com\"\r\n    },\r\n    \"permissions\": [\r\n        {\r\n            \"accessType\": \"PRIMARY\",\r\n            \"roleName\": \"Org Structure Viewer\",\r\n            \"roleCategory\": \"SYSTEM_ACCESS\",\r\n            \"roleSubCategory\": \"ORG_STR\",\r\n            \"nodeName\": \"TEST Tech Solutions Pvt Ltd\",\r\n            \"nodePath\": \"TEST28042026\"\r\n            \r\n        }\r\n    ],\r\n    \"workflowId\":\"30b0a7ad-faa3-45f3-9a43-572aef671942\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/initiate",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "initiate"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/action",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"action\":\"approve\",\r\n    \"remark\":\"appro   sfafve\",\r\n    \"id\":\"f6035028-7de8-4730-bec8-d3fb78f6daf7\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/action",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "action"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/admin/action",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"id\":\"9951d7fe-e7d7-4a2c-b732-6d559f4aca66\",\r\n    \"action\":\"approve\",\r\n    \"remark\":\"this will we build today\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/admin/action",
+          "host": [
+            "http://localhost:5000/api/v1/admin"
+          ],
+          "path": [
+            "action"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/roles/create",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": " [\r\n        {\r\n            \r\n            \"roleName\": \"Accounts Viewer\",\r\n            \"category\": \"TRANSACTIONAL\",\r\n            \"permissionLevel\": \"VIEWER\",\r\n            \"roleCode\":\"ACCOUNTS_VIEWRS\",\r\n            \"subCategory\": \"ACCOUNTS\",\r\n            \"capabilities\": {\r\n                \"view\": true,\r\n                \"modify\": false,\r\n                \"approve\": false,\r\n                \"initiate\": false\r\n            },\r\n            \"isActive\": true\r\n}\r\n    ]",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/roles/create",
+          "host": [
+            "http://localhost:5000/api/v1/roles"
+          ],
+          "path": [
+            "create"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/roles/fetch-all",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/role/fetch-all",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "role",
+            "fetch-all"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/org/initiate",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"companyCode\": \"TEST28042026\",\r\n  \"newNodeName\": \"sdfsdfsdfasdf\",\r\n  \"nodeType\": \"DEPARTMENT\",\r\n  \"parentNode\": {\r\n    \"nodeName\": \"TEST Tech Solutions Pvt Ltd\",\r\n    \"nodePath\": \"TEST28042026\"\r\n  }\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/org/initiate",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "org",
+            "initiate"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "http://localhost:5000/api/v1/company-settings/org/initiate",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n  \"companyCode\": \"TEST28042026\",\r\n  \"newNodeName\": \"sdfsdfsdfasdf\",\r\n  \"nodeType\": \"DEPARTMENT\",\r\n  \"parentNode\": {\r\n    \"nodeName\": \"TEST Tech Solutions Pvt Ltd\",\r\n    \"nodePath\": \"TEST28042026\"\r\n  }\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/company-settings/org/initiate",
+              "host": [
+                "http://localhost:5000/api/v1/company-settings"
+              ],
+              "path": [
+                "org",
+                "initiate"
+              ]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": null,
+          "header": [
+            {
+              "key": "X-Powered-By",
+              "value": "Express"
+            },
+            {
+              "key": "Vary",
+              "value": "Origin"
+            },
+            {
+              "key": "Access-Control-Allow-Credentials",
+              "value": "true"
+            },
+            {
+              "key": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            },
+            {
+              "key": "Content-Length",
+              "value": "119"
+            },
+            {
+              "key": "ETag",
+              "value": "W/\"77-jFJDZ9Mo2OuSsMfLKw2GQbWFZM0\""
+            },
+            {
+              "key": "Date",
+              "value": "Thu, 07 May 2026 06:18:18 GMT"
+            },
+            {
+              "key": "Connection",
+              "value": "keep-alive"
+            },
+            {
+              "key": "Keep-Alive",
+              "value": "timeout=5"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"error\",\n    \"statusCode\": 400,\n    \"message\": \"A request for node 'sdfsdfsdfasdf' is already pending for this location\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/org/approve",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"id\":\"96c8c653-deec-49c6-b0b9-beef31cfcdfb\",\r\n    \"action\":\"approve\",\r\n    \"remark\":\"Approved by admin\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/org/approve",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "org",
+            "approve"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/roles/fetch-all",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/roles/fetch-all",
+          "host": [
+            "http://localhost:5000/api/v1/roles"
+          ],
+          "path": [
+            "fetch-all"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/org/fetch",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"companyCode\": \"TEST28042026\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/org/fetch",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "org",
+            "fetch"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/update-status",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"email\": \"admin@globaltech.com\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/update-status",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "update-status"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/history",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"email\":\"ta26@gmail.com\",\r\n    \"companyCode\":\"TEST28042026\"\r\n}\r\n    \r\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-history",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "fetch-history"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/fetch-history",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"companyCode\":\"TESTTECH300fd420262\"\r\n}\r\n    \r\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/admin/fetch-history",
+          "host": [
+            "http://localhost:5000/api/v1/admin"
+          ],
+          "path": [
+            "fetch-history"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/org/fetch-history",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"companyCode\":\"TEST28042026\"\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/org/fetch-history",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "org",
+            "fetch-history"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/workflow/initiate",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer <YOUR_ACCESS_TOKEN>"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"companyCode\": \"TEST28042026\",\n  \"name\": \"Purchase Ordder Approval\",\n  \"module\": \"SYSTEM_ACCESS\",\n  \"subModule\": \"USER_ACC\",\n  \"nodePath\": \"TEST28042026\",\n  \"levels\": {\n    \"l1\": {\n      \"approver1\": \"NODE_APPROVER\"\n    }\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/workflow/initiate",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "workflow",
+            "initiate"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/workflow/fetch",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/workflow/fetch",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "workflow",
+            "fetch"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/workflow/action",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer <TOKEN>"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"id\": \"fab588ae-15cf-43a5-b2fc-3259761a703b\",\n  \"action\": \"approve\",\n  \"remark\": \"Workflow configuration verified.\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/workflow/action",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "workflow",
+            "action"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/workflow/fetch-history",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer <YOUR_ACCESS_TOKEN>"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"levelsHash\": \"864ce440134096f4c28c9fee23381f0e\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/workflow/fetch-history",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "workflow",
+            "fetch-history"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Untitled Request",
+      "protocolProfileBehavior": {
+        "disableBodyPruning": true
+      },
+      "request": {
+        "method": "GET",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n name:\"\"\r\n module:\"\"\r\n submodule:\"\"\r\n level:[\r\n{\r\n    id:1;\r\n    approver1:\r\n    approvetype: \r\n    approver2\r\n\r\n},\r\n{\r\n    id:2;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n}\r\n,{\r\n    id:3;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n}{\r\n    id:4;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n},\r\n{\r\n    id:5;\r\n    approver1:\r\n    approvetype:\r\n    approver2\r\n\r\n}\r\n ]\r\n\r\n\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": ""
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/initiate-global-signatory",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Cookie",
+            "value": "token=YOUR_JWT_TOKEN_HERE"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n           \"name\": \"John Doe\",\n           \"email\": \"john.doe@example.com\",\n           \"phone\": \"9876543210\",\n           \"designation\": \"Executive Director\",\n           \"employeeId\": \"EMP001\",\n           \"isGlobalUser\": true\n         }",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/initiate-global-signatory",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "initiate-global-signatory"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/fetch-users-by-nodepath-count",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Cookie",
+            "value": "token=YOUR_SESSION_TOKEN_HERE"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n           \"nodePath\": \"TEST28042026.ADFASDFADF\"\n         }",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-users-by-nodepath-count",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "fetch-users-by-nodepath-count"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "http://localhost:5000/api/v1/company-settings/user/fetch-company-nodes",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"subCategory\":\"ORG_STR\"\r\n}\r\n",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-company-nodes",
+          "host": [
+            "http://localhost:5000/api/v1/company-settings"
+          ],
+          "path": [
+            "user",
+            "fetch-company-nodes"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}

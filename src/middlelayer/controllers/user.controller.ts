@@ -502,13 +502,17 @@ export class UserController {
       }
 
       // res.status(200).json(data);
+      const nodes = data?.nodes || [];
+      const access = data?.access || {};
+
       res.status(200).json({
         message:
-          data && data.length > 0
+          nodes.length > 0
             ? 'User nodes fetched successfully!'
             : 'User nodes not found',
         code: 200,
-        data,
+        data: nodes,
+        access,
       });
     } catch (error) {
       next(error);

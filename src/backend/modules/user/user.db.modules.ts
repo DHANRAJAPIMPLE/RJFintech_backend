@@ -1351,12 +1351,13 @@ export class UserDbController {
             },
           },
         });
-        const enrichedNodes = nodes.map((node) => ({
-          ...node,
-          designation,
-          isGlobalUser: !!globalAccess,
-        }));
-        return res.status(200).json(enrichedNodes);
+        return res.status(200).json({
+          nodes,
+          access: {
+            designation,
+            isGlobalUser: !!globalAccess,
+          },
+        });
       } else {
         if (!subCategory) {
           return res.status(200).json([]);
@@ -1396,13 +1397,13 @@ export class UserDbController {
               index === self.findIndex((t) => t.nodePath === node.nodePath),
           );
 
-        const enrichedNodes = nodes.map((node) => ({
-          ...node,
-          designation,
-          isGlobalUser: !!globalAccess,
-        }));
-
-        return res.status(200).json(enrichedNodes);
+        return res.status(200).json({
+          nodes,
+          access: {
+            designation,
+            isGlobalUser: !!globalAccess,
+          },
+        });
       }
     } catch (error) {
       next(error);
