@@ -13,7 +13,6 @@ const prisma = new PrismaClient();
  
 async function main() {
   console.log('Seeding database...');
- 
 
 const roles = [
     {
@@ -303,8 +302,7 @@ const roles = [
       initiate: false,
     }
   ];
-
-  for (const role of roles) {
+for (const role of roles) {
     await prisma.roles.upsert({
       where: { roleCode: role.roleCode },
       update: role,
@@ -424,7 +422,7 @@ const roles = [
   }
  
   // ─── 4. SAAS Admins (2) ──────────────────────────────────────────────────────
-  // These users exist at the platform level and are not mapped to the company.
+  // SAAS admins are mapped to the company as normal users AND hold SAAS_ADMIN role.
   const saasAdmins = [
     {
       name: 'Arjun Mehta',
@@ -454,8 +452,9 @@ const roles = [
       },
     });
  
-    // SAAS admins are NOT mapped to any company — they operate at platform level.
-    // Grant SAAS_ADMIN role on the root node for reference / reporting purposes.
+    // Map SAAS admin to the company just like any other user.
+    await ensureUserMapping(user.id, sa.designation, sa.employeeId);
+    // Grant SAAS_ADMIN role with global access on the root node.
     await ensureUserAccess(user.id, 'SAAS_ADMIN', true, 'ALL_CHILD', null);
     console.log(`SAAS Admin seeded: ${sa.name} <${sa.email}>`);
   }

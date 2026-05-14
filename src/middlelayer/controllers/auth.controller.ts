@@ -21,6 +21,7 @@ import { internalPost } from '../utils/internal-fetch.util';
 import { setAuthCookies, clearAuthCookies } from '../utils/cookie.util';
 import { zodParse } from '../utils/zod-parse.util';
 import { registerSchema, loginSchema } from '../validations/auth.validation';
+import console from 'console';
 
 export class AuthController {
   static async register(req: Request, res: Response, next: NextFunction) {
@@ -94,7 +95,7 @@ export class AuthController {
       if (!userRes.ok || !user) {
         throw new AppError('Invalid credentials', 401);
       }
-
+  
       const companyId = user.userMappings[0].companyId;
 
       // 2. Validate password
