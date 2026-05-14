@@ -1,20 +1,21 @@
 import { config } from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
+ 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 config({ path: path.resolve(__dirname, '../.env') });
-
+ 
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
-
+ 
 const prisma = new PrismaClient();
-
+ 
 async function main() {
   console.log('Seeding database...');
+ 
 
-  const roles = [
+const roles = [
     {
       roleCode: 'SAAS_ADMIN',
       roleName: 'Saas Admin',
@@ -311,22 +312,11 @@ async function main() {
     });
   }
   console.log('Roles seeded.');
-
-  // 2. Seed Super Admin User
-  const adminPassword = await argon2.hash('Admin@123');
-  const superAdmin = await prisma.user.upsert({
-    where: { email: 'admin@globaltech.com' },
-    update: {},
-    create: {
-      name: 'Super Admin',
-      email: 'admin@globaltech.com',
-      password: adminPassword,
-      phone: '9876543210',
-    },
-  });
-  console.log('Super Admin user created.');
-
-  // 3. Seed Initial Group and Company
+ 
+  // ─── Shared password for ALL seeded users ───────────────────────────────────
+  const sharedPassword = await argon2.hash('Admin@123');
+ 
+  // ─── 2. Seed Group & Company ─────────────────────────────────────────────────
   const group = await prisma.groupCompany.upsert({
     where: { groupCode: 'TESTGROUP28042026' },
     update: {},
@@ -337,7 +327,7 @@ async function main() {
       remarks: 'Primary seeding group',
     },
   });
-
+ 
   const company = await prisma.company.upsert({
     where: { companyCode: 'TEST28042026' },
     update: {},
@@ -352,27 +342,18 @@ async function main() {
       status: 'ACTIVE',
     },
   });
-
+ 
   const mappingExists = await prisma.companyMapping.findUnique({
-    where: {
-      groupId_companyId: {
-        groupId: group.id,
-        companyId: company.id,
-      },
-    },
+    where: { groupId_companyId: { groupId: group.id, companyId: company.id } },
   });
-
   if (!mappingExists) {
     await prisma.companyMapping.create({
-      data: {
-        companyId: company.id,
-        groupId: group.id,
-      },
+      data: { companyId: company.id, groupId: group.id },
     });
   }
-  console.log('Initial Group and Company seeded.');
-
-  // 4. Create Root Org Structure Node
+  console.log('Group and Company seeded.');
+ 
+  // ─── 3. Root Org Node ────────────────────────────────────────────────────────
   const rootNode = await prisma.orgStructure.upsert({
     where: { nodePath: 'TEST28042026' },
     update: {},
@@ -384,75 +365,148 @@ async function main() {
     },
   });
   console.log('Root Org Structure node created.');
-
-  // 5. Map Super Admin to Company and give Global Access (Signatory Status)
-  // This user will have unrestricted visibility across all nodes and can approve highly privileged requests (like Corp Admin).
-  const superAdminMappingExists = await prisma.userMapping.findUnique({
-    where: {
-      userId_companyId: {
-        userId: superAdmin.id,
-        companyId: company.id,
-      },
-    },
-  });
-
-  if (!superAdminMappingExists) {
-    await prisma.userMapping.create({
-      data: {
-        userId: superAdmin.id,
-        companyId: company.id,
-        status: 'ACTIVE',
-        designation: 'CTO',
-        employeeId: 'EMP001',
+ 
+  // ─── Helper: ensure UserMapping exists ───────────────────────────────────────
+  async function ensureUserMapping(
+    userId: string,
+    designation: string,
+    employeeId: string,
+    reportingManager?: string,
+  ) {
+    const exists = await prisma.userMapping.findUnique({
+      where: { userId_companyId: { userId, companyId: company.id } },
+    });
+    if (!exists) {
+      await prisma.userMapping.create({
+        data: {
+          userId,
+          companyId: company.id,
+          status: 'ACTIVE',
+          designation,
+          employeeId,
+          ...(reportingManager ? { reportingManager } : {}),
+        },
+      });
+    }
+  }
+ 
+  // ─── Helper: ensure UserAccess exists ────────────────────────────────────────
+  async function ensureUserAccess(
+    userId: string,
+    roleCode: string,
+    isGlobalAccess: boolean,
+    accessCategory: string,
+    accessType: string | null = null,
+  ) {
+    const exists = await prisma.userAccess.findUnique({
+      where: {
+        userId_roleCode_companyId_nodeId: {
+          userId,
+          roleCode,
+          companyId: company.id,
+          nodeId: rootNode.id,
+        },
       },
     });
+    if (!exists) {
+      await prisma.userAccess.create({
+        data: {
+          userId,
+          roleCode,
+          nodeId: rootNode.id,
+          accessType,
+          companyId: company.id,
+          isGlobalAccess,
+          accessCategory,
+        },
+      });
+    }
   }
-
-  const superAdminAccessExists = await prisma.userAccess.findUnique({
-    where: {
-      userId_roleCode_companyId_nodeId: {
-        userId: superAdmin.id,
-        roleCode: "CORP_ADMIN",
-        companyId: company.id,
-        nodeId: rootNode.id,
-      },
+ 
+  // ─── 4. SAAS Admins (2) ──────────────────────────────────────────────────────
+  // These users exist at the platform level and are not mapped to the company.
+  const saasAdmins = [
+    {
+      name: 'Arjun Mehta',
+      email: 'arjun.mehta@saasplatform.com',
+      phone: '9000000001',
+      employeeId: 'SAAS001',
+      designation: 'Platform Administrator',
     },
-  });
-
-  if (!superAdminAccessExists) {
-    await prisma.userAccess.create({
-      data: {
-        userId: superAdmin.id,
-        roleCode: "CORP_ADMIN", // This is the primary signatory role
-        nodeId: rootNode.id,
-        accessType: null,
-        companyId: company.id,
-        isGlobalAccess: true,   // Grants global visibility and approval authority
-        accessCategory: 'ALL_CHILD',
+    {
+      name: 'Priya Nair',
+      email: 'priya.nair@saasplatform.com',
+      phone: '9000000002',
+      employeeId: 'SAAS002',
+      designation: 'Platform Co-Administrator',
+    },
+  ];
+ 
+  for (const sa of saasAdmins) {
+    const user = await prisma.user.upsert({
+      where: { email: sa.email },
+      update: {},
+      create: {
+        name: sa.name,
+        email: sa.email,
+        password: sharedPassword,
+        phone: sa.phone,
       },
     });
+ 
+    // SAAS admins are NOT mapped to any company — they operate at platform level.
+    // Grant SAAS_ADMIN role on the root node for reference / reporting purposes.
+    await ensureUserAccess(user.id, 'SAAS_ADMIN', true, 'ALL_CHILD', null);
+    console.log(`SAAS Admin seeded: ${sa.name} <${sa.email}>`);
   }
-  
-  console.log('Super Admin mapping and global access configured (Signatory seeded).');
-
-  // 5b. Seed Default Workflows
-  // These are the fallback workflows used when no explicit workflowId is provided
-  // during initiation. One per section (USER_ACC, ORG_STR, WORK_FLOW).
+ 
+  // ─── 5. Corp Admins (2) — mapped to the company ──────────────────────────────
+  const corpAdmins = [
+    {
+      name: 'Rohan Desai',
+      email: 'rohan.desai@testtech.com',
+      phone: '9100000001',
+      employeeId: 'EMP001',
+      designation: 'Chief Technology Officer',
+    },
+    {
+      name: 'Sneha Kulkarni',
+      email: 'sneha.kulkarni@testtech.com',
+      phone: '9100000002',
+      employeeId: 'EMP002',
+      designation: 'Chief Operating Officer',
+    },
+  ];
+ 
+  for (const ca of corpAdmins) {
+    const user = await prisma.user.upsert({
+      where: { email: ca.email },
+      update: {},
+      create: {
+        name: ca.name,
+        email: ca.email,
+        password: sharedPassword,
+        phone: ca.phone,
+      },
+    });
+ 
+    await ensureUserMapping(user.id, ca.designation, ca.employeeId);
+    await ensureUserAccess(user.id, 'CORP_ADMIN', true, 'ALL_CHILD', null);
+    console.log(`Corp Admin seeded: ${ca.name} <${ca.email}>`);
+  }
+ 
+  // ─── 6. Default Workflows ────────────────────────────────────────────────────
   const defaultWorkflows = [
     { name: 'USER_ACC_WORKFLOW_DEFAULT', subModule: 'USER_ACC', roleCode: 'USER_ACC_MGR' },
-    { name: 'ORG_STR_WORKFLOW_DEFAULT', subModule: 'ORG_STR', roleCode: 'ORG_STR_MGR' },
+    { name: 'ORG_STR_WORKFLOW_DEFAULT',  subModule: 'ORG_STR',  roleCode: 'ORG_STR_MGR'  },
     { name: 'WORK_FLOW_WORKFLOW_DEFAULT', subModule: 'WORK_FLOW', roleCode: 'WORK_FLOW_MGR' },
   ];
-
+ 
   for (const dwf of defaultWorkflows) {
     const existingWorkflow = await prisma.workflow.findFirst({
-      where: {
-        companyId: company.id,
-        subModule: dwf.subModule,
-        name: dwf.name,
-      },
+      where: { companyId: company.id, subModule: dwf.subModule, name: dwf.name },
     });
-
+ 
     if (!existingWorkflow) {
       const workflow = await prisma.workflow.create({
         data: {
@@ -465,99 +519,79 @@ async function main() {
           nodeId: rootNode.id,
           levelsHash: `DEFAULT_${dwf.subModule}_1M_1C_1`,
           levels: {
-            create: [
-              {
-                level: 1,
-                approver1: 'NODE_APPROVER',
-                approverType: 'OR',
-              },
-            ],
+            create: [{ level: 1, approver1: 'NODE_APPROVER', approverType: 'OR' }],
           },
         },
       });
-
-      // Log the default workflow creation as a system-initiated event
       console.log(`Default workflow '${dwf.name}' created with ID: ${workflow.id}`);
     }
   }
   console.log('Default workflows seeded.');
-
-  // 6. Seed 10 Dummy Users
-  console.log('Seeding 10 dummy users...');
-  for (let i = 1; i <= 10; i++) {
-    const userEmail = `employee${i}@testtech.com`;
-    let dummyUser = await prisma.user.findUnique({ where: { email: userEmail } });
-    if (!dummyUser) {
-      dummyUser = await prisma.user.create({
+ 
+  // ─── 7. Dummy Employees (10) ─────────────────────────────────────────────────
+  // Realistic Indian names, reporting to the first Corp Admin.
+  const [firstCorpAdmin] = await Promise.all([
+    prisma.user.findUnique({ where: { email: corpAdmins[0]!.email } }),
+  ]);
+ 
+  const dummyEmployees = [
+    { name: 'Vikram Sharma',    email: 'vikram.sharma@testtech.com',    phone: '9200000001', designation: 'Senior Accounts Executive',   employeeId: 'EMP003' },
+    { name: 'Ananya Iyer',      email: 'ananya.iyer@testtech.com',      phone: '9200000002', designation: 'Payments Analyst',             employeeId: 'EMP004' },
+    { name: 'Karthik Reddy',    email: 'karthik.reddy@testtech.com',    phone: '9200000003', designation: 'Purchase Manager',             employeeId: 'EMP005' },
+    { name: 'Divya Pillai',     email: 'divya.pillai@testtech.com',     phone: '9200000004', designation: 'Finance Operations Lead',      employeeId: 'EMP006' },
+    { name: 'Rahul Bose',       email: 'rahul.bose@testtech.com',       phone: '9200000005', designation: 'Master Data Steward',          employeeId: 'EMP007' },
+    { name: 'Meera Joshi',      email: 'meera.joshi@testtech.com',      phone: '9200000006', designation: 'Org Structure Coordinator',    employeeId: 'EMP008' },
+    { name: 'Siddharth Rao',    email: 'siddharth.rao@testtech.com',    phone: '9200000007', designation: 'User Access Specialist',       employeeId: 'EMP009' },
+    { name: 'Pooja Agarwal',    email: 'pooja.agarwal@testtech.com',    phone: '9200000008', designation: 'Workflow Configuration Analyst', employeeId: 'EMP010' },
+    { name: 'Nikhil Gupta',     email: 'nikhil.gupta@testtech.com',     phone: '9200000009', designation: 'Junior Accounts Executive',    employeeId: 'EMP011' },
+    { name: 'Lakshmi Venkat',   email: 'lakshmi.venkat@testtech.com',   phone: '9200000010', designation: 'Payments Operations Executive', employeeId: 'EMP012' },
+  ];
+ 
+  const systemAccessRoles = [
+    'USER_ACC_MGR', 'ORG_STR_MGR', 'WORK_FLOW_MGR',
+    'USER_ACC_USER', 'ORG_STR_USER', 'WORK_FLOW_USER',
+    'USER_ACC_VIEWER', 'ORG_STR_VIEWER', 'WORK_FLOW_VIEWER',
+  ];
+ 
+  for (let i = 0; i < dummyEmployees.length; i++) {
+    const emp = dummyEmployees[i]!;
+    const roleCode = systemAccessRoles[i % systemAccessRoles.length]!;
+    const accessCategory = i % 2 === 0 ? 'NODE' : 'IMMEDIATE_CHILD';
+ 
+    let user = await prisma.user.findUnique({ where: { email: emp.email } });
+    if (!user) {
+      user = await prisma.user.create({
         data: {
-          name: `Employee ${i}`,
-          email: userEmail,
-          password: adminPassword,
-          phone: `98765432${i.toString().padStart(2, '0')}`,
+          name: emp.name,
+          email: emp.email,
+          password: sharedPassword,
+          phone: emp.phone,
         },
       });
     }
-
-    const mappingExists = await prisma.userMapping.findUnique({
-      where: {
-        userId_companyId: {
-          userId: dummyUser.id,
-          companyId: company.id,
-        }
-      }
-    });
-
-    if (!mappingExists) {
-      await prisma.userMapping.create({
-        data: {
-          userId: dummyUser.id,
-          companyId: company.id,
-          reportingManager: superAdmin.id,
-          status: 'ACTIVE',
-          designation: `Executive ${i}`,
-          employeeId: `EMP${i.toString().padStart(3, '0')}`,
-        },
-      });
-    }
-
-    // Define roles to assign based on employee index
-    // Exclusively using System Access roles (User, Org, Workflow) as requested
-    const systemAccessRoles = [
-      'USER_ACC_MGR', 'ORG_STR_MGR', 'WORK_FLOW_MGR',
-      'USER_ACC_USER', 'ORG_STR_USER', 'WORK_FLOW_USER',
-      'USER_ACC_VIEWER', 'ORG_STR_VIEWER', 'WORK_FLOW_VIEWER'
-    ];
-    const roleCode = systemAccessRoles[(i - 1) % systemAccessRoles.length]!;
-
-    const accessExists = await prisma.userAccess.findUnique({
-      where: {
-        userId_roleCode_companyId_nodeId: {
-          userId: dummyUser.id,
-          roleCode: roleCode,
-          companyId: company.id,
-          nodeId: rootNode.id,
-        }
-      }
-    });
-
-    if (!accessExists) {
-      await prisma.userAccess.create({
-        data: {
-          userId: dummyUser.id,
-          roleCode: roleCode,
-          nodeId: rootNode.id,
-          accessType: 'PRIMARY',
-          companyId: company.id,
-          isGlobalAccess: false,
-          accessCategory: i % 2 === 0 ? 'NODE' : 'IMMEDIATE_CHILD',
-        },
-      });
-    }
+ 
+    await ensureUserMapping(
+      user.id,
+      emp.designation,
+      emp.employeeId,
+      firstCorpAdmin?.id,
+    );
+ 
+    await ensureUserAccess(user.id, roleCode, false, accessCategory, 'PRIMARY');
+    console.log(`Employee seeded: ${emp.name} — ${roleCode}`);
   }
-  console.log('10 Dummy users seeded.');
-
+ 
+  console.log('\n✅ All seeding complete.');
+  console.log('─────────────────────────────────────────────────');
+  console.log('Password for ALL users: Admin@123');
+  console.log('─────────────────────────────────────────────────');
+  console.log('SAAS Admins:');
+  saasAdmins.forEach(u => console.log(`  ${u.email}`));
+  console.log('Corp Admins (mapped to TEST28042026):');
+  corpAdmins.forEach(u => console.log(`  ${u.email}`));
+  console.log('─────────────────────────────────────────────────');
 }
-
+ 
 main()
   .catch((e) => {
     console.error(e);
