@@ -1354,6 +1354,7 @@ export class UserDbController {
         const enrichedNodes = nodes.map((node) => ({
           ...node,
           designation,
+          isGlobalUser: !!globalAccess,
         }));
         return res.status(200).json(enrichedNodes);
       } else {
@@ -1398,6 +1399,7 @@ export class UserDbController {
         const enrichedNodes = nodes.map((node) => ({
           ...node,
           designation,
+          isGlobalUser: !!globalAccess,
         }));
 
         return res.status(200).json(enrichedNodes);
