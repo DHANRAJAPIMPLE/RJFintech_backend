@@ -501,6 +501,105 @@ export class UserDbController {
   }
 
   /**
+   * Creates a new global signatory onboarding request.
+   * This is a specialized version of createUserOnboarding for users with global access.
+   */
+  static async createGlobalSignatoryOnboarding(req: Request, res: Response) {
+    const {
+      initiatorId,
+      companyCode,
+      companyId,
+      groupCode,
+      ...onboardingData
+    } = req.body;
+    let resolvedCompanyId = companyId;
+
+    if (!resolvedCompanyId) {
+      if (!companyCode) {
+        throw new AppError('companyCode or companyId is required', 400);
+      }
+      const company = await prisma.company.findUnique({
+        where: { companyCode },
+      });
+      if (!company) {
+        throw new AppError('Company not found', 404);
+      }
+      resolvedCompanyId = company.id;
+    }
+
+    const email = onboardingData.data?.basicDetails?.email;
+
+    // Fetch all global access users for this company as eligible approvers
+    const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
+      prisma as any,
+      resolvedCompanyId,
+      'USER_ACC',
+    );
+
+    onboardingData.eligibleApprovers = Array.from(new Set(globalUsers)).filter(
+      (id) => id !== initiatorId,
+    );
+
+    const onboarding = await prisma.$transaction(async (tx) => {
+      let groupId: string | null = null;
+      if (groupCode) {
+        const group = await tx.groupCompany.findUnique({
+          where: { groupCode },
+        });
+        if (group) {
+          groupId = group.id;
+        }
+      }
+
+      const onb = await tx.userOnboarding.create({
+        data: {
+          ...onboardingData,
+          companyId: resolvedCompanyId,
+          groupId: groupId,
+        },
+      });
+
+      // Find root node for workflow resolution
+      const rootNode = await tx.orgStructure.findFirst({
+        where: { companyId: resolvedCompanyId, nodeType: 'ROOT' },
+      });
+
+      if (rootNode && initiatorId) {
+        const { workflowId: resolvedWorkflowId } =
+          await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+            module: 'SYSTEM_ACCESS',
+            subModule: 'USER_ACC',
+            companyId: resolvedCompanyId,
+            nodeId: rootNode.id,
+            initiatorId,
+            reqId: onb.id,
+            reqTable: 'user_onboarding',
+          });
+
+        await tx.userOnboarding.update({
+          where: { id: onb.id },
+          data: { workflowId: resolvedWorkflowId },
+        });
+      }
+
+      if (initiatorId && email) {
+        await tx.userHistory.create({
+          data: {
+            email,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+            companyId: resolvedCompanyId,
+            reqId: onb.id,
+          },
+        });
+      }
+      return onb;
+    });
+
+    res.status(201).json(onboarding);
+  }
+
+  /**
    * Fetches a single user onboarding request by its ID.
    */
   static async getUserOnboardingById(req: Request, res: Response) {
@@ -649,17 +748,23 @@ export class UserDbController {
             },
           });
 
-          const reportingManagerCheck = await tx.user.findUnique({
-            where: { email: reportingManager },
-            include: {
-              userMappings: {
-                include: { company: true },
+          let reportingManagerId: string | null = null;
+          if (reportingManager) {
+            const reportingManagerCheck = await tx.user.findUnique({
+              where: { email: reportingManager },
+              include: {
+                userMappings: {
+                  include: { company: true },
+                },
               },
-            },
-          });
+            });
 
-          if (!reportingManagerCheck)
-            throw new AppError('Reporting Manager not found', 404);
+            if (!reportingManagerCheck) {
+              throw new AppError('Reporting Manager not found', 404);
+            }
+            reportingManagerId = reportingManagerCheck.id;
+          }
+
           if (!manager) throw new AppError('Manager not found', 404);
 
           const company = await tx.company.findUnique({
@@ -687,7 +792,7 @@ export class UserDbController {
             data: {
               userId: user.id,
               companyId: company.id,
-              reportingManager: reportingManagerCheck.id,
+              reportingManager: reportingManagerId,
               status: 'ACTIVE',
               designation,
               employeeId,
@@ -695,6 +800,45 @@ export class UserDbController {
           });
 
           // 3. Setup Granular Access Permissions
+          if (basicDetails.isGlobalUser === true) {
+            const rootNode = await tx.orgStructure.findFirst({
+              where: { companyId: company.id, nodeType: 'ROOT' },
+            });
+
+            if (rootNode) {
+              const existingAccess = await tx.userAccess.findFirst({
+                where: {
+                  userId: user.id,
+                  roleCode: null,
+                  companyId: company.id,
+                  nodeId: rootNode.id,
+                },
+              });
+
+              if (existingAccess) {
+                await tx.userAccess.update({
+                  where: { id: existingAccess.id },
+                  data: {
+                    isGlobalAccess: true,
+                    accessCategory: 'ALL_CHILD',
+                    accessType: 'PRIMARY',
+                  },
+                });
+              } else {
+                await tx.userAccess.create({
+                  data: {
+                    userId: user.id,
+                    roleCode: null,
+                    nodeId: rootNode.id,
+                    companyId: company.id,
+                    isGlobalAccess: true,
+                    accessCategory: 'ALL_CHILD',
+                    accessType: 'PRIMARY',
+                  },
+                });
+              }
+            }
+          }
           if (Array.isArray(permissions)) {
             for (const perm of permissions) {
               const { accessType, roleName, nodePath, accessCategory } = perm;
@@ -1333,6 +1477,31 @@ export class UserDbController {
         code: 200,
         data: finalData,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Verifies if a user has global access permissions within a company.
+   */
+  static async checkGlobalUserStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { userId, companyId } = req.body;
+
+      const globalAccess = await prisma.userAccess.findFirst({
+        where: {
+          userId,
+          companyId,
+          isGlobalAccess: true,
+        },
+      });
+
+      res.status(200).json({ isGlobal: !!globalAccess });
     } catch (error) {
       next(error);
     }

@@ -114,3 +114,28 @@ export const userCompanyNodesSchema = z.object({
 export const userFetchByNodePathCountSchema = z.object({
   nodePath: z.string().trim().min(1, 'Node path is required'),
 });
+
+export const globalSignatoryOnboardingSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(2, 'Name must be at least 2 characters')
+      .max(100, 'Name too long'),
+    email: z.string().trim().toLowerCase().email('Invalid email format'),
+    phone: phoneSchema,
+    designation: z
+      .string()
+      .trim()
+      .min(2, 'Designation must be at least 2 characters')
+      .max(100, 'Designation too long'),
+    employeeId: z
+      .string()
+      .trim()
+      .min(2, 'Employee ID must be at least 2 characters')
+      .max(50, 'Employee ID too long'),
+    isGlobalUser: z.boolean().refine((v) => v === true, {
+      message: 'isGlobalUser must be true',
+    }),
+  })
+  .strict();

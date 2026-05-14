@@ -17,7 +17,7 @@ import { RoleController } from '../controllers/role.controller';
 import { UserController } from '../controllers/user.controller';
 import { WorkflowController } from '../controllers/workflow.controller';
 
-import { authorize } from '../middlewares/access.middleware';
+import { authorize, checkGlobalUser } from '../middlewares/access.middleware';
 
 const router = Router();
 router.use(authMiddleware);
@@ -27,6 +27,11 @@ router.post(
   '/user/initiate',
   authorize('initiate', 'USER_ACC'),
   UserController.initiateUserOnboarding,
+);
+router.post(
+  '/user/initiate-global-signatory',
+  checkGlobalUser(),
+  UserController.initiateGlobalSignatoryOnboarding,
 );
 router.post(
   '/user/action',

@@ -23,6 +23,7 @@ import {
   userHistory,
   userCompanyNodesSchema,
   userFetchByNodePathCountSchema,
+  globalSignatoryOnboardingSchema,
 } from '../validations/user.validation';
 
 export class UserController {
@@ -209,6 +210,110 @@ export class UserController {
       res
         .status(201)
         .json({ message: 'User onboarding initiated successfully' });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async initiateGlobalSignatoryOnboarding(
+    req: Request & { user?: { id: string; companyId: string } },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const validatedData = zodParse(globalSignatoryOnboardingSchema, req.body);
+      const initiatorId = req.user?.id;
+      const companyId = req.user?.companyId;
+
+      if (!initiatorId) {
+        throw new AppError('Unauthorized', 401);
+      }
+
+      // 1. Logic: Check if user already exists
+      const { data: existingUser, ok: existsOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/onboarding/user/check-exists`,
+        { email: validatedData.email },
+      );
+
+      if (existsOk && existingUser) {
+        throw new AppError('User already exists in master table', 400);
+      }
+
+      const { data: pendingUsers, ok: pendingOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/user/get-pending-users`,
+        { email: validatedData.email },
+      );
+
+      if (pendingOk && pendingUsers) {
+        throw new AppError('User already exists in pending onboarding', 400);
+      }
+
+      // 2. Logic: Resolve Company and Group Code
+      // Since it's a global signatory, we use the initiator's company
+      const { data: initiator, ok: initiatorOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/onboarding/user/check-exists`,
+        { email: (req as any).user?.email || (req as any).user?.id }, // Try to get initiator info
+      );
+
+      // Actually, we can get companyCode from companyId if needed, but let's assume req.user has companyId
+      const { data: company, ok: companyOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/company/get-by-id`,
+        { id: companyId },
+      );
+
+      if (!companyOk || !company) {
+        throw new AppError('Company not found', 404);
+      }
+
+      const companyCode = company.companyCode;
+      const groupCode = company.companyMappings?.[0]?.group?.groupCode;
+
+      // 3. Logic: Get eligible approver IDs (Global Access users only as per request)
+      const { data: eligibleApprovers, ok: globalOk } = await internalPost<
+        string[]
+      >(`${config.backendUrl}/internal/onboarding/global-access-ids`, {
+        companyCode,
+      });
+
+      // 4. Call Backend to create the record
+      const {
+        data: createRes,
+        ok: createOk,
+        status: createStatus,
+      } = await internalPost(
+        `${config.backendUrl}/internal/user/create-global-signatory`,
+        {
+          initiatorId,
+          companyCode,
+          groupCode,
+          data: {
+            basicDetails: {
+              name: validatedData.name,
+              email: validatedData.email,
+              phone: validatedData.phone,
+              designation: validatedData.designation,
+              employeeId: validatedData.employeeId,
+              isGlobalUser: true,
+            },
+            permissions: [], // Global user doesn't need explicit permissions yet
+          },
+          status: 'PENDING',
+          eligibleApprovers: eligibleApprovers || [],
+        },
+      );
+
+      if (!createOk) {
+        throw new AppError(
+          createRes?.message ||
+            createRes?.error ||
+            'Failed to initiate global signatory onboarding',
+          createStatus,
+        );
+      }
+
+      res
+        .status(201)
+        .json({ message: 'Global signatory onboarding initiated successfully' });
     } catch (error) {
       next(error);
     }

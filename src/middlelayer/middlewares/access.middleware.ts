@@ -123,3 +123,41 @@ export const authorize = (
     }
   };
 };
+
+/**
+ * Global User Check:
+ * Specialized middleware to verify if the requester has global access permissions.
+ */
+export const checkGlobalUser = () => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?.id;
+      const companyId = req.user?.companyId;
+
+      if (!userId || !companyId) {
+        throw new AppError('Unauthorized: User information missing', 401);
+      }
+
+      // Check for global access status via backend
+      const response = await internalPost<{ isGlobal: boolean }>(
+        `${config.backendUrl}/internal/user/check-global`,
+        { userId, companyId },
+      );
+
+      if (!response.ok || !response.data) {
+        throw new AppError('Failed to verify global user status', 500);
+      }
+
+      if (response.data.isGlobal) {
+        return next();
+      }
+
+      throw new AppError(
+        'Access Denied: Only users with global access can initiate this action',
+        403,
+      );
+    } catch (error) {
+      next(error);
+    }
+  };
+};

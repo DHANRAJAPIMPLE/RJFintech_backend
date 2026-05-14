@@ -251,6 +251,28 @@ export class CompanyDbController {
   }
 
   /**
+   * Fetches basic company information by its unique ID.
+   */
+  static async getCompanyById(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { id } = req.body;
+      const company = await prisma.company.findUnique({
+        where: { id },
+        include: {
+          companyMappings: {
+            include: {
+              group: true,
+            },
+          },
+        },
+      });
+      res.json(company);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Initiates a new company onboarding request.
    * Performs an atomic transaction to:
    * 1. Create a CompanyOnboarding record.

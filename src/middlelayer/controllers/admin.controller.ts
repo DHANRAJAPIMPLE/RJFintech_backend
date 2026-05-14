@@ -86,7 +86,7 @@ export class AdminController {
               groupCode: g.groupCode,
               groupName: g.name,
             },
-            comapnyDetails: companyDetails,
+            companyDetails: companyDetails,
           };
         };
 
@@ -117,7 +117,7 @@ export class AdminController {
                 groupCode: g.groupCode,
                 groupName: g.name,
               },
-              comapnyDetails: [],
+              companyDetails: [],
               signatories: [],
             });
           }
@@ -128,7 +128,7 @@ export class AdminController {
       soloCompanies.forEach((c: any) => {
         const soloEntry = {
           groupDetails: null,
-          comapnyDetails: [
+          companyDetails: [
             {
               companyCode: c.companyCode,
               name: c.legalName,
@@ -167,11 +167,11 @@ export class AdminController {
                   groupName: group.name || 'Pending Group',
                 }
               : null,
-            comapnyDetails: [],
+            companyDetails: [],
           };
         }
 
-        pendingGroups[groupCode].comapnyDetails.push({
+        pendingGroups[groupCode].companyDetails.push({
           companyId: onb.id,
           companyCode: onb.companyCode,
           name: company.name || '',
