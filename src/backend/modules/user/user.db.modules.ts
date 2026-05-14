@@ -1314,6 +1314,18 @@ export class UserDbController {
     try {
       const { userId, companyId, subCategory } = req.body;
 
+      const userMapping = await prisma.userMapping.findUnique({
+        where: {
+          userId_companyId: {
+            userId,
+            companyId,
+          },
+        },
+        select: { designation: true },
+      });
+
+      const designation = userMapping?.designation || '';
+
       const globalAccess = await prisma.userAccess.findFirst({
         where: {
           userId,
@@ -1339,7 +1351,11 @@ export class UserDbController {
             },
           },
         });
-        return res.status(200).json(nodes);
+        const enrichedNodes = nodes.map((node) => ({
+          ...node,
+          designation,
+        }));
+        return res.status(200).json(enrichedNodes);
       } else {
         if (!subCategory) {
           return res.status(200).json([]);
@@ -1379,7 +1395,12 @@ export class UserDbController {
               index === self.findIndex((t) => t.nodePath === node.nodePath),
           );
 
-        return res.status(200).json(nodes);
+        const enrichedNodes = nodes.map((node) => ({
+          ...node,
+          designation,
+        }));
+
+        return res.status(200).json(enrichedNodes);
       }
     } catch (error) {
       next(error);
