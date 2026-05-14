@@ -1,0 +1,66 @@
+name: API Regression Suite
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: dbname
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Set up Environment Variables
+        run: |
+          echo "DATABASE_URL=postgresql://postgres:password@localhost:5432/dbname?schema=public" >> .env
+          echo "JWT_SECRET=test_secret" >> .env
+          echo "PORT=5000" >> .env
+
+      - name: Reset & Seed Database
+        run: |
+          npx prisma db push --force-reset
+          npm run prisma:seed
+
+      - name: Start Backend Server
+        run: npm run dev &
+        env:
+          PORT: 5000
+
+      - name: Wait for Server
+        run: npx wait-on http://localhost:5000/api/v1/auth/me
+
+      - name: Run Newman Tests
+        run: node tests/scripts/regression-runner.js
+
+      - name: Upload Test Report
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: newman-reports
+          path: tests/reports/

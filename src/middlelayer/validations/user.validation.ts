@@ -133,7 +133,9 @@ export const globalSignatoryOnboardingSchema = z
       .string()
       .trim()
       .min(2, 'Employee ID must be at least 2 characters')
-      .max(50, 'Employee ID too long'),
+      .max(50, 'Employee ID too long')
+      .nullable()
+      .optional(),
     isGlobalUser: z.boolean().refine((v) => v === true, {
       message: 'isGlobalUser must be true',
     }),

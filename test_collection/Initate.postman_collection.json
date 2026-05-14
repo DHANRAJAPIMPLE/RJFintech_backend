@@ -9,7 +9,7 @@
   },
   "item": [
     {
-      "name": "http://localhost:5000/api/v1/auth/register",
+      "name": "{{baseUrl}}/auth/register",
       "request": {
         "method": "POST",
         "header": [],
@@ -23,9 +23,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/auth/register",
+          "raw": "{{baseUrl}}/auth/register",
           "host": [
-            "http://localhost:5000/api/v1/auth"
+            "{{baseUrl}}/auth"
           ],
           "path": [
             "register"
@@ -35,13 +35,13 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/fetch-all-users",
+      "name": "{{baseUrl}}/company-settings/user/fetch-all-users",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"companyCode\":\"TEST28042026\"\r\n}",
+          "raw": "{\r\n    \"companyCode\": \"{{testCompanyCode}}\"\r\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -49,9 +49,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-all-users",
+          "raw": "{{baseUrl}}/company-settings/user/fetch-all-users",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
@@ -62,13 +62,13 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/auth/login",
+      "name": "{{baseUrl}}/auth/login",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"email\": \"employee1@testtech.com\",\r\n    \"password\": \"Admin@123\",\r\n    \"action\": 0\r\n}",
+          "raw": "{\r\n    \"email\": \"{{adminEmail}}\",\r\n    \"password\": \"{{adminPassword}}\",\r\n    \"action\": 0\r\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -76,9 +76,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/auth/login",
+          "raw": "{{baseUrl}}/auth/login",
           "host": [
-            "http://localhost:5000/api/v1/auth"
+            "{{baseUrl}}/auth"
           ],
           "path": [
             "login"
@@ -88,7 +88,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/admin/initiate",
+      "name": "{{baseUrl}}/admin/initiate",
       "request": {
         "method": "POST",
         "header": [
@@ -112,9 +112,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/admin/initiate",
+          "raw": "{{baseUrl}}/admin/initiate",
           "host": [
-            "http://localhost:5000/api/v1/admin"
+            "{{baseUrl}}/admin"
           ],
           "path": [
             "initiate"
@@ -124,7 +124,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/auth/logout",
+      "name": "{{baseUrl}}/auth/logout",
       "request": {
         "method": "POST",
         "header": [],
@@ -138,9 +138,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/auth/logout",
+          "raw": "{{baseUrl}}/auth/logout",
           "host": [
-            "http://localhost:5000/api/v1/auth"
+            "{{baseUrl}}/auth"
           ],
           "path": [
             "logout"
@@ -150,7 +150,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/auth/me",
+      "name": "{{baseUrl}}/auth/me",
       "request": {
         "method": "POST",
         "header": [],
@@ -164,9 +164,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/auth/me",
+          "raw": "{{baseUrl}}/auth/me",
           "host": [
-            "http://localhost:5000/api/v1/auth"
+            "{{baseUrl}}/auth"
           ],
           "path": [
             "me"
@@ -176,14 +176,14 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/admin/groups",
+      "name": "{{baseUrl}}/admin/groups",
       "request": {
         "method": "POST",
         "header": [],
         "url": {
-          "raw": "http://localhost:5000/api/v1/admin/groups",
+          "raw": "{{baseUrl}}/admin/groups",
           "host": [
-            "http://localhost:5000/api/v1/admin"
+            "{{baseUrl}}/admin"
           ],
           "path": [
             "groups"
@@ -193,7 +193,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/initiate",
+      "name": "{{baseUrl}}/company-settings/user/initiate",
       "request": {
         "method": "POST",
         "header": [],
@@ -207,9 +207,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/initiate",
+          "raw": "{{baseUrl}}/company-settings/user/initiate",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
@@ -220,7 +220,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/action",
+      "name": "{{baseUrl}}/company-settings/user/action",
       "request": {
         "method": "POST",
         "header": [],
@@ -234,9 +234,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/action",
+          "raw": "{{baseUrl}}/company-settings/user/action",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
@@ -247,7 +247,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/admin/action",
+      "name": "{{baseUrl}}/admin/action",
       "request": {
         "method": "POST",
         "header": [],
@@ -261,9 +261,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/admin/action",
+          "raw": "{{baseUrl}}/admin/action",
           "host": [
-            "http://localhost:5000/api/v1/admin"
+            "{{baseUrl}}/admin"
           ],
           "path": [
             "action"
@@ -273,7 +273,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/roles/create",
+      "name": "{{baseUrl}}/roles/create",
       "request": {
         "method": "POST",
         "header": [],
@@ -287,9 +287,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/roles/create",
+          "raw": "{{baseUrl}}/roles/create",
           "host": [
-            "http://localhost:5000/api/v1/roles"
+            "{{baseUrl}}/roles"
           ],
           "path": [
             "create"
@@ -299,7 +299,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/roles/fetch-all",
+      "name": "{{baseUrl}}/roles/fetch-all",
       "request": {
         "method": "POST",
         "header": [],
@@ -313,9 +313,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/role/fetch-all",
+          "raw": "{{baseUrl}}/company-settings/role/fetch-all",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "role",
@@ -326,7 +326,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/org/initiate",
+      "name": "{{baseUrl}}/company-settings/org/initiate",
       "request": {
         "method": "POST",
         "header": [],
@@ -340,9 +340,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/org/initiate",
+          "raw": "{{baseUrl}}/company-settings/org/initiate",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "org",
@@ -352,7 +352,7 @@
       },
       "response": [
         {
-          "name": "http://localhost:5000/api/v1/company-settings/org/initiate",
+          "name": "{{baseUrl}}/company-settings/org/initiate",
           "originalRequest": {
             "method": "POST",
             "header": [],
@@ -366,9 +366,9 @@
               }
             },
             "url": {
-              "raw": "http://localhost:5000/api/v1/company-settings/org/initiate",
+              "raw": "{{baseUrl}}/company-settings/org/initiate",
               "host": [
-                "http://localhost:5000/api/v1/company-settings"
+                "{{baseUrl}}/company-settings"
               ],
               "path": [
                 "org",
@@ -423,7 +423,7 @@
       ]
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/org/approve",
+      "name": "{{baseUrl}}/company-settings/org/approve",
       "request": {
         "method": "POST",
         "header": [],
@@ -437,9 +437,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/org/approve",
+          "raw": "{{baseUrl}}/company-settings/org/approve",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "org",
@@ -450,7 +450,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/roles/fetch-all",
+      "name": "{{baseUrl}}/roles/fetch-all",
       "request": {
         "method": "POST",
         "header": [],
@@ -464,9 +464,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/roles/fetch-all",
+          "raw": "{{baseUrl}}/roles/fetch-all",
           "host": [
-            "http://localhost:5000/api/v1/roles"
+            "{{baseUrl}}/roles"
           ],
           "path": [
             "fetch-all"
@@ -476,7 +476,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/org/fetch",
+      "name": "{{baseUrl}}/company-settings/org/fetch",
       "request": {
         "method": "POST",
         "header": [],
@@ -490,9 +490,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/org/fetch",
+          "raw": "{{baseUrl}}/company-settings/org/fetch",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "org",
@@ -503,7 +503,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/update-status",
+      "name": "{{baseUrl}}/company-settings/user/update-status",
       "request": {
         "method": "POST",
         "header": [],
@@ -517,9 +517,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/update-status",
+          "raw": "{{baseUrl}}/company-settings/user/update-status",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
@@ -530,13 +530,13 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/history",
+      "name": "{{baseUrl}}/company-settings/user/history",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"email\":\"ta26@gmail.com\",\r\n    \"companyCode\":\"TEST28042026\"\r\n}\r\n    \r\n",
+          "raw": "{\r\n    \"email\":\"ta26@gmail.com\",\r\n    \"companyCode\": \"{{testCompanyCode}}\"\r\n}\r\n    \r\n",
           "options": {
             "raw": {
               "language": "json"
@@ -544,9 +544,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-history",
+          "raw": "{{baseUrl}}/company-settings/user/fetch-history",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
@@ -557,7 +557,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/fetch-history",
+      "name": "{{baseUrl}}/company-settings/fetch-history",
       "request": {
         "method": "POST",
         "header": [],
@@ -571,9 +571,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/admin/fetch-history",
+          "raw": "{{baseUrl}}/admin/fetch-history",
           "host": [
-            "http://localhost:5000/api/v1/admin"
+            "{{baseUrl}}/admin"
           ],
           "path": [
             "fetch-history"
@@ -583,13 +583,13 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/org/fetch-history",
+      "name": "{{baseUrl}}/company-settings/org/fetch-history",
       "request": {
         "method": "POST",
         "header": [],
         "body": {
           "mode": "raw",
-          "raw": "{\r\n    \"companyCode\":\"TEST28042026\"\r\n}",
+          "raw": "{\r\n    \"companyCode\": \"{{testCompanyCode}}\"\r\n}",
           "options": {
             "raw": {
               "language": "json"
@@ -597,9 +597,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/org/fetch-history",
+          "raw": "{{baseUrl}}/company-settings/org/fetch-history",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "org",
@@ -610,7 +610,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/workflow/initiate",
+      "name": "{{baseUrl}}/company-settings/workflow/initiate",
       "request": {
         "method": "POST",
         "header": [
@@ -620,7 +620,7 @@
           },
           {
             "key": "Authorization",
-            "value": "Bearer <YOUR_ACCESS_TOKEN>"
+            "value": "Bearer {{token}}"
           }
         ],
         "body": {
@@ -633,9 +633,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/workflow/initiate",
+          "raw": "{{baseUrl}}/company-settings/workflow/initiate",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "workflow",
@@ -646,14 +646,14 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/workflow/fetch",
+      "name": "{{baseUrl}}/company-settings/workflow/fetch",
       "request": {
         "method": "POST",
         "header": [],
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/workflow/fetch",
+          "raw": "{{baseUrl}}/company-settings/workflow/fetch",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "workflow",
@@ -664,7 +664,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/workflow/action",
+      "name": "{{baseUrl}}/company-settings/workflow/action",
       "request": {
         "method": "POST",
         "header": [
@@ -687,9 +687,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/workflow/action",
+          "raw": "{{baseUrl}}/company-settings/workflow/action",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "workflow",
@@ -700,7 +700,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/workflow/fetch-history",
+      "name": "{{baseUrl}}/company-settings/workflow/fetch-history",
       "request": {
         "method": "POST",
         "header": [
@@ -710,7 +710,7 @@
           },
           {
             "key": "Authorization",
-            "value": "Bearer <YOUR_ACCESS_TOKEN>"
+            "value": "Bearer {{token}}"
           }
         ],
         "body": {
@@ -723,9 +723,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/workflow/fetch-history",
+          "raw": "{{baseUrl}}/company-settings/workflow/fetch-history",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "workflow",
@@ -759,7 +759,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/initiate-global-signatory",
+      "name": "{{baseUrl}}/company-settings/user/initiate-global-signatory",
       "request": {
         "method": "POST",
         "header": [
@@ -782,9 +782,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/initiate-global-signatory",
+          "raw": "{{baseUrl}}/company-settings/user/initiate-global-signatory",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
@@ -795,7 +795,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/fetch-users-by-nodepath-count",
+      "name": "{{baseUrl}}/company-settings/user/fetch-users-by-nodepath-count",
       "request": {
         "method": "POST",
         "header": [
@@ -818,9 +818,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-users-by-nodepath-count",
+          "raw": "{{baseUrl}}/company-settings/user/fetch-users-by-nodepath-count",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
@@ -831,7 +831,7 @@
       "response": []
     },
     {
-      "name": "http://localhost:5000/api/v1/company-settings/user/fetch-company-nodes",
+      "name": "{{baseUrl}}/company-settings/user/fetch-company-nodes",
       "request": {
         "method": "POST",
         "header": [],
@@ -845,9 +845,9 @@
           }
         },
         "url": {
-          "raw": "http://localhost:5000/api/v1/company-settings/user/fetch-company-nodes",
+          "raw": "{{baseUrl}}/company-settings/user/fetch-company-nodes",
           "host": [
-            "http://localhost:5000/api/v1/company-settings"
+            "{{baseUrl}}/company-settings"
           ],
           "path": [
             "user",
