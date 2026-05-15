@@ -98,13 +98,23 @@ export const internalFetch = async <T = any>(
       data = await response.text();
     }
 
+    // Parse URL for consistent relative path tracing
+    let parsedUrl = url;
+    try {
+      const urlObj = new URL(url);
+      parsedUrl = urlObj.pathname + urlObj.search;
+    } catch (e) {
+      // fallback to original
+    }
+
     // Record this call as a MIDDLELAYER span
     if (context) {
       ApiTracker.createSpan({
         id: spanId,
         type: 'MIDDLELAYER',
         method,
-        url,
+        url: parsedUrl,
+        parentSpanId: context.parentSpanId || context.trackingId,
         statusCode: response.status,
         latency,
         companyId,
@@ -120,12 +130,19 @@ export const internalFetch = async <T = any>(
     return { data, status: response.status, ok: response.ok };
   } catch (_error) {
     const latency = Date.now() - startTime;
+    let parsedUrl = url;
+    try {
+      const urlObj = new URL(url);
+      parsedUrl = urlObj.pathname + urlObj.search;
+    } catch (e) {}
+
     if (context) {
       ApiTracker.createSpan({
         id: spanId,
         type: 'MIDDLELAYER',
         method,
-        url,
+        url: parsedUrl,
+        parentSpanId: context.parentSpanId || context.trackingId,
         statusCode: 503,
         latency,
         companyId,

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import requestIp from 'request-ip';
+import crypto from 'crypto';
 import {
   ApiTracker,
   trackingStorage,
@@ -67,6 +68,13 @@ export const createTrackerMiddleware = (
     const incomingTrackingId = cleanString(
       firstHeaderValue(req.headers['track-id']),
     );
+
+    // If it's an internal route but has NO incoming tracking ID, it means the upstream
+    // caller (Middlelayer) intentionally skipped tracking for this flow.
+    // We must skip tracking too to avoid creating orphan "internal" root traces.
+    if (req.originalUrl.startsWith('/internal/') && !incomingTrackingId) {
+      return next();
+    }
     const clientIp = getClientIp(req);
     // Initial attempt to get IDs (e.g. from public routes or if already present)
     const companyId =
@@ -83,13 +91,14 @@ export const createTrackerMiddleware = (
       cleanString(req.body?.parentSpanId) ||
       cleanString(req.body?.parent_id);
 
-    const isMainEntry = !incomingTrackingId;
+    const isMainEntry = !parentSpanId;
     let trackingId = incomingTrackingId;
 
     if (isMainEntry) {
       // Create a new parent Trace — this is AWAITED to ensure the trace row
       // exists in the DB before any downstream spans reference it.
       trackingId = await ApiTracker.startTrace({
+        trackingId: incomingTrackingId,
         entryMethod: req.method,
         entryUrl: req.originalUrl,
         companyId,
@@ -105,6 +114,7 @@ export const createTrackerMiddleware = (
     // Create a mutable context object so it can be updated by authMiddleware
     const context: TrackingContext = {
       trackingId,
+      parentSpanId,
       companyId,
       userId,
       clientIp,

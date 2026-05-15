@@ -5,6 +5,7 @@ export type ApiSpanType = 'MIDDLELAYER' | 'BACKEND' | 'EXTERNAL';
 
 export interface TrackingContext {
   trackingId: string;
+  parentSpanId?: string;
   companyId?: string;
   userId?: string;
   clientIp?: string;
