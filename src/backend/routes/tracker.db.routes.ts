@@ -9,6 +9,8 @@ const router = Router();
  */
 router.post('/trace', TrackerDbController.createTrace);
 router.patch('/trace', TrackerDbController.updateTrace);
+router.post('/trace/start', TrackerDbController.createTrace);
+router.patch('/trace/end', TrackerDbController.updateTrace);
 router.post('/span', TrackerDbController.createSpan);
 
 export default router;

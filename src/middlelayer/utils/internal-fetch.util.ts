@@ -41,32 +41,37 @@ export const internalFetch = async <T = any>(
   const bodyIdentity = identityFromBody(body);
   const companyId = cleanString(context?.companyId) || bodyIdentity.companyId;
   const userId = cleanString(context?.userId) || bodyIdentity.userId;
+  const clientIp = cleanString(context?.clientIp);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
 
   if (context && (companyId || userId)) {
     ApiTracker.setIdentity({ companyId, userId });
   }
 
-  try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
+  if (context) {
+    headers['track-id'] = context.trackingId;
 
-    if (context) {
-      headers['track-id'] = context.trackingId;
-
-      if (companyId) {
-        headers['company-id'] = companyId;
-      }
-
-      if (userId) {
-        headers['user-id'] = userId;
-      }
-
-      if (spanId) {
-        headers['parent-span-id'] = spanId;
-      }
+    if (companyId) {
+      headers['company-id'] = companyId;
     }
 
+    if (userId) {
+      headers['user-id'] = userId;
+    }
+
+    if (spanId) {
+      headers['parent-span-id'] = spanId;
+    }
+
+    if (clientIp) {
+      headers['x-client-ip'] = clientIp;
+      headers['client-ip'] = clientIp;
+    }
+  }
+
+  try {
     const options: RequestInit = {
       method,
       headers,
@@ -122,6 +127,7 @@ export const internalFetch = async <T = any>(
         userId,
         reqBody: body,
         resBody: { error: 'Backend service unreachable' },
+        headers,
         startedAt: new Date(startTime),
         endedAt: new Date(),
       });

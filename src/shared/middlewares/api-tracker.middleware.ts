@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import requestIp from 'request-ip';
 import {
   ApiTracker,
   trackingStorage,
@@ -12,6 +13,29 @@ const firstHeaderValue = (value: string | string[] | undefined) => {
 
 const cleanString = (value: unknown) => {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+};
+
+const getClientIp = (req: Request) => {
+  return (
+    cleanString(firstHeaderValue(req.headers['x-client-ip'])) ||
+    cleanString(firstHeaderValue(req.headers['client-ip'])) ||
+    cleanString(requestIp.getClientIp(req)) ||
+    cleanString(req.ip) ||
+    cleanString(req.socket.remoteAddress)
+  );
+};
+
+const withClientIpHeaders = (
+  headers: Request['headers'],
+  clientIp?: string,
+) => {
+  return {
+    ...headers,
+    ...(clientIp && {
+      'x-client-ip': clientIp,
+      'client-ip': clientIp,
+    }),
+  };
 };
 
 /**
@@ -29,8 +53,9 @@ export const createTrackerMiddleware = (
 
     // Extract tracking info from headers (propagated from upstream) or body
     const incomingTrackingId = cleanString(
-    firstHeaderValue(req.headers['track-id'])
+      firstHeaderValue(req.headers['track-id']),
     );
+    const clientIp = getClientIp(req);
     // Initial attempt to get IDs (e.g. from public routes or if already present)
     const companyId =
       cleanString(firstHeaderValue(req.headers['company-id'])) ||
@@ -69,6 +94,7 @@ export const createTrackerMiddleware = (
       trackingId,
       companyId,
       userId,
+      clientIp,
       serviceType,
     };
 
@@ -113,7 +139,7 @@ export const createTrackerMiddleware = (
               statusCode: res.statusCode,
               latency,
               reqBody: req.body,
-              headers: req.headers,
+              headers: withClientIpHeaders(req.headers, clientIp),
               startedAt: new Date(startTime),
               endedAt,
             });

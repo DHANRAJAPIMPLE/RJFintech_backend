@@ -13,9 +13,14 @@ const cleanDate = (value: unknown) => {
 };
 
 const cleanNumber = (value: unknown) => {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? value
-    : undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+  if (typeof value === 'string' && value.trim()) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
+  }
+
+  return undefined;
 };
 
 /**
@@ -80,11 +85,18 @@ export class TrackerDbController {
         companyId,
         userId,
       } = req.body;
-      const endedAtDate = endedAt ? new Date(endedAt) : new Date();
+      const cleanTrackingId = cleanString(trackingId);
+      const endedAtDate = cleanDate(endedAt) || new Date();
+      const cleanStatusCode = cleanNumber(statusCode);
       const cleanCompanyId = cleanString(companyId);
       const cleanUserId = cleanString(userId);
+
+      if (!cleanTrackingId) {
+        return res.status(400).json({ error: 'trackingId is required' });
+      }
+
       const trace = await prisma.apiTrace.findUnique({
-        where: { trackingId },
+        where: { trackingId: cleanTrackingId },
         select: { startedAt: true },
       });
       const resolvedTotalLatency =
@@ -93,12 +105,27 @@ export class TrackerDbController {
           ? Math.max(0, endedAtDate.getTime() - trace.startedAt.getTime())
           : undefined);
 
-      // Use updateMany to avoid "Record not found" error if createTrace hasn't finished yet
-      // or if it failed to create. This is safer for non-critical logging.
-      const result = await prisma.apiTrace.updateMany({
-        where: { trackingId },
-        data: {
-          statusCode,
+      const updatedTrace = await prisma.apiTrace.upsert({
+        where: { trackingId: cleanTrackingId },
+        create: {
+          trackingId: cleanTrackingId,
+          entryMethod: 'UNKNOWN',
+          entryUrl: 'UNKNOWN',
+          startedAt: endedAtDate,
+          ...(typeof cleanStatusCode === 'number' && {
+            statusCode: cleanStatusCode,
+          }),
+          endedAt: endedAtDate,
+          ...(typeof resolvedTotalLatency === 'number' && {
+            totalLatency: resolvedTotalLatency,
+          }),
+          ...(cleanCompanyId && { companyId: cleanCompanyId }),
+          ...(cleanUserId && { userId: cleanUserId }),
+        },
+        update: {
+          ...(typeof cleanStatusCode === 'number' && {
+            statusCode: cleanStatusCode,
+          }),
           endedAt: endedAtDate,
           ...(typeof resolvedTotalLatency === 'number' && {
             totalLatency: resolvedTotalLatency,
@@ -108,7 +135,7 @@ export class TrackerDbController {
         },
       });
 
-      res.status(200).json({ success: true, updated: result.count });
+      res.status(200).json({ success: true, updated: 1, trace: updatedTrace });
     } catch (error) {
       next(error);
     }
@@ -140,6 +167,8 @@ export class TrackerDbController {
       const cleanUserId = cleanString(userId);
       const cleanMethod = cleanString(method) || 'UNKNOWN';
       const cleanUrl = cleanString(url) || 'UNKNOWN';
+      const cleanStatusCode = cleanNumber(statusCode);
+      const cleanLatency = cleanNumber(latency);
       const cleanStartedAt = cleanDate(startedAt) || new Date();
       const cleanEndedAt = cleanDate(endedAt);
       const cleanParentSpanId =
@@ -177,11 +206,13 @@ export class TrackerDbController {
           type,
           method: cleanMethod,
           url: cleanUrl,
-          statusCode,
+          ...(typeof cleanStatusCode === 'number' && {
+            statusCode: cleanStatusCode,
+          }),
           headers,
           reqBody,
           resBody,
-          latency,
+          ...(typeof cleanLatency === 'number' && { latency: cleanLatency }),
           startedAt: cleanStartedAt,
           endedAt: cleanEndedAt,
         },
