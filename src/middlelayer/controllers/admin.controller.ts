@@ -23,13 +23,7 @@ import {
 import { CodeGenUtil } from '../utils/code-gen.util';
 
 export class AdminController {
-  private static formatDate(date: Date | string): string {
-    const d = new Date(date);
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year = d.getFullYear();
-    return `${day}-${month}-${year}`;
-  }
+
 
   static async getGroupCompanies(
     req: AuthRequest,

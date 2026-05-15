@@ -261,13 +261,7 @@ export class UserDbController {
         };
       });
 
-      // 4. Format all users into the requested structure
-      const formatDate = (date: Date) => {
-        const day = String(date.getDate()).padStart(2, '0');
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const year = date.getFullYear();
-        return `${day}-${month}-${year}`;
-      };
+ 
 
       const activeUsers: any[] = [];
       const inactiveUsers: any[] = [];
@@ -279,7 +273,7 @@ export class UserDbController {
             name: u.name,
             email: u.email,
             phone: u.phone,
-            createdAt: formatDate(u.createdAt),
+            createdAt: u.createdAt,
             designation: mapping?.designation || null,
             employeeId: mapping?.employeeId || null,
             reportingManagerName: mapping?.manager?.name || null,
@@ -354,7 +348,7 @@ export class UserDbController {
             name: basic.name,
             email: basic.email,
             phone: basic.phone,
-            createdAt: formatDate(onb.createdAt),
+            createdAt: onb.createdAt,
             designation: basic.designation || null,
             employeeId: basic.employeeId || null,
             reportingManagerName: onb.reportingManagerInfo?.name || null,
@@ -1078,10 +1072,24 @@ export class UserDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
+      const rejectedReqIds = new Set<string>();
+      for (const [reqId, levels] of workflowMap.entries()) {
+        if (levels.some((l: any) => l.status === 'REJECTED')) {
+          rejectedReqIds.add(reqId);
+        }
+      }
+      history.forEach((h) => {
+        if (h.reqId && h.event === 'REJECTED') {
+          rejectedReqIds.add(h.reqId);
+        }
+      });
+
+      const activeHistory = history.filter(h => !h.reqId || !rejectedReqIds.has(h.reqId));
+
       // Build request-level maps used to filter displayed approvers.
       const initiatorMap = new Map<string, string>();
       const approvedUserMap = new Map<string, Set<string>>();
-      history.forEach((h) => {
+      activeHistory.forEach((h) => {
         if (h.reqId) {
           if (h.event === 'INITIATE' && h.eventUserId) {
             initiatorMap.set(h.reqId, h.eventUserId);
@@ -1098,6 +1106,7 @@ export class UserDbController {
 
       // Filter each stored approver list for active display only. The DB row is not mutated.
       for (const [reqId, levels] of workflowMap.entries()) {
+        if (rejectedReqIds.has(reqId)) continue; // skip enriching rejected workflows
         const initiatorId = initiatorMap.get(reqId) || null;
         const approvedUserIds = Array.from(
           approvedUserMap.get(reqId) ?? new Set<string>(),
@@ -1158,7 +1167,7 @@ export class UserDbController {
       const handledPendingReqs = new Set<string>();
 
       // 3. Inject "Pending Approval" entries for any active requests
-      history.forEach((h) => {
+      activeHistory.forEach((h) => {
         if (h.reqId && !handledPendingReqs.has(h.reqId)) {
           const levels = workflowMap.get(h.reqId);
           if (levels) {
@@ -1185,7 +1194,7 @@ export class UserDbController {
       });
 
       // 4. Add actual history entries
-      const formattedHistory = history.map((h) => {
+      const formattedHistory = activeHistory.map((h) => {
         const initiatorMapping = h.user?.userMappings?.[0];
         const initiatorAccesses = h.user?.userAccesses || [];
 
