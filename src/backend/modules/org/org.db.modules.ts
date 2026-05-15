@@ -691,16 +691,41 @@ export class OrgStructureDbController {
       );
 
       const resultList: any[] = [];
-      const handledReqs = new Set<string>();
+      const handledPendingReqs = new Set<string>();
 
+      // 3. Inject "Pending Approval" entries for any active requests
       histories.forEach((h) => {
-        if (h.orgReqId && handledReqs.has(h.orgReqId)) {
-          return;
-        }
-        if (h.orgReqId) {
-          handledReqs.add(h.orgReqId);
-        }
+        if (h.orgReqId && !handledPendingReqs.has(h.orgReqId)) {
+          const levels = workflowMap.get(h.orgReqId);
+          if (levels) {
+            const currentPending = levels.find((l) => l.status === 'PENDING');
+            if (currentPending) {
+              const approvers = (currentPending.approversList as string[])
+                .map((id) => {
+                  const u = approverMap.get(id);
+                  return u ? { name: u.name, email: u.email } : null;
+                })
+                .filter(Boolean);
 
+              const data = h.orgReq?.data as any;
+              resultList.push({
+                companyCode: h.company.companyCode,
+                event: `L${currentPending.level} Pending Approval`,
+                createdAt: null,
+                eligibleapprovers: approvers,
+                newNodeName: data?.newNodeName || null,
+                nodeType: data?._nodeType || data?.nodeType || null,
+                parentNodePath: data?.parentNode?.nodePath || 'ROOT',
+                parentNodeName: data?.parentNode?.nodeName || 'ROOT',
+              });
+            }
+          }
+          handledPendingReqs.add(h.orgReqId);
+        }
+      });
+
+      // 4. Format history for easy display
+      const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;
         const initiatorAccesses = h.user?.userAccesses || [];
 
@@ -710,32 +735,50 @@ export class OrgStructureDbController {
         const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
 
         const levels = h.orgReqId ? workflowMap.get(h.orgReqId) : null;
-        
-        let event = h.event;
-        let eligibleapprovers = undefined;
-        let level = h.level;
+        let workflowStatus = null;
 
         if (levels && levels.length > 0) {
-          const currentPending = levels.find((l: any) => l.status === 'PENDING');
-          if (currentPending) {
-            event = `L${currentPending.level} Pending Approval`;
-            level = currentPending.level;
-            eligibleapprovers = (currentPending.approversList as string[])
-              .map((id: string) => {
-                const u = approverMap.get(id);
-                return u ? { name: u.name, email: u.email } : null;
-              })
-              .filter(Boolean);
-          }
+          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
+          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
+          const currentPending = levels.find(
+            (l: any) => l.status === 'PENDING',
+          );
+
+          workflowStatus = {
+            overallStatus: isRejected
+              ? 'REJECTED'
+              : allApproved
+                ? 'APPROVED'
+                : 'PENDING',
+            currentLevel: currentPending
+              ? currentPending.level
+              : allApproved
+                ? levels.length
+                : null,
+            totalLevels: levels.length,
+            levels: levels
+              .filter(
+                (l: any) => l.level <= (currentPending?.level || levels.length),
+              )
+              .map((l: any) => ({
+                level: l.level,
+                status: l.status,
+                eligibleapprovers: (l.approversList as string[])
+                  .map((id: string) => {
+                    const u = approverMap.get(id);
+                    return u ? { name: u.name, email: u.email } : null;
+                  })
+                  .filter(Boolean),
+              })),
+          };
         }
 
-        resultList.push({
+        return {
           companyCode: h.company.companyCode,
-          event,
-          level,
+          event: h.event,
+          level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          eligibleapprovers,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
@@ -746,8 +789,10 @@ export class OrgStructureDbController {
           nodeType: data?._nodeType || data?.nodeType || null,
           parentNodePath: data?.parentNode?.nodePath || 'ROOT',
           parentNodeName: data?.parentNode?.nodeName || 'ROOT',
-        });
+        };
       });
+
+      resultList.push(...formattedHistories);
 
       res.status(200).json({
         message: 'Organization structure history fetched successfully!',
