@@ -29,7 +29,7 @@ export const createTrackerMiddleware = (
 
     // Extract tracking info from headers (propagated from upstream) or body
     const incomingTrackingId = cleanString(
-      firstHeaderValue(req.headers['tracking-id']),
+    firstHeaderValue(req.headers['track-id'])
     );
     // Initial attempt to get IDs (e.g. from public routes or if already present)
     const companyId =
@@ -122,7 +122,7 @@ export const createTrackerMiddleware = (
       });
 
       // Propagate tracking ID to response headers
-      res.setHeader('tracking-id', trackingId);
+      res.setHeader('track-id', trackingId);
 
       next();
     });

@@ -52,7 +52,7 @@ export const internalFetch = async <T = any>(
     };
 
     if (context) {
-      headers['tracking-id'] = context.trackingId;
+      headers['track-id'] = context.trackingId;
 
       if (companyId) {
         headers['company-id'] = companyId;
