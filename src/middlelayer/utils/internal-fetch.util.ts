@@ -71,21 +71,14 @@ export const internalFetch = async <T = any>(
     }
   }
 
-  // Automatically inject companyId and userId if they are present in context but missing in body
-  const finalBody = (method !== 'GET' && method !== 'DELETE') ? {
-    ...(body || {}),
-    companyId: body?.companyId || companyId,
-    userId: body?.userId || userId,
-  } : body;
-
   try {
     const options: RequestInit = {
       method,
       headers,
     };
 
-    if (finalBody && method !== 'GET') {
-      options.body = JSON.stringify(finalBody);
+    if (body && method !== 'GET') {
+      options.body = JSON.stringify(body);
     }
 
     const response = await fetch(url, options);
@@ -111,7 +104,7 @@ export const internalFetch = async <T = any>(
         latency,
         companyId,
         userId,
-        reqBody: finalBody,
+        reqBody: body,
         resBody: data,
         headers: options.headers,
         startedAt: new Date(startTime),
@@ -132,7 +125,7 @@ export const internalFetch = async <T = any>(
         latency,
         companyId,
         userId,
-        reqBody: finalBody,
+        reqBody: body,
         resBody: { error: 'Backend service unreachable' },
         headers,
         startedAt: new Date(startTime),

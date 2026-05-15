@@ -5,50 +5,50 @@ const cleanString = (value: unknown) => {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 };
 
+const isUUID = (value: string) => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(value);
+};
+
+const cleanId = (value: unknown) => {
+  const str = cleanString(value);
+  return str && isUUID(str) ? str : undefined;
+};
+
 const cleanDate = (value: unknown) => {
   if (!value) return undefined;
-
   const date = value instanceof Date ? value : new Date(String(value));
   return Number.isNaN(date.getTime()) ? undefined : date;
 };
 
 const cleanNumber = (value: unknown) => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-
   if (typeof value === 'string' && value.trim()) {
     const number = Number(value);
     return Number.isFinite(number) ? number : undefined;
   }
-
   return undefined;
 };
 
 /**
  * TRACKER DB CONTROLLER:
  * Handles incoming logging requests from the Middle Layer.
- * This ensures that only the Backend Service interacts with the ApiTrace/ApiSpan tables.
  */
 export class TrackerDbController {
   static async createTrace(req: Request, res: Response, next: NextFunction) {
     try {
-      const {
-        trackingId,
-        companyId,
-        userId,
-        entryMethod,
-        entryUrl,
-        startedAt,
-      } = req.body;
+      const { trackingId, companyId, userId, entryMethod, entryUrl, startedAt } = req.body;
       const cleanTrackingId = cleanString(trackingId);
-      const cleanCompanyId = cleanString(companyId);
-      const cleanUserId = cleanString(userId);
+      
+      // Look in body first, then headers
+      const validCompanyId = cleanId(companyId || req.headers['company-id']);
+      const validUserId = cleanId(userId || req.headers['user-id']);
+      
       const cleanEntryMethod = cleanString(entryMethod) || 'UNKNOWN';
       const cleanEntryUrl = cleanString(entryUrl) || 'UNKNOWN';
       const cleanStartedAt = cleanDate(startedAt);
 
-      if (!cleanTrackingId) {
-        return res.status(400).json({ error: 'trackingId is required' });
-      }
+      if (!cleanTrackingId) return res.status(400).json({ error: 'trackingId is required' });
 
       let trace;
       try {
@@ -56,198 +56,152 @@ export class TrackerDbController {
           where: { trackingId: cleanTrackingId },
           create: {
             trackingId: cleanTrackingId,
-            ...(cleanCompanyId && { companyId: cleanCompanyId }),
-            ...(cleanUserId && { userId: cleanUserId }),
+            ...(validCompanyId && { companyId: validCompanyId }),
+            ...(validUserId && { userId: validUserId }),
             entryMethod: cleanEntryMethod,
             entryUrl: cleanEntryUrl,
             startedAt: cleanStartedAt || new Date(),
           },
           update: {
-            ...(cleanCompanyId && { companyId: cleanCompanyId }),
-            ...(cleanUserId && { userId: cleanUserId }),
+            ...(validCompanyId && { companyId: validCompanyId }),
+            ...(validUserId && { userId: validUserId }),
             entryMethod: cleanEntryMethod,
             entryUrl: cleanEntryUrl,
-            ...(cleanStartedAt && { startedAt: cleanStartedAt }),
           },
         });
       } catch (error: any) {
-        if (error.code === 'P2002') {
-          // Record already exists, fetch it so we can return it
+        if (error.code === 'P2003') {
+          trace = await prisma.apiTrace.upsert({
+            where: { trackingId: cleanTrackingId },
+            create: { trackingId: cleanTrackingId, entryMethod: cleanEntryMethod, entryUrl: cleanEntryUrl, startedAt: cleanStartedAt || new Date() },
+            update: { entryMethod: cleanEntryMethod, entryUrl: cleanEntryUrl }
+          });
+        } else if (error.code === 'P2002') {
           trace = await prisma.apiTrace.findUnique({ where: { trackingId: cleanTrackingId } });
-        } else {
-          throw error;
-        }
+        } else throw error;
       }
 
       res.status(201).json(trace);
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   }
 
   static async updateTrace(req: Request, res: Response, next: NextFunction) {
     try {
-      const {
-        trackingId,
-        statusCode,
-        endedAt,
-        totalLatency,
-        companyId,
-        userId,
-      } = req.body;
+      const { trackingId, statusCode, endedAt, totalLatency, companyId, userId } = req.body;
       const cleanTrackingId = cleanString(trackingId);
+      if (!cleanTrackingId) return res.status(400).json({ error: 'trackingId is required' });
+
       const endedAtDate = cleanDate(endedAt) || new Date();
       const cleanStatusCode = cleanNumber(statusCode);
-      const cleanCompanyId = cleanString(companyId);
-      const cleanUserId = cleanString(userId);
+      const validCompanyId = cleanId(companyId || req.headers['company-id']);
+      const validUserId = cleanId(userId || req.headers['user-id']);
 
-      if (!cleanTrackingId) {
-        return res.status(400).json({ error: 'trackingId is required' });
-      }
-
-      const trace = await prisma.apiTrace.findUnique({
-        where: { trackingId: cleanTrackingId },
-        select: { startedAt: true },
-      });
-      const resolvedTotalLatency =
-        cleanNumber(totalLatency) ??
-        (trace?.startedAt
-          ? Math.max(0, endedAtDate.getTime() - trace.startedAt.getTime())
-          : undefined);
-
-      let updatedTrace;
-      try {
-        updatedTrace = await prisma.apiTrace.upsert({
-          where: { trackingId: cleanTrackingId },
-          create: {
-            trackingId: cleanTrackingId,
-            entryMethod: 'UNKNOWN',
-            entryUrl: 'UNKNOWN',
-            startedAt: endedAtDate,
-            ...(typeof cleanStatusCode === 'number' && {
-              statusCode: cleanStatusCode,
-            }),
-            endedAt: endedAtDate,
-            ...(typeof resolvedTotalLatency === 'number' && {
-              totalLatency: resolvedTotalLatency,
-            }),
-            ...(cleanCompanyId && { companyId: cleanCompanyId }),
-            ...(cleanUserId && { userId: cleanUserId }),
-          },
-          update: {
-            ...(typeof cleanStatusCode === 'number' && {
-              statusCode: cleanStatusCode,
-            }),
-            endedAt: endedAtDate,
-            ...(typeof resolvedTotalLatency === 'number' && {
-              totalLatency: resolvedTotalLatency,
-            }),
-            ...(cleanCompanyId && { companyId: cleanCompanyId }),
-            ...(cleanUserId && { userId: cleanUserId }),
-          },
-        });
-      } catch (error: any) {
-        if (error.code === 'P2002') {
-          updatedTrace = await prisma.apiTrace.findUnique({ where: { trackingId: cleanTrackingId } });
-        } else {
-          throw error;
-        }
-      }
-
-      res.status(200).json({ success: true, updated: 1, trace: updatedTrace });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  static async createSpan(req: Request, res: Response, next: NextFunction) {
-    try {
-      const {
-        id,
-        trackingId,
-        companyId,
-        userId,
-        parentSpanId,
-        parentId,
-        type,
-        method,
-        url,
-        statusCode,
-        headers,
-        reqBody,
-        resBody,
-        latency,
-        startedAt,
-        endedAt,
-      } = req.body;
-      const cleanId = cleanString(id);
-      const cleanTrackingId = cleanString(trackingId);
-      const cleanCompanyId = cleanString(companyId);
-      const cleanUserId = cleanString(userId);
-      const cleanMethod = cleanString(method) || 'UNKNOWN';
-      const cleanUrl = cleanString(url) || 'UNKNOWN';
-      const cleanStatusCode = cleanNumber(statusCode);
-      const cleanLatency = cleanNumber(latency);
-      const cleanStartedAt = cleanDate(startedAt) || new Date();
-      const cleanEndedAt = cleanDate(endedAt);
-      const cleanParentSpanId =
-        cleanString(parentSpanId) ||
-        cleanString(parentId) ||
-        cleanString(req.body['parent_id']);
-
-      if (!cleanTrackingId) {
-        return res.status(400).json({ error: 'trackingId is required' });
-      }
+      const trace = await prisma.apiTrace.findUnique({ where: { trackingId: cleanTrackingId }, select: { startedAt: true } });
+      const resolvedTotalLatency = cleanNumber(totalLatency) ?? (trace?.startedAt ? Math.max(0, endedAtDate.getTime() - trace.startedAt.getTime()) : undefined);
 
       try {
         await prisma.apiTrace.upsert({
           where: { trackingId: cleanTrackingId },
           create: {
             trackingId: cleanTrackingId,
-            ...(cleanCompanyId && { companyId: cleanCompanyId }),
-            ...(cleanUserId && { userId: cleanUserId }),
-            entryMethod: cleanMethod,
-            entryUrl: cleanUrl,
-            startedAt: cleanStartedAt,
+            entryMethod: 'UNKNOWN',
+            entryUrl: 'UNKNOWN',
+            startedAt: endedAtDate,
+            statusCode: cleanStatusCode,
+            endedAt: endedAtDate,
+            totalLatency: resolvedTotalLatency,
+            ...(validCompanyId && { companyId: validCompanyId }),
+            ...(validUserId && { userId: validUserId }),
           },
           update: {
-            ...(cleanCompanyId && { companyId: cleanCompanyId }),
-            ...(cleanUserId && { userId: cleanUserId }),
+            statusCode: cleanStatusCode,
+            endedAt: endedAtDate,
+            totalLatency: resolvedTotalLatency,
+            ...(validCompanyId && { companyId: validCompanyId }),
+            ...(validUserId && { userId: validUserId }),
           },
         });
-      } catch (upsertError: any) {
-        // P2002 is the code for Unique constraint failed. 
-        // If we hit this, it means another span or the trace start just created it.
-        if (upsertError.code !== 'P2002') {
-          console.error('[Tracker] Trace upsert failed:', upsertError.message);
+      } catch (error: any) {
+        if (error.code === 'P2003') {
+          await prisma.apiTrace.updateMany({
+            where: { trackingId: cleanTrackingId },
+            data: { statusCode: cleanStatusCode, endedAt: endedAtDate, totalLatency: resolvedTotalLatency }
+          });
+        }
+      }
+      res.status(200).json({ success: true });
+    } catch (error) { next(error); }
+  }
+
+  static async createSpan(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { id, trackingId, companyId, userId, parentSpanId, type, method, url, statusCode, headers, reqBody, resBody, latency, startedAt, endedAt } = req.body;
+      const cleanTrackingId = cleanString(trackingId);
+      if (!cleanTrackingId) return res.status(400).json({ error: 'trackingId is required' });
+
+      const validCompanyId = cleanId(companyId || req.headers['company-id']);
+      const validUserId = cleanId(userId || req.headers['user-id']);
+      const cleanStartedAt = cleanDate(startedAt) || new Date();
+
+      try {
+        await prisma.apiTrace.upsert({
+          where: { trackingId: cleanTrackingId },
+          create: { trackingId: cleanTrackingId, entryMethod: method || 'UNKNOWN', entryUrl: url || 'UNKNOWN', startedAt: cleanStartedAt, ...(validCompanyId && { companyId: validCompanyId }), ...(validUserId && { userId: validUserId }) },
+          update: { ...(validCompanyId && { companyId: validCompanyId }), ...(validUserId && { userId: validUserId }) }
+        });
+      } catch (e: any) {
+        if (e.code === 'P2003') {
+          await prisma.apiTrace.upsert({
+            where: { trackingId: cleanTrackingId },
+            create: { trackingId: cleanTrackingId, entryMethod: method || 'UNKNOWN', entryUrl: url || 'UNKNOWN', startedAt: cleanStartedAt },
+            update: {}
+          });
         }
       }
 
-      const span = await prisma.apiSpan.create({
-        data: {
-          ...(cleanId && { id: cleanId }),
-          trackingId: cleanTrackingId,
-          ...(cleanCompanyId && { companyId: cleanCompanyId }),
-          ...(cleanUserId && { userId: cleanUserId }),
-          ...(cleanParentSpanId && { parentSpanId: cleanParentSpanId }),
-          type,
-          method: cleanMethod,
-          url: cleanUrl,
-          ...(typeof cleanStatusCode === 'number' && {
-            statusCode: cleanStatusCode,
-          }),
-          headers,
-          reqBody,
-          resBody,
-          ...(typeof cleanLatency === 'number' && { latency: cleanLatency }),
-          startedAt: cleanStartedAt,
-          endedAt: cleanEndedAt,
-        },
-      });
-
-      res.status(201).json(span);
-    } catch (error) {
-      next(error);
-    }
+      try {
+        const span = await prisma.apiSpan.create({
+          data: {
+            ...(cleanId(id) && { id: cleanString(id) }),
+            trackingId: cleanTrackingId,
+            ...(validCompanyId && { companyId: validCompanyId }),
+            ...(validUserId && { userId: validUserId }),
+            parentSpanId: cleanString(parentSpanId),
+            type,
+            method: cleanString(method) || 'UNKNOWN',
+            url: cleanString(url) || 'UNKNOWN',
+            statusCode: cleanNumber(statusCode),
+            headers,
+            reqBody,
+            resBody,
+            latency: cleanNumber(latency),
+            startedAt: cleanStartedAt,
+            endedAt: cleanDate(endedAt),
+          },
+        });
+        res.status(201).json(span);
+      } catch (error: any) {
+        if (error.code === 'P2003') {
+          const span = await prisma.apiSpan.create({
+            data: {
+              ...(cleanId(id) && { id: cleanString(id) }),
+              trackingId: cleanTrackingId,
+              parentSpanId: cleanString(parentSpanId),
+              type,
+              method: cleanString(method) || 'UNKNOWN',
+              url: cleanString(url) || 'UNKNOWN',
+              statusCode: cleanNumber(statusCode),
+              headers,
+              reqBody,
+              resBody,
+              latency: cleanNumber(latency),
+              startedAt: cleanStartedAt,
+              endedAt: cleanDate(endedAt),
+            },
+          });
+          res.status(201).json(span);
+        } else throw error;
+      }
+    } catch (error) { next(error); }
   }
 }

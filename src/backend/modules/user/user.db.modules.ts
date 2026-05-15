@@ -474,9 +474,12 @@ export class UserDbController {
         }
       }
 
+      // Destructure to remove tracking fields that don't belong in the DB schema
+      const { userId: _u, companyId: _c, _trackingContext: _t, ...validOnboardingData } = onboardingData as any;
+
       const onb = await tx.userOnboarding.create({
         data: {
-          ...onboardingData,
+          ...validOnboardingData,
           companyId: resolvedCompanyId,
           groupId: groupId,
         },
