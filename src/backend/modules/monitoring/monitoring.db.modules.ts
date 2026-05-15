@@ -39,6 +39,7 @@ export class MonitoringDbController {
         timestamp: t.startedAt,
         method: t.entryMethod,
         endpoint: t.entryUrl,
+        statusCode: t.statusCode,
         spanCount: t._count.spans
       }));
 
@@ -86,7 +87,6 @@ export class MonitoringDbController {
         childSpans: trace.spans.map(s => ({
           type: s.type,
           method: s.method,
-          url: s.url,
           status: s.statusCode,
           latency: s.latency,
           reqBody: s.reqBody,
