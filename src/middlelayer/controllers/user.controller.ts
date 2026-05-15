@@ -14,6 +14,8 @@ import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import { internalPostOrThrow, internalPostOrThrowNotNull } from '../utils/internalPostOrThrow';
+import { mergeEligibleApprovers } from '../utils/mergeEligibleApprovers';
 import { zodParse } from '../utils/zod-parse.util';
 import { companyCodeOnly } from '../validations/company.validation';
 import {
@@ -30,17 +32,11 @@ export class UserController {
     try {
       const { companyCode } = zodParse(companyCodeOnly, req.body);
 
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/user/fetch-all`,
         { companyCode, userId: (req as any).user?.id },
+        'Failed to fetch users',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch users',
-          status,
-        );
-      }
 
       // The backend already returns the data in the requested format:
       // { message, code, data: { activeUsers, pendingUsers, inactiveUsers } }
@@ -206,36 +202,25 @@ export class UserController {
       ]);
 
       // Combine and deduplicate
-      let eligibleApprovers = Array.from(
-        new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
-      );
+      let eligibleApprovers = mergeEligibleApprovers(globalRes.data, mgrRes.data);
 
       // 7. Call Backend to create the record
-      const {
-        data: createRes,
-        ok: createOk,
-        status: createStatus,
-      } = await internalPost(`${config.backendUrl}/internal/user/create`, {
-        initiatorId,
-        companyCode,
-        groupCode,
-        levelsHash: levelsHash || null,
-        data: {
-          basicDetails,
-          permissions,
+      const createRes = await internalPostOrThrow(
+        `${config.backendUrl}/internal/user/create`,
+        {
+          initiatorId,
+          companyCode,
+          groupCode,
+          levelsHash: levelsHash || null,
+          data: {
+            basicDetails,
+            permissions,
+          },
+          status: 'PENDING',
+          eligibleApprovers: eligibleApprovers,
         },
-        status: 'PENDING',
-        eligibleApprovers: eligibleApprovers,
-      });
-
-      if (!createOk) {
-        throw new AppError(
-          createRes?.message ||
-            createRes?.error ||
-            'Failed to initiate user onboarding',
-          createStatus,
-        );
-      }
+        'Failed to initiate user onboarding',
+      );
 
       res
         .status(201)
@@ -262,19 +247,12 @@ export class UserController {
       }
 
       // 1. Fetch onboarding record
-      const { data: onboarding, ok: fetchOk } = await internalPost<any>(
+      const onboarding = await internalPostOrThrowNotNull<any>(
         `${config.backendUrl}/internal/user/get`,
         { id },
+        'User onboarding request not found',
+        404,
       );
-
-      if (!fetchOk || !onboarding) {
-        throw new AppError(
-          onboarding?.message ||
-            onboarding?.error ||
-            'User onboarding request not found',
-          404,
-        );
-      }
 
       // 2. Logic: Validate status
       if (onboarding.status !== 'PENDING') {
@@ -292,25 +270,16 @@ export class UserController {
       */
 
       // 4. Handle approval / rejection
-      const {
-        data: commitRes,
-        ok: commitOk,
-        status: commitStatus,
-      } = await internalPost(`${config.backendUrl}/internal/user/action`, {
-        id,
-        approverId,
-        remark,
-        status: action,
-      });
-
-      if (!commitOk) {
-        throw new AppError(
-          commitRes?.message ||
-            commitRes?.error ||
-            'Failed to process user onboarding approval',
-          commitStatus,
-        );
-      }
+      const commitRes = await internalPostOrThrow(
+        `${config.backendUrl}/internal/user/action`,
+        {
+          id,
+          approverId,
+          remark,
+          status: action,
+        },
+        'Failed to process user onboarding approval',
+      );
 
       res
         .status(200)
@@ -382,17 +351,12 @@ export class UserController {
     try {
       const { email, companyCode } = zodParse(userHistory, req.body);
 
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/user/history`,
         { email, companyCode, userId: (req as any).user?.id },
+        'User not found',
+        404,
       );
-
-      if (!ok || !data) {
-        throw new AppError(
-          data?.message || data?.error || 'User not found',
-          status || 404,
-        );
-      }
 
       res.status(200).json(data);
     } catch (error) {
@@ -413,21 +377,15 @@ export class UserController {
         throw new AppError('Unauthorized', 401);
       }
 
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/user/fetch-company-nodes`,
         {
           userId,
           companyId,
           subCategory,
         },
+        'Failed to fetch company nodes',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch company nodes',
-          status,
-        );
-      }
 
       // res.status(200).json(data);
       const nodes = data?.nodes || [];
@@ -456,20 +414,14 @@ export class UserController {
       const { nodePath } = zodParse(userFetchByNodePathCountSchema, req.body);
       const companyId = req.user?.companyId;
 
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/user/fetch-users-by-nodepath-count`,
         {
           nodePath,
           companyId,
         },
+        'Failed to fetch user count',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch user count',
-          status,
-        );
-      }
 
       res.status(200).json(data);
     } catch (error) {

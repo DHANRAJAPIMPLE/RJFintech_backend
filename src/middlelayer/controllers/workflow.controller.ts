@@ -13,6 +13,8 @@ import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import { internalPostOrThrow, internalPostOrThrowNotNull } from '../utils/internalPostOrThrow';
+import { mergeEligibleApprovers } from '../utils/mergeEligibleApprovers';
 import { zodParse } from '../utils/zod-parse.util';
 import {
   workflowOnboardingSchema,
@@ -36,17 +38,12 @@ export class WorkflowController {
       }
 
       // 1. Get Company ID from Backend
-      const { data: company, ok: companyOk } = await internalPost<any>(
+      const company = await internalPostOrThrowNotNull<any>(
         `${config.backendUrl}/internal/company/get-by-code`,
         { companyCode },
+        'Company not found',
+        404,
       );
-
-      if (!companyOk || !company) {
-        throw new AppError(
-          company?.message || company?.error || 'Company not found',
-          404,
-        );
-      }
 
       // 2. Check if Node Path exists
       const { data: node, ok: nodeOk } = await internalPost<any>(
@@ -71,16 +68,10 @@ export class WorkflowController {
       ]);
 
       // Combine and deduplicate
-      let eligibleApprovers = Array.from(
-        new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
-      );
+      let eligibleApprovers = mergeEligibleApprovers(globalRes.data, mgrRes.data);
 
       // 4. Initiate Workflow Request in Backend
-      const {
-        data: createRes,
-        ok: createOk,
-        status: createStatus,
-      } = await internalPost(
+      const createRes = await internalPostOrThrow(
         `${config.backendUrl}/internal/workflow/initiate`,
         {
           initiatorId,
@@ -89,16 +80,8 @@ export class WorkflowController {
           data: validatedData,
           eligibleApprovers,
         },
+        'Failed to initiate workflow request',
       );
-
-      if (!createOk) {
-        throw new AppError(
-          createRes?.message ||
-            createRes?.error ||
-            'Failed to initiate workflow request',
-          createStatus,
-        );
-      }
 
       res.status(201).json({
         message: 'Workflow initiation request created successfully',
@@ -124,19 +107,12 @@ export class WorkflowController {
       }
 
       // 1. Fetch onboarding record
-      const { data: onboarding, ok: fetchOk } = await internalPost<any>(
+      const onboarding = await internalPostOrThrowNotNull<any>(
         `${config.backendUrl}/internal/workflow/get-request`,
         { levelsHash, companyId: req.user?.companyId },
+        'Workflow request not found',
+        404,
       );
-
-      if (!fetchOk || !onboarding) {
-        throw new AppError(
-          onboarding?.message ||
-            onboarding?.error ||
-            'Workflow request not found',
-          404,
-        );
-      }
 
       // 2. Validate status
       if (onboarding.status !== 'PENDING') {
@@ -154,26 +130,17 @@ export class WorkflowController {
       */
 
       // 4. Handle approval / rejection
-      const {
-        data: commitRes,
-        ok: commitOk,
-        status: commitStatus,
-      } = await internalPost(`${config.backendUrl}/internal/workflow/action`, {
-        levelsHash,
-        companyId: req.user?.companyId,
-        approverId,
-        remark,
-        status: action,
-      });
-
-      if (!commitOk) {
-        throw new AppError(
-          commitRes?.message ||
-            commitRes?.error ||
-            'Failed to process workflow action',
-          commitStatus,
-        );
-      }
+      const commitRes = await internalPostOrThrow(
+        `${config.backendUrl}/internal/workflow/action`,
+        {
+          levelsHash,
+          companyId: req.user?.companyId,
+          approverId,
+          remark,
+          status: action,
+        },
+        'Failed to process workflow action',
+      );
 
       res
         .status(200)
@@ -198,17 +165,11 @@ export class WorkflowController {
         throw new AppError('Unauthorized: Company information missing', 401);
       }
 
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/workflow/fetch`,
         { companyId, userId: req.user?.id },
+        'Failed to fetch workflows',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch workflows',
-          status,
-        );
-      }
 
       res.status(200).json({
         message: 'Workflows fetched successfully!',
@@ -232,17 +193,11 @@ export class WorkflowController {
         throw new AppError('Unauthorized: Company information missing', 401);
       }
 
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/workflow/history`,
         { companyId, levelsHash, module, subModule, nodePath, userId: req.user?.id },
+        'Failed to fetch history',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch history',
-          status,
-        );
-      }
 
       res.status(200).json(data);
     } catch (error) {

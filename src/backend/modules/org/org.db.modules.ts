@@ -2,6 +2,8 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma, ltree } from '../../lib/prisma';
 import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
+import { resolveCompanyId, resolveCompanyIdSafe } from '../../shared/resolveCompanyId';
+import { formatHistoryPipeline } from '../../shared/historyFormatter';
 
 /**
  * Controller for managing the organizational hierarchy (nodes) for companies.
@@ -327,18 +329,7 @@ export class OrgStructureDbController {
     try {
       const { initiatorId, companyCode, companyId, levelsHash, ...rest } =
         req.body;
-      let resolvedCompanyId = companyId;
-
-      if (!resolvedCompanyId) {
-        if (!companyCode) {
-          throw new AppError('companyCode or companyId is required', 400);
-        }
-        const company = await prisma.company.findUnique({
-          where: { companyCode },
-        });
-        if (!company) throw new AppError('Company not found', 404);
-        resolvedCompanyId = company.id;
-      }
+      const resolvedCompanyId = await resolveCompanyId({ companyId, companyCode });
 
       // Fetch all global access users for this company to ensure they are in the master eligible list
       const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'ORG_STR');
@@ -430,21 +421,10 @@ export class OrgStructureDbController {
     try {
       const { companyCode, companyId, newNodeName, _nodeType, parentNode } =
         req.body;
-      let resolvedCompanyId = companyId;
 
-      if (!resolvedCompanyId) {
-        if (!companyCode) {
-          return res
-            .status(400)
-            .json({ error: 'companyCode or companyId is required' });
-        }
-
-        const company = await prisma.company.findUnique({
-          where: { companyCode },
-        });
-        if (!company)
-          return res.status(404).json({ error: 'Company not found' });
-        resolvedCompanyId = company.id;
+      const { companyId: resolvedCompanyId, error } = await resolveCompanyIdSafe({ companyId, companyCode });
+      if (error) {
+        return res.status(error.status).json(error.body);
       }
 
       // 1. Verify Parent existence for hierarchical integrity
@@ -499,18 +479,7 @@ export class OrgStructureDbController {
   ) {
     try {
       const { companyCode, companyId, nodeName, nodePath } = req.body;
-      let resolvedCompanyId = companyId;
-
-      if (!resolvedCompanyId) {
-        if (!companyCode) {
-          throw new AppError('companyCode or companyId is required', 400);
-        }
-        const company = await prisma.company.findUnique({
-          where: { companyCode },
-        });
-        if (!company) throw new AppError('Company not found', 404);
-        resolvedCompanyId = company.id;
-      }
+      const resolvedCompanyId = await resolveCompanyId({ companyId, companyCode });
 
       let whereCondition: any = { companyId: resolvedCompanyId };
 
@@ -587,200 +556,44 @@ export class OrgStructureDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      // 1. Collect all unique request IDs to fetch their workflow approval status
-      const reqIds = Array.from(
-        new Set(histories.map((h) => h.orgReqId).filter(Boolean)),
-      ) as string[];
-
-      const workflowApprovers = await prisma.workflowApprover.findMany({
-        where: { reqId: { in: reqIds } },
-        orderBy: { level: 'asc' },
-      });
-
-      // Group workflow levels by reqId
-      const workflowMap = new Map<string, any[]>();
-      workflowApprovers.forEach((wa) => {
-        const existing = workflowMap.get(wa.reqId) || [];
-        existing.push(wa);
-        workflowMap.set(wa.reqId, existing);
-      });
-
-      // Build request-level maps used to filter displayed approvers.
-      const initiatorMap = new Map<string, string>();
-      const approvedUserMap = new Map<string, Set<string>>();
-      histories.forEach((h) => {
-        if (h.orgReqId) {
-          if (h.event === 'INITIATE' && h.eventUserId) {
-            initiatorMap.set(h.orgReqId, h.eventUserId);
-          }
-          if (h.event === 'APPROVED' && h.eventUserId) {
-            const approvedUsers =
-              approvedUserMap.get(h.orgReqId) || new Set<string>();
-            approvedUsers.add(h.eventUserId);
-            approvedUserMap.set(h.orgReqId, approvedUsers);
-          }
-        }
-      });
-      // console.log(`[OrgHistory] Built initiatorMap with ${initiatorMap.size} entries`);
-
-      // Filter each stored approver list for active display only. The DB row is not mutated.
-      for (const [reqId, levels] of workflowMap.entries()) {
-        const initiatorId = initiatorMap.get(reqId) || null;
-        const approvedUserIds = Array.from(
-          approvedUserMap.get(reqId) ?? new Set<string>(),
-        );
-        for (const level of levels) {
-          const storedList = Array.isArray(level.approversList)
-            ? (level.approversList as string[])
-            : [];
-          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
-            resolvedCompanyId,
-            storedList,
-            initiatorId,
-            'ORG_STR',
-            approvedUserIds,
-          );
-        }
-      }
-
-      // 2. Resolve approver details (names/emails) from enriched lists
-      const allApproverIds = new Set<string>();
-      for (const levels of workflowMap.values()) {
-        for (const level of levels) {
-          (level.approversList as string[]).forEach((id: string) =>
-            allApproverIds.add(id),
-          );
-        }
-      }
-      const approverDetails = await prisma.user.findMany({
-        where: { id: { in: Array.from(allApproverIds) } },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          userAccesses: {
-            select: { roleCode: true },
-          },
+      // Use shared history formatter for the common pipeline
+      const resultList = await formatHistoryPipeline(histories, {
+        getReqId: (h) => (h as any).orgReqId,
+        getEvent: (h) => (h as any).event,
+        getEventUserId: (h) => (h as any).eventUserId,
+        companyId: resolvedCompanyId,
+        subModule: 'ORG_STR',
+        getUserAccesses: (h) => (h as any).user?.userAccesses || [],
+        getUser: (h) => (h as any).user,
+        buildPendingEntry: (h, approvers, pendingLevel) => {
+          const data = (h as any).orgReq?.data as any;
+          return {
+            companyCode: (h as any).company.companyCode,
+            event: `L${pendingLevel} Pending Approval`,
+            createdAt: null,
+            eligibleapprovers: approvers,
+            newNodeName: data?.newNodeName || null,
+            nodeType: data?._nodeType || data?.nodeType || null,
+            parentNodePath: data?.parentNode?.nodePath || 'ROOT',
+            parentNodeName: data?.parentNode?.nodeName || 'ROOT',
+          };
+        },
+        buildHistoryEntry: (h, user, _workflowStatus) => {
+          const data = (h as any).orgReq?.data as any;
+          return {
+            companyCode: (h as any).company.companyCode,
+            event: (h as any).event,
+            level: (h as any).level,
+            createdAt: (h as any).createdAt,
+            remarks: (h as any).remarks,
+            user,
+            newNodeName: data?.newNodeName || null,
+            nodeType: data?._nodeType || data?.nodeType || null,
+            parentNodePath: data?.parentNode?.nodePath || 'ROOT',
+            parentNodeName: data?.parentNode?.nodeName || 'ROOT',
+          };
         },
       });
-      const approverMap = new Map(
-        approverDetails.map((u) => {
-          const isSaasAdmin = u.userAccesses.some(
-            (a) => a.roleCode === 'SAAS_ADMIN',
-          );
-          return [
-            u.id,
-            {
-              name: isSaasAdmin ? 'Teams' : u.name,
-              email: isSaasAdmin ? 'Teams' : u.email,
-            },
-          ];
-        }),
-      );
-
-      const resultList: any[] = [];
-      const handledPendingReqs = new Set<string>();
-
-      // 3. Inject "Pending Approval" entries for any active requests
-      histories.forEach((h) => {
-        if (h.orgReqId && !handledPendingReqs.has(h.orgReqId)) {
-          const levels = workflowMap.get(h.orgReqId);
-          if (levels) {
-            const currentPending = levels.find((l) => l.status === 'PENDING');
-            if (currentPending) {
-              const approvers = (currentPending.approversList as string[])
-                .map((id) => {
-                  const u = approverMap.get(id);
-                  return u ? { name: u.name, email: u.email } : null;
-                })
-                .filter(Boolean);
-
-              const data = h.orgReq?.data as any;
-              resultList.push({
-                companyCode: h.company.companyCode,
-                event: `L${currentPending.level} Pending Approval`,
-                createdAt: null,
-                eligibleapprovers: approvers,
-                newNodeName: data?.newNodeName || null,
-                nodeType: data?._nodeType || data?.nodeType || null,
-                parentNodePath: data?.parentNode?.nodePath || 'ROOT',
-                parentNodeName: data?.parentNode?.nodeName || 'ROOT',
-              });
-            }
-          }
-          handledPendingReqs.add(h.orgReqId);
-        }
-      });
-
-      // 4. Format history for easy display
-      const formattedHistories = histories.map((h) => {
-        const data = h.orgReq?.data as any;
-        const initiatorAccesses = h.user?.userAccesses || [];
-
-        const isSaasAdmin = initiatorAccesses.some(
-          (a) => a.roleCode === 'SAAS_ADMIN',
-        );
-        const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
-
-        const levels = h.orgReqId ? workflowMap.get(h.orgReqId) : null;
-        let workflowStatus = null;
-
-        if (levels && levels.length > 0) {
-          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
-          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
-          const currentPending = levels.find(
-            (l: any) => l.status === 'PENDING',
-          );
-
-          workflowStatus = {
-            overallStatus: isRejected
-              ? 'REJECTED'
-              : allApproved
-                ? 'APPROVED'
-                : 'PENDING',
-            currentLevel: currentPending
-              ? currentPending.level
-              : allApproved
-                ? levels.length
-                : null,
-            totalLevels: levels.length,
-            levels: levels
-              .filter(
-                (l: any) => l.level <= (currentPending?.level || levels.length),
-              )
-              .map((l: any) => ({
-                level: l.level,
-                status: l.status,
-                eligibleapprovers: (l.approversList as string[])
-                  .map((id: string) => {
-                    const u = approverMap.get(id);
-                    return u ? { name: u.name, email: u.email } : null;
-                  })
-                  .filter(Boolean),
-              })),
-          };
-        }
-
-        return {
-          companyCode: h.company.companyCode,
-          event: h.event,
-          level: h.level,
-          createdAt: h.createdAt,
-          remarks: h.remarks,
-          user: isTeams
-            ? { name: 'Teams', email: 'Teams' }
-            : {
-              name: h.user?.name || 'System',
-              email: h.user?.email || 'system@internal',
-            },
-          newNodeName: data?.newNodeName || null,
-          nodeType: data?._nodeType || data?.nodeType || null,
-          parentNodePath: data?.parentNode?.nodePath || 'ROOT',
-          parentNodeName: data?.parentNode?.nodeName || 'ROOT',
-        };
-      });
-
-      resultList.push(...formattedHistories);
 
       res.status(200).json({
         message: 'Organization structure history fetched successfully!',
@@ -799,39 +612,24 @@ export class OrgStructureDbController {
   static async fetchStructure(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId } = req.body;
-      let resolvedCompanyId = companyId;
 
-      if (!resolvedCompanyId) {
-        if (!companyCode) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: 'companyCode or companyId is required',
-            });
-        }
-        const company = await prisma.company.findUnique({
-          where: { companyCode: companyCode },
-        });
-
-        if (!company) {
-          return res
-            .status(404)
-            .json({ success: false, message: 'Company not found' });
-        }
-        resolvedCompanyId = company.id;
+      const { companyId: resolvedCompanyId, error } = await resolveCompanyIdSafe({ companyId, companyCode });
+      if (error) {
+        return res.status(error.status).json(error.body);
       }
+      // After error guard, resolvedCompanyId is guaranteed non-null
+      const safeCompanyId = resolvedCompanyId!;
 
       // 1. Fetch active nodes in the hierarchy
       const nodes = await prisma.orgStructure.findMany({
-        where: { companyId: resolvedCompanyId },
+        where: { companyId: safeCompanyId },
         orderBy: { nodePath: 'asc' },
       });
 
       // 2. Fetch pending requests for parallel tracking
       const pendingRequests = await prisma.orgStructureReq.findMany({
         where: {
-          companyId: resolvedCompanyId,
+          companyId: safeCompanyId,
           status: 'PENDING',
         },
         include: {

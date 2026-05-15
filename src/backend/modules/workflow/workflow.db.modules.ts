@@ -3,6 +3,8 @@ import { createHash } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../../shared/middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
+import { resolveCompanyId, resolveCompanyIdOrNull } from '../../shared/resolveCompanyId';
+import { formatHistoryPipeline } from '../../shared/historyFormatter';
 
 /**
  * Controller for handling workflow-related database operations.
@@ -499,14 +501,7 @@ export class WorkflowDbController {
       const { companyCode, companyId, levelsHash, module, subModule, nodePath, userId } = req.body;
       let whereCondition: any = {};
 
-      let resolvedCompanyId = companyId;
-      if (!resolvedCompanyId && companyCode) {
-        const company = await prisma.company.findUnique({
-          where: { companyCode },
-        });
-        if (!company) throw new AppError('Company not found', 404);
-        resolvedCompanyId = company.id;
-      }
+      let resolvedCompanyId = await resolveCompanyIdOrNull({ companyId, companyCode });
 
       if (!resolvedCompanyId) {
         return res
@@ -584,207 +579,47 @@ export class WorkflowDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      // 1. Collect all unique request IDs to fetch their workflow approval status
-      const reqIds = Array.from(
-        new Set(histories.map((h) => h.workflowReqId).filter(Boolean)),
-      ) as string[];
-
-      const workflowApprovers = await prisma.workflowApprover.findMany({
-        where: { reqId: { in: reqIds } },
-        orderBy: { level: 'asc' },
-      });
-
-      // Group workflow levels by reqId
-      const workflowMap = new Map<string, any[]>();
-      workflowApprovers.forEach((wa) => {
-        const existing = workflowMap.get(wa.reqId) || [];
-        existing.push(wa);
-        workflowMap.set(wa.reqId, existing);
-      });
-
-      // Build request-level maps used to filter displayed approvers.
-      const initiatorMap = new Map<string, string>();
-      const subModuleMap = new Map<string, string>();
-      const approvedUserMap = new Map<string, Set<string>>();
+      // Use shared history formatter for the common pipeline
+      // Workflow uses per-request subModules for approver enrichment
+      const subModuleMapLocal = new Map<string, string>();
       histories.forEach((h) => {
-        if (h.workflowReqId) {
-          if (h.event === 'INITIATE' && h.eventUserId) {
-            initiatorMap.set(h.workflowReqId, h.eventUserId);
-          }
-          if (h.event === 'APPROVED' && h.eventUserId) {
-            const approvedUsers =
-              approvedUserMap.get(h.workflowReqId) || new Set<string>();
-            approvedUsers.add(h.eventUserId);
-            approvedUserMap.set(h.workflowReqId, approvedUsers);
-          }
-          if (h.workflowReq?.subModule) {
-            subModuleMap.set(h.workflowReqId, h.workflowReq.subModule);
-          }
+        if ((h as any).workflowReqId && (h as any).workflowReq?.subModule) {
+          subModuleMapLocal.set((h as any).workflowReqId, (h as any).workflowReq.subModule);
         }
       });
-      // console.log(`[WorkflowHistory] Built initiatorMap with ${initiatorMap.size} entries`);
 
-      // Filter each stored approver list for active display only. The DB row is not mutated.
-      for (const [reqId, levels] of workflowMap.entries()) {
-        const initiatorId = initiatorMap.get(reqId) || null;
-        const subModule = subModuleMap.get(reqId) || 'WORK_FLOW';
-        const approvedUserIds = Array.from(
-          approvedUserMap.get(reqId) ?? new Set<string>(),
-        );
-        for (const level of levels) {
-          const storedList = Array.isArray(level.approversList)
-            ? (level.approversList as string[])
-            : [];
-          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
-            resolvedCompanyId,
-            storedList,
-            initiatorId,
-            subModule,
-            approvedUserIds,
-          );
-        }
-      }
-
-      // 2. Resolve approver details (names/emails) from enriched lists
-      const allApproverIds = new Set<string>();
-      for (const levels of workflowMap.values()) {
-        for (const level of levels) {
-          (level.approversList as string[]).forEach((id: string) =>
-            allApproverIds.add(id),
-          );
-        }
-      }
-      const approverDetails = await prisma.user.findMany({
-        where: { id: { in: Array.from(allApproverIds) } },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          userAccesses: {
-            select: { roleCode: true },
-          },
+      const resultList = await formatHistoryPipeline(histories, {
+        getReqId: (h) => (h as any).workflowReqId,
+        getEvent: (h) => (h as any).event,
+        getEventUserId: (h) => (h as any).eventUserId,
+        companyId: resolvedCompanyId,
+        subModule: (reqId: string) => subModuleMapLocal.get(reqId) || 'WORK_FLOW',
+        getUserAccesses: (h) => {
+          const companyIdLocal = (h as any).company.id;
+          return ((h as any).user?.userAccesses?.filter((a: any) => a.companyId === companyIdLocal) || []);
         },
-      });
-      const approverMap = new Map(
-        approverDetails.map((u) => {
-          const isSaasAdmin = u.userAccesses.some(
-            (a) => a.roleCode === 'SAAS_ADMIN',
-          );
-          return [
-            u.id,
-            {
-              name: isSaasAdmin ? 'Teams' : u.name,
-              email: isSaasAdmin ? 'Teams' : u.email,
-            },
-          ];
+        getUser: (h) => (h as any).user,
+        buildPendingEntry: (h, approvers, pendingLevel) => ({
+          workflowName: ((h as any).workflowReq?.data as any)?.name || null,
+          module: (h as any).workflowReq?.module || null,
+          subModule: (h as any).workflowReq?.subModule || null,
+          companyCode: (h as any).company.companyCode,
+          event: `L${pendingLevel} Pending Approval`,
+          createdAt: null,
+          eligibleapprovers: approvers,
         }),
-      );
-
-      const resultList: any[] = [];
-      const handledPendingReqs = new Set<string>();
-
-      // 3. Inject "Pending Approval" entries for any active requests
-      histories.forEach((h) => {
-        if (h.workflowReqId && !handledPendingReqs.has(h.workflowReqId)) {
-          const levels = workflowMap.get(h.workflowReqId);
-          if (levels) {
-            const currentPending = levels.find((l) => l.status === 'PENDING');
-            if (currentPending) {
-              const approvers = (currentPending.approversList as string[])
-                .map((id) => {
-                  const u = approverMap.get(id);
-                  return u ? { name: u.name, email: u.email } : null;
-                })
-                .filter(Boolean);
-
-              resultList.push({
-                workflowName: (h.workflowReq?.data as any)?.name || null,
-                module: h.workflowReq?.module || null,
-                subModule: h.workflowReq?.subModule || null,
-                companyCode: h.company.companyCode,
-                event: `L${currentPending.level} Pending Approval`,
-                createdAt: null,
-                eligibleapprovers: approvers,
-              });
-            }
-          }
-          handledPendingReqs.add(h.workflowReqId);
-        }
+        buildHistoryEntry: (h, user, _workflowStatus) => ({
+          workflowName: ((h as any).workflowReq?.data as any)?.name || null,
+          module: (h as any).workflowReq?.module || null,
+          subModule: (h as any).workflowReq?.subModule || null,
+          companyCode: (h as any).company.companyCode,
+          event: (h as any).event,
+          level: (h as any).level,
+          createdAt: (h as any).createdAt,
+          remarks: (h as any).remarks,
+          user,
+        }),
       });
-
-      // 4. Format the output for the UI
-
-      const formattedHistories = histories.map((h) => {
-
-        const companyId = h.company.id;
-        const initiatorAccesses =
-          h.user?.userAccesses?.filter((a) => a.companyId === companyId) || [];
-
-        const isSaasAdmin = initiatorAccesses.some(
-          (a) => a.roleCode === 'SAAS_ADMIN',
-        );
-        const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
-
-        const levels = h.workflowReqId
-          ? workflowMap.get(h.workflowReqId)
-          : null;
-        let workflowStatus = null;
-
-        if (levels && levels.length > 0) {
-          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
-          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
-          const currentPending = levels.find(
-            (l: any) => l.status === 'PENDING',
-          );
-
-          workflowStatus = {
-            overallStatus: isRejected
-              ? 'REJECTED'
-              : allApproved
-                ? 'APPROVED'
-                : 'PENDING',
-            currentLevel: currentPending
-              ? currentPending.level
-              : allApproved
-                ? levels.length
-                : null,
-            totalLevels: levels.length,
-            levels: levels
-              .filter(
-                (l: any) => l.level <= (currentPending?.level || levels.length),
-              )
-              .map((l: any) => ({
-                level: l.level,
-                status: l.status,
-                eligibleapprovers: (l.approversList as string[])
-                  .map((id: string) => {
-                    const u = approverMap.get(id);
-                    return u ? { name: u.name, email: u.email } : null;
-                  })
-                  .filter(Boolean),
-              })),
-          };
-        }
-
-        return {
-          workflowName: (h.workflowReq?.data as any)?.name || null,
-          module: h.workflowReq?.module || null,
-          subModule: h.workflowReq?.subModule || null,
-          companyCode: h.company.companyCode,
-          event: h.event,
-          level: h.level,
-          createdAt: h.createdAt,
-          remarks: h.remarks,
-          user: isTeams
-            ? { name: 'Teams', email: 'Teams' }
-            : {
-              name: h.user?.name || 'System',
-              email: h.user?.email || 'system@internal',
-            },
-        };
-      });
-
-      resultList.push(...formattedHistories);
 
       res.status(200).json({
         message: 'Workflow history fetched successfully!',
@@ -806,18 +641,7 @@ export class WorkflowDbController {
     try {
       const { companyCode, companyId, userId } = req.body;
 
-      let resolvedCompanyId = companyId;
-
-      if (!resolvedCompanyId) {
-        if (!companyCode) {
-          throw new AppError('companyCode or companyId is required', 400);
-        }
-        const company = await prisma.company.findUnique({
-          where: { companyCode },
-        });
-        if (!company) throw new AppError('Company not found', 404);
-        resolvedCompanyId = company.id;
-      }
+      const resolvedCompanyId = await resolveCompanyId({ companyId, companyCode });
 
       // Check if requester is a global access user
       let isGlobal = true;

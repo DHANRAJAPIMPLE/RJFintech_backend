@@ -13,6 +13,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import { internalPostOrThrow, internalPostOrThrowNotNull } from '../utils/internalPostOrThrow';
 import { zodParse } from '../utils/zod-parse.util';
 import {
   companyOnboardingSchema,
@@ -32,17 +33,11 @@ export class AdminController {
   ) {
     try {
       // 1. Fetch raw data from Backend (5001)
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendCompanyUrl}/groups`,
         {},
+        'Failed to fetch groups',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch groups',
-          status,
-        );
-      }
 
       const { groups, soloCompanies, pendingOnboardings } = data;
 
@@ -337,7 +332,7 @@ export class AdminController {
       }
 
       // Call Backend to create the record
-      const { data, ok, status } = await internalPost(
+      const data = await internalPostOrThrow(
         `${config.backendUrl}/internal/company/create`,
         {
           initiatorId,
@@ -351,14 +346,8 @@ export class AdminController {
           status: 'PENDING',
           eligibleApprovers: eligibleApprovers,
         },
+        'Failed to initiate onboarding',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to initiate onboarding',
-          status,
-        );
-      }
 
       res.status(201).json({
         message: 'Onboarding initiated successfully',
@@ -407,25 +396,16 @@ export class AdminController {
         );
       }
 
-      const {
-        data: updateStatusRes,
-        ok: updateStatusOk,
-        status: updateStatusStatus,
-      } = await internalPost(`${config.backendUrl}/internal/company/action`, {
-        id,
-        action,
-        approverId,
-        remark,
-      });
-
-      if (!updateStatusOk) {
-        throw new AppError(
-          updateStatusRes?.message ||
-            updateStatusRes?.error ||
-            'Failed to process onboarding approval',
-          updateStatusStatus,
-        );
-      }
+      const updateStatusRes = await internalPostOrThrow(
+        `${config.backendUrl}/internal/company/action`,
+        {
+          id,
+          action,
+          approverId,
+          remark,
+        },
+        'Failed to process onboarding approval',
+      );
 
       res
         .status(200)
@@ -444,17 +424,12 @@ export class AdminController {
       const { companyCode } = zodParse(companyHistory, req.body);
 
       // 1. Fetch history record
-      const { data, ok, status } = await internalPost<any>(
+      const data = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/company/history`,
         { companyCode },
+        'Failed to fetch company history',
+        404,
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch company history',
-          status || 404,
-        );
-      }
 
       res.status(200).json({
         message:

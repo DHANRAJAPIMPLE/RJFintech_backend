@@ -13,6 +13,8 @@ import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import { internalPostOrThrow, internalPostOrThrowNotNull } from '../utils/internalPostOrThrow';
+import { mergeEligibleApprovers } from '../utils/mergeEligibleApprovers';
 import { zodParse } from '../utils/zod-parse.util';
 import { companyCodeOnly } from '../validations/company.validation';
 import {
@@ -39,17 +41,12 @@ export class OrgController {
       }
 
       // 1. Get Company ID from Backend
-      const { data: company, ok: companyOk } = await internalPost<any>(
+      const company = await internalPostOrThrowNotNull<any>(
         `${config.backendUrl}/internal/company/get-by-code`,
         { companyCode },
+        'Company not found',
+        404,
       );
-
-      if (!companyOk || !company) {
-        throw new AppError(
-          company?.message || company?.error || 'Company not found',
-          404,
-        );
-      }
 
       // 2. Logic: Get eligible approver IDs (Global Access + Org Structure Managers + SAAS_ADMIN)
       const [globalRes, mgrRes] = await Promise.all([
@@ -63,12 +60,10 @@ export class OrgController {
         ),
       ]);
 
-      let eligibleApprovers = [
-        ...new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
-      ];
+      let eligibleApprovers = mergeEligibleApprovers(globalRes.data, mgrRes.data);
 
       // 3. Validate Node Initiation (Check for duplicates and parent existence)
-      const { data: validationRes, ok: validationOk } = await internalPost<any>(
+      const validationRes = await internalPostOrThrow<any>(
         `${config.backendUrl}/internal/org/validate-initiation`,
         {
           companyId: company?.id,
@@ -76,9 +71,11 @@ export class OrgController {
           nodeType,
           parentNode,
         },
+        'Invalid organization structure request',
+        400,
       );
 
-      if (!validationOk || !validationRes.success) {
+      if (!validationRes.success) {
         throw new AppError(
           validationRes?.message || 'Invalid organization structure request',
           400,
@@ -87,7 +84,7 @@ export class OrgController {
 
       // 4. Create request in Backend
 
-      const { data, ok, status } = await internalPost(
+      const data = await internalPostOrThrow(
         `${config.backendUrl}/internal/org/initiate`,
         {
           initiatorId,
@@ -101,16 +98,8 @@ export class OrgController {
           status: 'PENDING',
           eligibleApprovers: eligibleApprovers,
         },
+        'Failed to initiate org structure request',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message ||
-            data?.error ||
-            'Failed to initiate org structure request',
-          status,
-        );
-      }
 
       res.status(201).json({
         success: true,
@@ -136,19 +125,12 @@ export class OrgController {
       }
 
       // 1. Fetch request from Backend
-      const { data: request, ok: fetchOk } = await internalPost<any>(
+      const request = await internalPostOrThrowNotNull<any>(
         `${config.backendUrl}/internal/org/get-request`,
         { id },
+        'Org structure request not found',
+        404,
       );
-
-      if (!fetchOk || !request) {
-        throw new AppError(
-          request?.message ||
-            request?.error ||
-            'Org structure request not found',
-          404,
-        );
-      }
 
       // 2. Logic: Verify status and permissions (Permission check disabled as per request)
       if (request.status !== 'PENDING') {
@@ -216,29 +198,20 @@ export class OrgController {
       }
 
       // 5. Commit Transaction in Backend
-      const {
-        data: commitRes,
-        ok: commitOk,
-        status: commitStatus,
-      } = await internalPost(`${config.backendUrl}/internal/org/action`, {
-        id,
-        status: 'APPROVED',
-        approverId,
-        remarks: remark,
-        newNodePath,
-        newNodeName,
-        nodeType,
-        parentId,
-      });
-
-      if (!commitOk) {
-        throw new AppError(
-          commitRes?.message ||
-            commitRes?.error ||
-            'Failed to approve org structure request',
-          commitStatus,
-        );
-      }
+      const commitRes = await internalPostOrThrow(
+        `${config.backendUrl}/internal/org/action`,
+        {
+          id,
+          status: 'APPROVED',
+          approverId,
+          remarks: remark,
+          newNodePath,
+          newNodeName,
+          nodeType,
+          parentId,
+        },
+        'Failed to approve org structure request',
+      );
 
       res.status(200).json({
         success: true,
@@ -266,17 +239,11 @@ export class OrgController {
       }
 
       // Forward to Backend (5001)
-      const { data, ok, status } = await internalPost(
+      const data = await internalPostOrThrow(
         `${config.backendUrl}/internal/org/fetch`,
         { companyCode, userId },
+        'Failed to fetch org structure',
       );
-
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch org structure',
-          status,
-        );
-      }
 
       // Format response with active and pending arrays
       const formattedPending = data.data.pending.map((req: any) => {
@@ -317,20 +284,12 @@ export class OrgController {
       const userId = req.user?.id;
 
       // Forward to Backend (5001)
-      const { data, ok, status } = await internalPost(
+      const data = await internalPostOrThrow(
         `${config.backendUrl}/internal/org/fetch-history`,
         { companyCode, nodeName, nodePath, userId },
+        'Failed to fetch org structure history',
       );
 
-
-      if (!ok) {
-        throw new AppError(
-          data?.message ||
-            data?.error ||
-            'Failed to fetch org structure history',
-          status,
-        );
-      }
       res.status(200).json(data);
     } catch (error) {
       next(error);
