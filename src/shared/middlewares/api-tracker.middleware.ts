@@ -47,7 +47,12 @@ export const createTrackerMiddleware = (
 ) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // Skip tracking for the tracker's own internal routes to avoid recursion
-    if (req.originalUrl.startsWith('/internal/tracker')) {
+    // Skip tracking for internal tracker and monitoring routes to avoid recursion/pollution
+    if (
+      req.originalUrl.startsWith('/internal/tracker') ||
+      req.originalUrl.startsWith('/internal/monitoring') ||
+      req.originalUrl.startsWith('/api/v1/admin/monitoring')
+    ) {
       return next();
     }
 
