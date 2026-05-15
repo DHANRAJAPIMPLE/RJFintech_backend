@@ -23,7 +23,10 @@ import onboardingDbRoutes from './routes/onboarding.db.routes';
 import rolesDbRoutes from './routes/roles.db.routes';
 import orgDbRoutes from './routes/org.db.routes';
 import workflowDbRoutes from './routes/workflow.db.routes';
+import trackerDbRoutes from './routes/tracker.db.routes';
+import monitoringDbRoutes from './routes/monitoring.db.routes';
 import { createErrorMiddleware } from '../shared/middlewares/error.middleware';
+import { createTrackerMiddleware } from '../shared/middlewares/api-tracker.middleware';
 
 const app1 = express();
 
@@ -35,6 +38,7 @@ app1.use(
 );
 app1.use(express.json());
 app1.use(cookieParser());
+app1.use(createTrackerMiddleware('BACKEND'));
 
 // Internal Routes - Protected by infrastructure (not intended for public access)
 app1.use('/internal/auth', authDbRoutes);
@@ -44,6 +48,8 @@ app1.use('/internal/onboarding', onboardingDbRoutes);
 app1.use('/internal/roles', rolesDbRoutes);
 app1.use('/internal/org', orgDbRoutes);
 app1.use('/internal/workflow', workflowDbRoutes);
+app1.use('/internal/tracker', trackerDbRoutes);
+app1.use('/internal/monitoring', monitoringDbRoutes);
 
 // Health check
 app1.get('/', (req, res) => {

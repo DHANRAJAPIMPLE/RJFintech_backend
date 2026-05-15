@@ -6,6 +6,7 @@ import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { clearAuthCookies } from '../utils/cookie.util';
 import { HashUtil } from '../../shared/utils/hash.util';
+import { ApiTracker } from '../../shared/utils/tracker.util';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -73,6 +74,10 @@ export const authMiddleware = async (
       }
     }
 
+    if (userId || companyId) {
+      ApiTracker.setIdentity({ userId, companyId });
+    }
+
     // 2. Consolidate Backend Call: Fetch activity exactly once
     let activity: any = null;
     let ok = false;
@@ -81,7 +86,7 @@ export const authMiddleware = async (
       // If we have a userId (from valid or expired token), fetch by ID
       const response = await internalPost<any>(
         `${config.backendAuthUrl}/get-user-activity`,
-        { userId },
+        { userId, ...(companyId && { companyId }) },
       );
       activity = response.data;
       ok = response.ok;
@@ -94,6 +99,13 @@ export const authMiddleware = async (
       );
       activity = response.data;
       ok = response.ok;
+    }
+
+    if (activity?.userId || activity?.companyId) {
+      ApiTracker.setIdentity({
+        userId: activity.userId,
+        companyId: activity.companyId,
+      });
     }
 
     // 3. Validation Logic
@@ -170,10 +182,18 @@ export const authMiddleware = async (
     }
 
     // 5. Finalize Request
-    req.user = {
+    const authenticatedUser = {
       ...activity.user,
-      companyId: companyId,
+      companyId: companyId as string,
     };
+    req.user = authenticatedUser;
+
+    // Logic: Sync with API Tracker context for late-binding storage
+    ApiTracker.setIdentity({
+      userId: authenticatedUser.id,
+      companyId: authenticatedUser.companyId,
+    });
+
     next();
   } catch (error) {
     if (error instanceof AppError) {

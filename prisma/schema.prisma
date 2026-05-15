@@ -23,6 +23,8 @@ model User {
   managedUsers      UserMapping[]        @relation("ReportingManager")
   userMappings      UserMapping[]        @relation("UserMappings")
   workflowHistories WorkflowReqHistory[] @relation("UserWorkflowHistoryRel")
+  apiTraces         ApiTrace[]           @relation("UserApiTraceRel")
+  apiSpans          ApiSpan[]            @relation("UserApiSpanRel")
 
   @@map("user")
 }
@@ -50,6 +52,8 @@ model Company {
   workflows            Workflow[]
   workflowReqs         WorkflowReq[]
   workflowReqHistories WorkflowReqHistory[] @relation("CompanyWorkflowHistoryRel")
+  apiTraces            ApiTrace[]           @relation("CompanyApiTraceRel")
+  apiSpans             ApiSpan[]            @relation("CompanyApiSpanRel")
 
   @@map("company")
 }
@@ -350,6 +354,61 @@ model WorkflowReqHistory {
   @@map("workflow_req_history")
 }
 
+model ApiTrace {
+  id           String    @id @default(uuid())
+  trackingId   String    @unique @map("tracking_id")
+  companyId    String?   @map("company_id")
+  userId       String?   @map("user_id")
+  entryMethod  String    @map("entry_method")
+  entryUrl     String    @map("entry_url")
+  statusCode   Int?      @map("status_code")
+  totalLatency Int?      @map("total_latency")
+  startedAt    DateTime  @default(now()) @map("started_at")
+  endedAt      DateTime? @map("ended_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  company   Company? @relation("CompanyApiTraceRel", fields: [companyId], references: [id])
+  user      User?    @relation("UserApiTraceRel", fields: [userId], references: [id])
+  spans     ApiSpan[]
+
+  @@map("api_trace")
+}
+
+model ApiSpan {
+  id             String      @id @default(uuid())
+  trackingId     String      @map("tracking_id")
+  parentSpanId   String?     @map("parent_span_id")
+
+  type           ApiSpanType
+
+  method     String
+  url        String
+  statusCode Int?   @map("status_code")
+
+  headers Json?
+  reqBody Json? @map("req_body")
+  resBody Json? @map("res_body")
+
+  latency   Int?
+  companyId String? @map("company_id")
+  userId    String? @map("user_id")
+
+  startedAt DateTime  @default(now()) @map("started_at")
+  endedAt   DateTime? @map("ended_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  company Company? @relation("CompanyApiSpanRel", fields: [companyId], references: [id])
+  user    User?    @relation("UserApiSpanRel", fields: [userId], references: [id])
+  trace   ApiTrace @relation(fields: [trackingId], references: [trackingId])
+
+  @@index([trackingId])
+  @@index([companyId])
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("api_span")
+}
+
 enum NodeType {
   ROOT
   DIVISION
@@ -403,4 +462,10 @@ enum UserCategory {
   ALL_CHILD
   IMMEDIATE_CHILD
   NODE
+}
+
+enum ApiSpanType {
+  MIDDLELAYER
+  BACKEND
+  EXTERNAL
 }

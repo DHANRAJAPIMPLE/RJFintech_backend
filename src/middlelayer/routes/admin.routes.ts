@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { AdminController } from '../controllers/admin.controller';
+import { MonitoringController } from '../controllers/monitoring.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import { adminMiddleware } from '../middlewares/admin.middleware';
 
@@ -21,6 +22,11 @@ router.post('/groups', AdminController.getGroupCompanies);
 router.post('/initiate', AdminController.initiateCompanyOnboarding);
 router.post('/action', AdminController.actionCompanyOnboarding);
 router.post('/fetch-history', AdminController.fetchCompanyHistory);
+// ----------------------------------------------------------
+
+// -------------monitoring routes----------------------------
+router.post('/monitoring/fetch-all', MonitoringController.fetchAllTraces);
+router.post('/monitoring/details', MonitoringController.getTraceDetails);
 // ----------------------------------------------------------
 
 export default router;
