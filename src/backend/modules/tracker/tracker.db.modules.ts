@@ -50,24 +50,34 @@ export class TrackerDbController {
         return res.status(400).json({ error: 'trackingId is required' });
       }
 
-      const trace = await prisma.apiTrace.upsert({
-        where: { trackingId: cleanTrackingId },
-        create: {
-          trackingId: cleanTrackingId,
-          ...(cleanCompanyId && { companyId: cleanCompanyId }),
-          ...(cleanUserId && { userId: cleanUserId }),
-          entryMethod: cleanEntryMethod,
-          entryUrl: cleanEntryUrl,
-          startedAt: cleanStartedAt || new Date(),
-        },
-        update: {
-          ...(cleanCompanyId && { companyId: cleanCompanyId }),
-          ...(cleanUserId && { userId: cleanUserId }),
-          entryMethod: cleanEntryMethod,
-          entryUrl: cleanEntryUrl,
-          ...(cleanStartedAt && { startedAt: cleanStartedAt }),
-        },
-      });
+      let trace;
+      try {
+        trace = await prisma.apiTrace.upsert({
+          where: { trackingId: cleanTrackingId },
+          create: {
+            trackingId: cleanTrackingId,
+            ...(cleanCompanyId && { companyId: cleanCompanyId }),
+            ...(cleanUserId && { userId: cleanUserId }),
+            entryMethod: cleanEntryMethod,
+            entryUrl: cleanEntryUrl,
+            startedAt: cleanStartedAt || new Date(),
+          },
+          update: {
+            ...(cleanCompanyId && { companyId: cleanCompanyId }),
+            ...(cleanUserId && { userId: cleanUserId }),
+            entryMethod: cleanEntryMethod,
+            entryUrl: cleanEntryUrl,
+            ...(cleanStartedAt && { startedAt: cleanStartedAt }),
+          },
+        });
+      } catch (error: any) {
+        if (error.code === 'P2002') {
+          // Record already exists, fetch it so we can return it
+          trace = await prisma.apiTrace.findUnique({ where: { trackingId: cleanTrackingId } });
+        } else {
+          throw error;
+        }
+      }
 
       res.status(201).json(trace);
     } catch (error) {
@@ -105,35 +115,44 @@ export class TrackerDbController {
           ? Math.max(0, endedAtDate.getTime() - trace.startedAt.getTime())
           : undefined);
 
-      const updatedTrace = await prisma.apiTrace.upsert({
-        where: { trackingId: cleanTrackingId },
-        create: {
-          trackingId: cleanTrackingId,
-          entryMethod: 'UNKNOWN',
-          entryUrl: 'UNKNOWN',
-          startedAt: endedAtDate,
-          ...(typeof cleanStatusCode === 'number' && {
-            statusCode: cleanStatusCode,
-          }),
-          endedAt: endedAtDate,
-          ...(typeof resolvedTotalLatency === 'number' && {
-            totalLatency: resolvedTotalLatency,
-          }),
-          ...(cleanCompanyId && { companyId: cleanCompanyId }),
-          ...(cleanUserId && { userId: cleanUserId }),
-        },
-        update: {
-          ...(typeof cleanStatusCode === 'number' && {
-            statusCode: cleanStatusCode,
-          }),
-          endedAt: endedAtDate,
-          ...(typeof resolvedTotalLatency === 'number' && {
-            totalLatency: resolvedTotalLatency,
-          }),
-          ...(cleanCompanyId && { companyId: cleanCompanyId }),
-          ...(cleanUserId && { userId: cleanUserId }),
-        },
-      });
+      let updatedTrace;
+      try {
+        updatedTrace = await prisma.apiTrace.upsert({
+          where: { trackingId: cleanTrackingId },
+          create: {
+            trackingId: cleanTrackingId,
+            entryMethod: 'UNKNOWN',
+            entryUrl: 'UNKNOWN',
+            startedAt: endedAtDate,
+            ...(typeof cleanStatusCode === 'number' && {
+              statusCode: cleanStatusCode,
+            }),
+            endedAt: endedAtDate,
+            ...(typeof resolvedTotalLatency === 'number' && {
+              totalLatency: resolvedTotalLatency,
+            }),
+            ...(cleanCompanyId && { companyId: cleanCompanyId }),
+            ...(cleanUserId && { userId: cleanUserId }),
+          },
+          update: {
+            ...(typeof cleanStatusCode === 'number' && {
+              statusCode: cleanStatusCode,
+            }),
+            endedAt: endedAtDate,
+            ...(typeof resolvedTotalLatency === 'number' && {
+              totalLatency: resolvedTotalLatency,
+            }),
+            ...(cleanCompanyId && { companyId: cleanCompanyId }),
+            ...(cleanUserId && { userId: cleanUserId }),
+          },
+        });
+      } catch (error: any) {
+        if (error.code === 'P2002') {
+          updatedTrace = await prisma.apiTrace.findUnique({ where: { trackingId: cleanTrackingId } });
+        } else {
+          throw error;
+        }
+      }
 
       res.status(200).json({ success: true, updated: 1, trace: updatedTrace });
     } catch (error) {
@@ -180,21 +199,29 @@ export class TrackerDbController {
         return res.status(400).json({ error: 'trackingId is required' });
       }
 
-      await prisma.apiTrace.upsert({
-        where: { trackingId: cleanTrackingId },
-        create: {
-          trackingId: cleanTrackingId,
-          ...(cleanCompanyId && { companyId: cleanCompanyId }),
-          ...(cleanUserId && { userId: cleanUserId }),
-          entryMethod: cleanMethod,
-          entryUrl: cleanUrl,
-          startedAt: cleanStartedAt,
-        },
-        update: {
-          ...(cleanCompanyId && { companyId: cleanCompanyId }),
-          ...(cleanUserId && { userId: cleanUserId }),
-        },
-      });
+      try {
+        await prisma.apiTrace.upsert({
+          where: { trackingId: cleanTrackingId },
+          create: {
+            trackingId: cleanTrackingId,
+            ...(cleanCompanyId && { companyId: cleanCompanyId }),
+            ...(cleanUserId && { userId: cleanUserId }),
+            entryMethod: cleanMethod,
+            entryUrl: cleanUrl,
+            startedAt: cleanStartedAt,
+          },
+          update: {
+            ...(cleanCompanyId && { companyId: cleanCompanyId }),
+            ...(cleanUserId && { userId: cleanUserId }),
+          },
+        });
+      } catch (upsertError: any) {
+        // P2002 is the code for Unique constraint failed. 
+        // If we hit this, it means another span or the trace start just created it.
+        if (upsertError.code !== 'P2002') {
+          console.error('[Tracker] Trace upsert failed:', upsertError.message);
+        }
+      }
 
       const span = await prisma.apiSpan.create({
         data: {
