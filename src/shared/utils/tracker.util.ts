@@ -13,36 +13,49 @@ export interface TrackingContext {
 export const trackingStorage = new AsyncLocalStorage<TrackingContext>();
 
 /**
+ * Sensitive fields that should never be logged in plain text.
+ */
+const SENSITIVE_FIELDS = [
+  'password',
+  'newPassword',
+  'confirmPassword',
+  'oldPassword',
+  'token',
+  'accessToken',
+  'refreshToken',
+  'secret',
+  'otp',
+  'creditCard',
+  'cvv'
+];
+
+/**
+ * Recursively masks sensitive fields in an object.
+ */
+const maskSensitiveData = (data: any): any => {
+  if (!data || typeof data !== 'object') return data;
+
+  if (Array.isArray(data)) {
+    return data.map(maskSensitiveData);
+  }
+
+  const masked: any = { ...data };
+  for (const key in masked) {
+    if (SENSITIVE_FIELDS.includes(key)) {
+      masked[key] = '********';
+    } else if (typeof masked[key] === 'object') {
+      masked[key] = maskSensitiveData(masked[key]);
+    }
+  }
+  return masked;
+};
+
+/**
  * API TRACKER UTILITY
- * Handles logging of API Traces and Spans.
- * Stateless and non-blocking.
  */
 export class ApiTracker {
   private static getBackendUrl() {
     return process.env.BACKEND_URL || 'http://localhost:5001';
-  }
-
-  private static cleanId(value?: string | null) {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-  }
-
-  static setIdentity(data: {
-    companyId?: string | null;
-    userId?: string | null;
-  }) {
-    const context = trackingStorage.getStore();
-    if (!context) return;
-
-    const companyId = this.cleanId(data.companyId);
-    const userId = this.cleanId(data.userId);
-
-    if (companyId) {
-      context.companyId = companyId;
-    }
-
-    if (userId) {
-      context.userId = userId;
-    }
   }
 
   static async startTrace(data: {
@@ -54,18 +67,16 @@ export class ApiTracker {
     serviceType: 'MIDDLELAYER' | 'BACKEND';
   }) {
     const trackingId = data.trackingId || crypto.randomUUID();
-    const companyId = this.cleanId(data.companyId);
-    const userId = this.cleanId(data.userId);
     const payload = {
       trackingId,
-      ...(companyId && { companyId }),
-      ...(userId && { userId }),
+      companyId: data.companyId,
+      userId: data.userId,
       entryMethod: data.entryMethod,
       entryUrl: data.entryUrl,
       startedAt: new Date(),
     };
 
-    await this.logTrace(payload, data.serviceType);
+    this.logTrace(payload, data.serviceType).catch(() => {});
     return trackingId;
   }
 
@@ -80,95 +91,63 @@ export class ApiTracker {
           body: JSON.stringify(payload),
         });
       }
-    } catch {
-      return;
-    }
+    } catch (err) {}
   }
 
   static async endTrace(
-    trackingId: string,
-    statusCode: number,
+    trackingId: string, 
+    statusCode: number, 
     serviceType: 'MIDDLELAYER' | 'BACKEND',
     companyId?: string,
-    userId?: string,
-    totalLatency?: number,
+    userId?: string
   ) {
     const endedAt = new Date();
-    this.finalizeTrace(
-      trackingId,
-      statusCode,
-      endedAt,
-      serviceType,
-      companyId,
-      userId,
-      totalLatency,
-    ).catch(() => {});
+    this.finalizeTrace(trackingId, statusCode, endedAt, serviceType, companyId, userId).catch(() => {});
   }
 
   private static async finalizeTrace(
-    trackingId: string,
-    statusCode: number,
-    endedAt: Date,
+    trackingId: string, 
+    statusCode: number, 
+    endedAt: Date, 
     serviceType: string,
     companyId?: string,
-    userId?: string,
-    totalLatency?: number,
+    userId?: string
   ) {
     try {
-      const cleanCompanyId = this.cleanId(companyId);
-      const cleanUserId = this.cleanId(userId);
-
       if (serviceType === 'BACKEND') {
-        const trace = await prisma.apiTrace.findUnique({
-          where: { trackingId },
-          select: { startedAt: true },
-        });
-        const resolvedTotalLatency =
-          typeof totalLatency === 'number'
-            ? totalLatency
-            : trace?.startedAt
-              ? Math.max(0, endedAt.getTime() - trace.startedAt.getTime())
-              : undefined;
-
         await prisma.apiTrace.updateMany({
           where: { trackingId },
-          data: {
-            statusCode,
+          data: { 
+            statusCode, 
             endedAt,
-            ...(typeof resolvedTotalLatency === 'number' && {
-              totalLatency: resolvedTotalLatency,
-            }),
-            ...(cleanCompanyId && { companyId: cleanCompanyId }),
-            ...(cleanUserId && { userId: cleanUserId }),
-          },
+            ...(companyId && { companyId }),
+            ...(userId && { userId }),
+          }
         });
+        
+        const trace = await prisma.apiTrace.findUnique({ where: { trackingId } });
+        if (trace && trace.startedAt) {
+          const totalLatency = endedAt.getTime() - trace.startedAt.getTime();
+          await prisma.apiTrace.update({
+            where: { trackingId },
+            data: { totalLatency }
+          });
+        }
       } else {
         await fetch(`${this.getBackendUrl()}/internal/tracker/trace`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            trackingId,
-            statusCode,
-            endedAt,
-            companyId: cleanCompanyId,
-            userId: cleanUserId,
-            totalLatency,
-          }),
+          body: JSON.stringify({ trackingId, statusCode, endedAt, companyId, userId }),
         });
       }
-    } catch {
-      return;
-    }
+    } catch (err) {}
   }
 
   static async createSpan(data: {
-    id?: string;
     type: ApiSpanType;
     method: string;
     url: string;
     parentSpanId?: string;
-    companyId?: string;
-    userId?: string;
     reqBody?: any;
     resBody?: any;
     statusCode?: number;
@@ -180,23 +159,17 @@ export class ApiTracker {
     const context = trackingStorage.getStore();
     if (!context) return;
 
-    const id = this.cleanId(data.id);
-    const parentSpanId = this.cleanId(data.parentSpanId);
-    const companyId =
-      this.cleanId(data.companyId) || this.cleanId(context.companyId);
-    const userId = this.cleanId(data.userId) || this.cleanId(context.userId);
-
     const payload = {
       ...data,
-      ...(id && { id }),
       trackingId: context.trackingId,
-      ...(parentSpanId && { parentSpanId }),
-      ...(companyId && { companyId }),
-      ...(userId && { userId }),
+      companyId: context.companyId,
+      userId: context.userId,
+      // Mask sensitive data before logging
+      reqBody: maskSensitiveData(data.reqBody),
+      resBody: maskSensitiveData(data.resBody),
+      headers: maskSensitiveData(data.headers),
       startedAt: data.startedAt || new Date(),
-      endedAt:
-        data.endedAt ||
-        (typeof data.latency === 'number' ? new Date() : undefined),
+      endedAt: data.endedAt || (data.latency ? new Date(Date.now()) : undefined),
     };
 
     this.logSpan(payload, context.serviceType).catch(() => {});
@@ -213,8 +186,14 @@ export class ApiTracker {
           body: JSON.stringify(payload),
         });
       }
-    } catch {
-      return;
+    } catch (err) {}
+  }
+
+  static setIdentity(data: { companyId?: string, userId?: string }) {
+    const context = trackingStorage.getStore();
+    if (context) {
+      if (data.companyId) context.companyId = data.companyId;
+      if (data.userId) context.userId = data.userId;
     }
   }
 }

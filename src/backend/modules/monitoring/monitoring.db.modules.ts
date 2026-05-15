@@ -39,8 +39,6 @@ export class MonitoringDbController {
         timestamp: t.startedAt,
         method: t.entryMethod,
         endpoint: t.entryUrl,
-        status: t.statusCode,
-        latency: t.totalLatency,
         spanCount: t._count.spans
       }));
 
