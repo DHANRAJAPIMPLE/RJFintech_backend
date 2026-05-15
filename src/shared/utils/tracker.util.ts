@@ -13,20 +13,28 @@ export interface TrackingContext {
 export const trackingStorage = new AsyncLocalStorage<TrackingContext>();
 
 /**
- * Sensitive fields that should never be logged in plain text.
+ * Sensitive fields and headers that should never be logged in plain text.
+ * Includes common sensitive body keys and standard security headers.
  */
 const SENSITIVE_FIELDS = [
+  // Body fields
   'password',
-  'newPassword',
-  'confirmPassword',
-  'oldPassword',
+  'newpassword',
+  'confirmpassword',
+  'oldpassword',
   'token',
-  'accessToken',
-  'refreshToken',
+  'accesstoken',
+  'refreshtoken',
   'secret',
   'otp',
-  'creditCard',
-  'cvv'
+  'creditcard',
+  'cvv',
+  // Headers (usually lowercase in Express)
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+  'proxy-authorization'
 ];
 
 /**
@@ -41,8 +49,14 @@ const maskSensitiveData = (data: any): any => {
 
   const masked: any = { ...data };
   for (const key in masked) {
-    if (SENSITIVE_FIELDS.includes(key)) {
+    const lowerKey = key.toLowerCase();
+    if (SENSITIVE_FIELDS.includes(lowerKey)) {
       masked[key] = '********';
+      
+      // Add descriptive flags for headers
+      if (lowerKey === 'cookie') masked['cookies_present'] = true;
+      if (lowerKey === 'authorization') masked['auth_present'] = true;
+      
     } else if (typeof masked[key] === 'object') {
       masked[key] = maskSensitiveData(masked[key]);
     }
@@ -99,10 +113,11 @@ export class ApiTracker {
     statusCode: number, 
     serviceType: 'MIDDLELAYER' | 'BACKEND',
     companyId?: string,
-    userId?: string
+    userId?: string,
+    totalLatency?: number
   ) {
     const endedAt = new Date();
-    this.finalizeTrace(trackingId, statusCode, endedAt, serviceType, companyId, userId).catch(() => {});
+    this.finalizeTrace(trackingId, statusCode, endedAt, serviceType, companyId, userId, totalLatency).catch(() => {});
   }
 
   private static async finalizeTrace(
@@ -111,7 +126,8 @@ export class ApiTracker {
     endedAt: Date, 
     serviceType: string,
     companyId?: string,
-    userId?: string
+    userId?: string,
+    totalLatency?: number
   ) {
     try {
       if (serviceType === 'BACKEND') {
@@ -122,22 +138,26 @@ export class ApiTracker {
             endedAt,
             ...(companyId && { companyId }),
             ...(userId && { userId }),
+            ...(totalLatency && { totalLatency })
           }
         });
         
-        const trace = await prisma.apiTrace.findUnique({ where: { trackingId } });
-        if (trace && trace.startedAt) {
-          const totalLatency = endedAt.getTime() - trace.startedAt.getTime();
-          await prisma.apiTrace.update({
-            where: { trackingId },
-            data: { totalLatency }
-          });
+        // If latency wasn't provided, try to calculate it
+        if (!totalLatency) {
+          const trace = await prisma.apiTrace.findUnique({ where: { trackingId } });
+          if (trace && trace.startedAt) {
+            const calculatedLatency = endedAt.getTime() - trace.startedAt.getTime();
+            await prisma.apiTrace.update({
+              where: { trackingId },
+              data: { totalLatency: calculatedLatency }
+            });
+          }
         }
       } else {
         await fetch(`${this.getBackendUrl()}/internal/tracker/trace`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trackingId, statusCode, endedAt, companyId, userId }),
+          body: JSON.stringify({ trackingId, statusCode, endedAt, companyId, userId, totalLatency }),
         });
       }
     } catch (err) {}
@@ -189,6 +209,9 @@ export class ApiTracker {
     } catch (err) {}
   }
 
+  /**
+   * Updates the current request's context with identity info (late binding).
+   */
   static setIdentity(data: { companyId?: string, userId?: string }) {
     const context = trackingStorage.getStore();
     if (context) {
