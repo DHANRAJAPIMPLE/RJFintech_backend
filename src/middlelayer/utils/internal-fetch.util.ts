@@ -71,14 +71,21 @@ export const internalFetch = async <T = any>(
     }
   }
 
+  // Automatically inject companyId and userId if they are present in context but missing in body
+  const finalBody = (method !== 'GET' && method !== 'DELETE') ? {
+    ...(body || {}),
+    companyId: body?.companyId || companyId,
+    userId: body?.userId || userId,
+  } : body;
+
   try {
     const options: RequestInit = {
       method,
       headers,
     };
 
-    if (body && method !== 'GET') {
-      options.body = JSON.stringify(body);
+    if (finalBody && method !== 'GET') {
+      options.body = JSON.stringify(finalBody);
     }
 
     const response = await fetch(url, options);
@@ -97,14 +104,14 @@ export const internalFetch = async <T = any>(
     if (context) {
       ApiTracker.createSpan({
         id: spanId,
-        type: 'MIDDLELAYER', // From middlelayer perspective, backend is middlelayer internal call
+        type: 'MIDDLELAYER',
         method,
         url,
         statusCode: response.status,
         latency,
         companyId,
         userId,
-        reqBody: body,
+        reqBody: finalBody,
         resBody: data,
         headers: options.headers,
         startedAt: new Date(startTime),
@@ -125,7 +132,7 @@ export const internalFetch = async <T = any>(
         latency,
         companyId,
         userId,
-        reqBody: body,
+        reqBody: finalBody,
         resBody: { error: 'Backend service unreachable' },
         headers,
         startedAt: new Date(startTime),
