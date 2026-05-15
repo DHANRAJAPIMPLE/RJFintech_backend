@@ -681,16 +681,40 @@ export class WorkflowDbController {
       );
 
       const resultList: any[] = [];
-      const handledReqs = new Set<string>();
+      const handledPendingReqs = new Set<string>();
 
+      // 3. Inject "Pending Approval" entries for any active requests
       histories.forEach((h) => {
-        // Skip if we've already processed the latest event for this workflow request
-        if (h.workflowReqId && handledReqs.has(h.workflowReqId)) {
-          return;
+        if (h.workflowReqId && !handledPendingReqs.has(h.workflowReqId)) {
+          const levels = workflowMap.get(h.workflowReqId);
+          if (levels) {
+            const currentPending = levels.find((l) => l.status === 'PENDING');
+            if (currentPending) {
+              const approvers = (currentPending.approversList as string[])
+                .map((id) => {
+                  const u = approverMap.get(id);
+                  return u ? { name: u.name, email: u.email } : null;
+                })
+                .filter(Boolean);
+
+              resultList.push({
+                workflowName: (h.workflowReq?.data as any)?.name || null,
+                module: h.workflowReq?.module || null,
+                subModule: h.workflowReq?.subModule || null,
+                companyCode: h.company.companyCode,
+                event: `L${currentPending.level} Pending Approval`,
+                createdAt: null,
+                eligibleapprovers: approvers,
+              });
+            }
+          }
+          handledPendingReqs.add(h.workflowReqId);
         }
-        if (h.workflowReqId) {
-          handledReqs.add(h.workflowReqId);
-        }
+      });
+
+      // 4. Format the output for the UI
+
+      const formattedHistories = histories.map((h) => {
 
         const companyId = h.company.id;
         const initiatorAccesses =
@@ -704,43 +728,63 @@ export class WorkflowDbController {
         const levels = h.workflowReqId
           ? workflowMap.get(h.workflowReqId)
           : null;
-        
-        let event = h.event;
-        let eligibleapprovers = undefined;
-        let level = h.level;
+        let workflowStatus = null;
 
         if (levels && levels.length > 0) {
-          const currentPending = levels.find((l: any) => l.status === 'PENDING');
-          if (currentPending) {
-            event = `L${currentPending.level} Pending Approval`;
-            level = currentPending.level;
-            eligibleapprovers = (currentPending.approversList as string[])
-              .map((id: string) => {
-                const u = approverMap.get(id);
-                return u ? { name: u.name, email: u.email } : null;
-              })
-              .filter(Boolean);
-          }
+          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
+          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
+          const currentPending = levels.find(
+            (l: any) => l.status === 'PENDING',
+          );
+
+          workflowStatus = {
+            overallStatus: isRejected
+              ? 'REJECTED'
+              : allApproved
+                ? 'APPROVED'
+                : 'PENDING',
+            currentLevel: currentPending
+              ? currentPending.level
+              : allApproved
+                ? levels.length
+                : null,
+            totalLevels: levels.length,
+            levels: levels
+              .filter(
+                (l: any) => l.level <= (currentPending?.level || levels.length),
+              )
+              .map((l: any) => ({
+                level: l.level,
+                status: l.status,
+                eligibleapprovers: (l.approversList as string[])
+                  .map((id: string) => {
+                    const u = approverMap.get(id);
+                    return u ? { name: u.name, email: u.email } : null;
+                  })
+                  .filter(Boolean),
+              })),
+          };
         }
 
-        resultList.push({
+        return {
           workflowName: (h.workflowReq?.data as any)?.name || null,
           module: h.workflowReq?.module || null,
           subModule: h.workflowReq?.subModule || null,
           companyCode: h.company.companyCode,
-          event,
-          level,
+          event: h.event,
+          level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          eligibleapprovers,
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
               name: h.user?.name || 'System',
               email: h.user?.email || 'system@internal',
             },
-        });
+        };
       });
+
+      resultList.push(...formattedHistories);
 
       res.status(200).json({
         message: 'Workflow history fetched successfully!',
@@ -751,7 +795,6 @@ export class WorkflowDbController {
       next(error);
     }
   }
-
   /**
    * Fetches all workflow-related data for a company.
    * Returns:
