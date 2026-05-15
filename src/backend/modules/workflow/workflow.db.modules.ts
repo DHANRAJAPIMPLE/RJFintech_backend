@@ -579,16 +579,28 @@ export class WorkflowDbController {
         orderBy: { createdAt: 'desc' },
       });
 
+      // Filter out rejected workflows
+      const rejectedReqIds = new Set<string>();
+      histories.forEach((h) => {
+        if (h.workflowReqId && (h.event === 'REJECTED' || h.workflowReq?.status === 'REJECTED')) {
+          rejectedReqIds.add(h.workflowReqId);
+        }
+      });
+
+      const activeHistories = histories.filter(
+        (h) => !h.workflowReqId || !rejectedReqIds.has(h.workflowReqId)
+      );
+
       // Use shared history formatter for the common pipeline
       // Workflow uses per-request subModules for approver enrichment
       const subModuleMapLocal = new Map<string, string>();
-      histories.forEach((h) => {
+      activeHistories.forEach((h) => {
         if ((h as any).workflowReqId && (h as any).workflowReq?.subModule) {
           subModuleMapLocal.set((h as any).workflowReqId, (h as any).workflowReq.subModule);
         }
       });
 
-      const resultList = await formatHistoryPipeline(histories, {
+      const resultList = await formatHistoryPipeline(activeHistories, {
         getReqId: (h) => (h as any).workflowReqId,
         getEvent: (h) => (h as any).event,
         getEventUserId: (h) => (h as any).eventUserId,

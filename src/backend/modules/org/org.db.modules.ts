@@ -556,8 +556,20 @@ export class OrgStructureDbController {
         orderBy: { createdAt: 'desc' },
       });
 
+      // Filter out rejected org structure requests
+      const rejectedReqIds = new Set<string>();
+      histories.forEach((h) => {
+        if (h.orgReqId && (h.event === 'REJECTED' || h.orgReq?.status === 'REJECTED')) {
+          rejectedReqIds.add(h.orgReqId);
+        }
+      });
+
+      const activeHistories = histories.filter(
+        (h) => !h.orgReqId || !rejectedReqIds.has(h.orgReqId)
+      );
+
       // Use shared history formatter for the common pipeline
-      const resultList = await formatHistoryPipeline(histories, {
+      const resultList = await formatHistoryPipeline(activeHistories, {
         getReqId: (h) => (h as any).orgReqId,
         getEvent: (h) => (h as any).event,
         getEventUserId: (h) => (h as any).eventUserId,
