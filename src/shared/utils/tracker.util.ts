@@ -112,6 +112,10 @@ const maskSensitiveData = (data: any): any => {
 
 /**
  * API TRACKER UTILITY
+ *
+ * Responsible for sending trace/span data to the backend tracker endpoints.
+ * All methods are designed to be non-blocking and fault-tolerant — tracking
+ * failures must NEVER break the actual business request flow.
  */
 export class ApiTracker {
   private static getBackendUrl() {
@@ -122,22 +126,50 @@ export class ApiTracker {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
   }
 
+  /**
+   * Sends data to the backend tracker endpoint.
+   * Returns true ONLY if the backend responded with a 2xx status.
+   * Network errors and non-2xx responses return false.
+   */
   private static async sendToTracker(
     path: string,
     method: 'POST' | 'PATCH',
     payload: Record<string, any>,
-  ) {
+  ): Promise<boolean> {
     try {
-      await fetch(`${this.getBackendUrl()}${path}`, {
+      const response = await fetch(`${this.getBackendUrl()}${path}`, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      return response.ok;
     } catch {
-      return;
+      return false;
     }
   }
 
+  /**
+   * Sends with a single retry on failure. Used for critical operations
+   * like trace creation and finalization where data loss is costly.
+   */
+  private static async sendWithRetry(
+    path: string,
+    method: 'POST' | 'PATCH',
+    payload: Record<string, any>,
+  ): Promise<boolean> {
+    let ok = await this.sendToTracker(path, method, payload);
+    if (!ok) {
+      await new Promise((r) => setTimeout(r, 80));
+      ok = await this.sendToTracker(path, method, payload);
+    }
+    return ok;
+  }
+
+  /**
+   * Creates a new parent trace in the database.
+   * This is awaited by the middleware to ensure the trace row exists
+   * BEFORE any child spans reference it via trackingId FK.
+   */
   static async startTrace(data: {
     trackingId?: string;
     companyId?: string;
@@ -145,7 +177,7 @@ export class ApiTracker {
     entryMethod: string;
     entryUrl: string;
     serviceType: 'MIDDLELAYER' | 'BACKEND';
-  }) {
+  }): Promise<string> {
     const trackingId = data.trackingId || crypto.randomUUID();
     const companyId = this.cleanString(data.companyId);
     const userId = this.cleanString(data.userId);
@@ -158,10 +190,25 @@ export class ApiTracker {
       startedAt: new Date(),
     };
 
-    await this.sendToTracker('/internal/tracker/trace/start', 'POST', payload);
+    const ok = await this.sendWithRetry(
+      '/internal/tracker/trace/start',
+      'POST',
+      payload,
+    );
+
+    if (!ok) {
+      console.warn(
+        `[ApiTracker] Failed to persist trace ${trackingId} for ${data.entryMethod} ${data.entryUrl}`,
+      );
+    }
+
     return trackingId;
   }
 
+  /**
+   * Finalizes a trace with status code, latency, and identity.
+   * Uses retry to ensure critical completion data is persisted.
+   */
   static async endTrace(
     trackingId: string,
     statusCode: number,
@@ -179,7 +226,9 @@ export class ApiTracker {
       companyId,
       userId,
       totalLatency,
-    ).catch(() => {});
+    ).catch((e) => {
+      console.warn(`[ApiTracker] Error finalizing trace ${trackingId}:`, e);
+    });
   }
 
   private static async finalizeTrace(
@@ -194,16 +243,33 @@ export class ApiTracker {
     const cleanCompanyId = this.cleanString(companyId);
     const cleanUserId = this.cleanString(userId);
 
-    await this.sendToTracker('/internal/tracker/trace/end', 'PATCH', {
+    const payload = {
       trackingId,
       statusCode,
       endedAt,
       ...(cleanCompanyId && { companyId: cleanCompanyId }),
       ...(cleanUserId && { userId: cleanUserId }),
       ...(typeof totalLatency === 'number' && { totalLatency }),
-    });
+    };
+
+    const ok = await this.sendWithRetry(
+      '/internal/tracker/trace/end',
+      'PATCH',
+      payload,
+    );
+
+    if (!ok) {
+      console.warn(
+        `[ApiTracker] Failed to finalize trace ${trackingId} (status=${statusCode}, latency=${totalLatency}ms)`,
+      );
+    }
   }
 
+  /**
+   * Records an API span (child of a trace).
+   * Fire-and-forget with single retry — span loss is acceptable
+   * but we log warnings for observability.
+   */
   static async createSpan(data: {
     id?: string;
     type: ApiSpanType;
@@ -252,9 +318,17 @@ export class ApiTracker {
         data.endedAt || (data.latency ? new Date(Date.now()) : undefined),
     };
 
-    this.sendToTracker('/internal/tracker/span', 'POST', payload).catch(
-      () => {},
+    const ok = await this.sendWithRetry(
+      '/internal/tracker/span',
+      'POST',
+      payload,
     );
+
+    if (!ok) {
+      console.warn(
+        `[ApiTracker] Failed to persist span for ${data.method} ${data.url} (trace=${context.trackingId})`,
+      );
+    }
   }
 
   /**

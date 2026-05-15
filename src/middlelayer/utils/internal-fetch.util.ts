@@ -10,6 +10,11 @@ import crypto from 'crypto';
  * - To encapsulate common fetch logic (headers, body stringification, response parsing).
  * - To provide a consistent return type { data, status, ok }.
  * - To handle network failures gracefully by throwing a 503 'Service Unreachable' error.
+ *
+ * Tracking Integration:
+ * - Propagates track-id, company-id, user-id, parent-span-id headers to the backend.
+ * - Records each call as a MIDDLELAYER span for full request traceability.
+ * - The backend will record its own BACKEND span via its tracker middleware.
  */
 import { trackingStorage, ApiTracker } from '../../shared/utils/tracker.util';
 
@@ -93,7 +98,7 @@ export const internalFetch = async <T = any>(
       data = await response.text();
     }
 
-    // Record this call as a span
+    // Record this call as a MIDDLELAYER span
     if (context) {
       ApiTracker.createSpan({
         id: spanId,

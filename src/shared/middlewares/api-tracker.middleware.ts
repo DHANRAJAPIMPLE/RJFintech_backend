@@ -41,6 +41,13 @@ const withClientIpHeaders = (
 /**
  * API TRACKER MIDDLEWARE FACTORY:
  * Creates a middleware that captures incoming requests and records them as Traces or Spans.
+ *
+ * Flow:
+ * 1. Frontend → Middlelayer: No track-id header → creates a new PARENT trace (awaited)
+ * 2. Middlelayer → Backend: Has track-id header → records as CHILD span on finish
+ *
+ * The parent trace is ALWAYS created first (awaited) before the request proceeds,
+ * guaranteeing that child spans can reference the trace via FK.
  */
 export const createTrackerMiddleware = (
   serviceType: 'MIDDLELAYER' | 'BACKEND',
@@ -80,7 +87,8 @@ export const createTrackerMiddleware = (
     let trackingId = incomingTrackingId;
 
     if (isMainEntry) {
-      // Create a new Trace for the entry request
+      // Create a new parent Trace — this is AWAITED to ensure the trace row
+      // exists in the DB before any downstream spans reference it.
       trackingId = await ApiTracker.startTrace({
         entryMethod: req.method,
         entryUrl: req.originalUrl,
@@ -110,50 +118,55 @@ export const createTrackerMiddleware = (
       // Listen for the response to finish to record completion
       res.on('finish', () => {
         trackingStorage.run(context, () => {
-          const endedAt = new Date();
-          const latency = endedAt.getTime() - startTime;
+          try {
+            const endedAt = new Date();
+            const latency = endedAt.getTime() - startTime;
 
-          // Late binding: Get final IDs from req.user (populated by authMiddleware)
-          const finalUserId =
-            cleanString((req as any).user?.id) || context.userId;
-          const finalCompanyId =
-            cleanString((req as any).user?.companyId) || context.companyId;
+            // Late binding: Get final IDs from req.user (populated by authMiddleware)
+            const finalUserId =
+              cleanString((req as any).user?.id) || context.userId;
+            const finalCompanyId =
+              cleanString((req as any).user?.companyId) || context.companyId;
 
-          ApiTracker.setIdentity({
-            companyId: finalCompanyId,
-            userId: finalUserId,
-          });
-
-          if (isMainEntry) {
-            // Update the main trace with final information
-            ApiTracker.endTrace(
-              trackingId,
-              res.statusCode,
-              serviceType,
-              finalCompanyId,
-              finalUserId,
-              latency,
-            );
-          } else {
-            // Record this request as an internal span
-            ApiTracker.createSpan({
-              type: serviceType,
-              method: req.method,
-              url: req.originalUrl,
-              parentSpanId,
-              statusCode: res.statusCode,
-              latency,
-              reqBody: req.body,
-              headers: withClientIpHeaders(req.headers, clientIp),
-              startedAt: new Date(startTime),
-              endedAt,
+            ApiTracker.setIdentity({
+              companyId: finalCompanyId,
+              userId: finalUserId,
             });
+
+            if (isMainEntry) {
+              // Update the main trace with final status code, latency, and identity
+              ApiTracker.endTrace(
+                trackingId!,
+                res.statusCode,
+                serviceType,
+                finalCompanyId,
+                finalUserId,
+                latency,
+              );
+            } else {
+              // Record this request as a child span under the existing trace
+              ApiTracker.createSpan({
+                type: serviceType,
+                method: req.method,
+                url: req.originalUrl,
+                parentSpanId,
+                statusCode: res.statusCode,
+                latency,
+                reqBody: req.body,
+                headers: withClientIpHeaders(req.headers, clientIp),
+                startedAt: new Date(startTime),
+                endedAt,
+              });
+            }
+          } catch (e) {
+            // Tracking failures must NEVER crash the response
+            console.warn('[ApiTracker] Error in finish handler:', e);
           }
         });
       });
 
       // Propagate tracking ID to response headers
-      res.setHeader('track-id', trackingId);
+      res.setHeader('track-id', trackingId!);
 
       next();
     });
