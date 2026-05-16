@@ -5,6 +5,7 @@ import { asUuid } from '../../shared/utils/monitoring/monitoringIds';
 export type MonitoringRequest = Request & {
   user?: {
     id?: string;
+    userId?: string;
     companyId?: string;
   };
   monitoring?: {
@@ -57,6 +58,7 @@ export const attachTrackingHeaders = (
     asUuid(backendBody?.companyId);
   const userId =
     asUuid(req.user?.id) ||
+    asUuid(req.user?.userId) ||
     asUuid(req.get('x-user-id')) ||
     asUuid(req.body?.userId) ||
     asUuid(backendBody?.userId);

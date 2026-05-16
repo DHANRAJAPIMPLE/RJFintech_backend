@@ -31,6 +31,7 @@ const extractCompanyId = (req: MonitoringRequest): string | null => {
 const extractUserId = (req: MonitoringRequest): string | null => {
   return (
     asUuid(req.user?.id) ||
+    asUuid(req.user?.userId) ||
     asUuid(getStringHeader(req, 'x-user-id')) ||
     asUuid(req.body?.userId) ||
     null

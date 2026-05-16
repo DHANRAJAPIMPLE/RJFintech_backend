@@ -1,7 +1,5 @@
 import {
   createApiSpanSafely,
-  countBackendRowsByTrackingIds,
-  findBackendMonitoringRowsByTrackingIds,
   findMiddlelayerMonitoringRows,
   findMonitoringRowsByTrackingId,
   toPrismaJson,
@@ -49,15 +47,12 @@ const sortBySubCount = (left: SpanRow, right: SpanRow) => {
   return left.createdAt.getTime() - right.createdAt.getTime();
 };
 
-const formatBasicSpan = (row: SpanRow) => ({
+const formatFetchAllSpan = (row: SpanRow) => ({
   trackingId: row.trackingId,
   subCount: row.subCount,
-  type: row.type,
-  method: row.method,
-  url: row.url,
+  apiUrl: row.url,
   statusCode: row.statusCode,
-  latency: row.latency,
-  ipAddress: row.ipAddress,
+  ip: row.ipAddress,
   companyName: row.company?.legalName ?? null,
   companyCode: row.company?.companyCode ?? null,
   userName: row.user?.name ?? null,
@@ -127,37 +122,7 @@ export class MonitoringService {
 
   static async fetchAllMiddlelayerSpans(limit: number) {
     const parents = await findMiddlelayerMonitoringRows(limit);
-    const trackingIds = [...new Set(parents.map((row) => row.trackingId))];
-
-    const [backendRows, backendCounts] = await Promise.all([
-      findBackendMonitoringRowsByTrackingIds(trackingIds),
-      countBackendRowsByTrackingIds(trackingIds),
-    ]);
-
-    const backendRowsByTrackingId = new Map<string, SpanRow[]>();
-    const countByTrackingId = new Map<string, number>();
-
-    for (const row of backendRows) {
-      const rows = backendRowsByTrackingId.get(row.trackingId) ?? [];
-      rows.push(row);
-      backendRowsByTrackingId.set(row.trackingId, rows);
-    }
-
-    for (const row of backendCounts) {
-      countByTrackingId.set(row.trackingId, row._count._all);
-    }
-
-    return parents.map((parent) => {
-      const backendSpans = (backendRowsByTrackingId.get(parent.trackingId) ?? [])
-        .sort(sortBySubCount)
-        .map(formatBasicSpan);
-
-      return {
-        ...formatBasicSpan(parent),
-        totalSpanCount: countByTrackingId.get(parent.trackingId) ?? 0,
-        backendSpans,
-      };
-    });
+    return parents.map(formatFetchAllSpan);
   }
 
   static async getTraceDetails(trackingId: string) {

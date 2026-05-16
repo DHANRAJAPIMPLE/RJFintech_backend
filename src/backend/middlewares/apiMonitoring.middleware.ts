@@ -12,6 +12,7 @@ import { MonitoringService } from '../modules/monitoring/monitoring.service';
 type BackendMonitoringRequest = Request & {
   user?: {
     id?: string;
+    userId?: string;
     companyId?: string;
   };
 };
@@ -33,6 +34,7 @@ const extractCompanyId = (req: BackendMonitoringRequest): string | null => {
 const extractUserId = (req: BackendMonitoringRequest): string | null => {
   return (
     asUuid(req.user?.id) ||
+    asUuid(req.user?.userId) ||
     asUuid(getStringHeader(req, 'x-user-id')) ||
     asUuid(req.body?.userId) ||
     null

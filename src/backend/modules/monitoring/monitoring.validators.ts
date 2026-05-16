@@ -32,5 +32,3 @@ export const monitoringApiSpanSchema = z
     endedAt: z.coerce.date().optional().nullable(),
   })
   .strict();
-
-export type MonitoringApiSpanInput = z.infer<typeof monitoringApiSpanSchema>;

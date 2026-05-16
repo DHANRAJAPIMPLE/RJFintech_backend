@@ -150,9 +150,7 @@ export const countBackendRowsByTrackingIds = async (trackingIds: string[]) => {
   });
 };
 
-export const findMonitoringRowsByTrackingId = async (
-  trackingId: string,
-) => {
+export const findMonitoringRowsByTrackingId = async (trackingId: string) => {
   return prisma.apiSpan.findMany({
     where: {
       trackingId,
