@@ -21,7 +21,7 @@ import { internalPost } from '../utils/internal-fetch.util';
 import { setAuthCookies, clearAuthCookies } from '../utils/cookie.util';
 import { zodParse } from '../utils/zod-parse.util';
 import { registerSchema, loginSchema } from '../validations/auth.validation';
-import { ApiTracker } from '../../shared/utils/tracker.util';
+import console from 'console';
 
 export class AuthController {
   static async register(req: Request, res: Response, next: NextFunction) {
@@ -57,9 +57,11 @@ export class AuthController {
       }
 
       // 4. Logic: Strip ID/Password from user object before sending to frontend
-      const userWithoutSensitiveData = { ...createRes.data };
-      delete userWithoutSensitiveData.id;
-      delete userWithoutSensitiveData.password;
+      const {
+        id: _id,
+        password: _password,
+        ...userWithoutSensitiveData
+      } = createRes.data;
 
       res.status(201).json({
         message: 'User registered successfully',
@@ -78,6 +80,7 @@ export class AuthController {
         password,
         action,
         forceLogToken: providedForceLogToken,
+        companyCode: _companyCode,
       } = validatedData.body;
       const ip = requestIp.getClientIp(req) || 'unknown';
       const userAgent = req.headers['user-agent'] || 'unknown';
@@ -92,7 +95,7 @@ export class AuthController {
       if (!userRes.ok || !user) {
         throw new AppError('Invalid credentials', 401);
       }
-
+  
       const companyId = user.userMappings[0].companyId;
 
       // 2. Validate password
@@ -100,7 +103,6 @@ export class AuthController {
       if (!isPasswordValid) {
         throw new AppError('Invalid credentials', 401);
       }
-      ApiTracker.setIdentity({ userId: user.id, companyId });
 
       // 3. Get existing activity
       const activityRes = await internalPost<any>(
@@ -250,10 +252,6 @@ export class AuthController {
         clearAuthCookies(res);
         throw new AppError('Unauthorized - Session expired', 401);
       }
-      ApiTracker.setIdentity({
-        userId: activity.userId,
-        companyId: activity.companyId,
-      });
 
       // 4. Generate New Tokens
       const nextVersion = bumpVersion(activity.version);

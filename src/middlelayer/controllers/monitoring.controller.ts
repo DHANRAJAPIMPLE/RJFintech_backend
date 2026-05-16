@@ -1,55 +1,58 @@
-import { Request, Response, NextFunction } from 'express';
-import { internalPost } from '../utils/internal-fetch.util';
+import type { NextFunction, Request, Response } from 'express';
+import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
+import { internalPost } from '../utils/internal-fetch.util';
 
-/**
- * MONITORING CONTROLLER:
- * Exposes API observability data to SAAS Admins.
- */
 export class MonitoringController {
-  /**
-   * Proxies request to fetch all traces.
-   */
-  static async fetchAllTraces(req: Request, res: Response, next: NextFunction) {
+  static async fetchAll(req: Request, res: Response, next: NextFunction) {
     try {
-      const response = await internalPost(
-        `${config.backendUrl}/internal/monitoring/fetch-all`,
-        {}
+      const body =
+        req.body && typeof req.body === 'object' && Object.keys(req.body).length
+          ? req.body
+          : undefined;
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendUrl}/monitoring/fetch-all`,
+        body,
       );
 
-      if (!response.ok) {
-        return res.status(response.status).json(response.data);
+      if (!ok) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch monitoring spans',
+          status,
+        );
       }
 
-      res.status(200).json(response.data);
+      return res.status(200).json(data);
     } catch (error) {
-      next(error);
+      return next(error);
     }
   }
 
-  /**
-   * Proxies request to fetch specific trace details.
-   */
-  static async getTraceDetails(req: Request, res: Response, next: NextFunction) {
+  static async details(req: Request, res: Response, next: NextFunction) {
     try {
-      const { id } = req.body;
-
-      if (!id) {
-        return res.status(400).json({ error: 'id is required' });
-      }
-
-      const response = await internalPost(
-        `${config.backendUrl}/internal/monitoring/details`,
-        { id }
+      const trackingId =
+        req.body?.trackingId ||
+        req.body?.trackId ||
+        req.body?.tracking_id ||
+        req.get('x-tracking-id');
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendUrl}/monitoring/detaisls`,
+        {
+          ...(req.body ?? {}),
+          trackingId,
+        },
       );
 
-      if (!response.ok) {
-        return res.status(response.status).json(response.data);
+      if (!ok) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch monitoring details',
+          status,
+        );
       }
 
-      res.status(200).json(response.data);
+      return res.status(200).json(data);
     } catch (error) {
-      next(error);
+      return next(error);
     }
   }
 }

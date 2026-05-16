@@ -25,8 +25,8 @@ router.post('/fetch-history', AdminController.fetchCompanyHistory);
 // ----------------------------------------------------------
 
 // -------------monitoring routes----------------------------
-router.post('/monitoring/fetch-all', MonitoringController.fetchAllTraces);
-router.post('/monitoring/details', MonitoringController.getTraceDetails);
+router.post('/monitoring/fetch-all', MonitoringController.fetchAll);
+router.post('/monitoring/detaisls', MonitoringController.details);
 // ----------------------------------------------------------
 
 export default router;

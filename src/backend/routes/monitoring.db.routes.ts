@@ -1,13 +1,10 @@
 import { Router } from 'express';
-import { MonitoringDbController } from '../modules/monitoring/monitoring.db.modules';
+import { MonitoringController } from '../modules/monitoring/monitoring.controller';
 
 const router = Router();
 
-/**
- * Internal Monitoring Routes:
- * Used by the Middle Layer to fetch observability data for SAAS Admins.
- */
-router.post('/fetch-all', MonitoringDbController.fetchTraces);
-router.post('/details', MonitoringDbController.getTraceDetails);
+router.post('/api-span', MonitoringController.createMiddlelayerApiSpan);
+router.post('/fetch-all', MonitoringController.fetchAll);
+router.post('/detaisls', MonitoringController.details);
 
 export default router;

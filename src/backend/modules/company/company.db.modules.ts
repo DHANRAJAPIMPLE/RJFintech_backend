@@ -281,12 +281,12 @@ export class CompanyDbController {
    */
 
   static async createCompanyOnboarding(req: Request, res: Response) {
-    const { initiatorId, userId: _u, companyId: _c, _trackingContext: _t, ...onboardingData } = req.body;
+    const { initiatorId, ...onboardingData } = req.body;
     const companyCode = onboardingData.companyCode;
 
     const onboarding = await prisma.$transaction(async (tx) => {
       const onb = await tx.companyOnboarding.create({
-        data: onboardingData as any,
+        data: onboardingData,
       });
       if (initiatorId && companyCode) {
         await tx.companyHistory.create({
