@@ -388,7 +388,7 @@ model ApiSpan {
   headers Json?
   reqBody Json? @map("req_body")
   resBody Json? @map("res_body")
-
+  resHeaders Json? @map("res_headers")
   latency   Int?
   companyId String? @map("company_id")
   userId    String? @map("user_id")
