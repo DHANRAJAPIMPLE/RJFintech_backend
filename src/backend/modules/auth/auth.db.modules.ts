@@ -46,6 +46,9 @@ export class AuthDbController {
         return res.status(404).json({ error: 'User not found' });
       }
 
+      res.locals.userId = user.id;
+      res.locals.companyId = user.userMappings?.[0]?.companyId;
+
       res.status(200).json(user);
     } catch (error) {
       next(error);
@@ -94,6 +97,9 @@ export class AuthDbController {
         return res.status(404).json({ error: 'Activity not found' });
       }
 
+      res.locals.userId = activity.userId;
+      res.locals.companyId = activity.companyId;
+
       res.status(200).json(activity);
     } catch (error) {
       next(error);
@@ -129,6 +135,9 @@ export class AuthDbController {
           },
         });
       }
+
+      res.locals.userId = activity.userId;
+      res.locals.companyId = activity.companyId;
 
       res.status(200).json(activity);
     } catch (error) {
