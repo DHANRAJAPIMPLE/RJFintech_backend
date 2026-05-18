@@ -183,6 +183,9 @@ export class AuthController {
         versionHash,
       });
 
+      res.locals.userId = user.id;
+      res.locals.companyId = companyId;
+
       // 9. Response shaping
       const groups = formatUserGroups(user.userMappings);
 
@@ -285,6 +288,9 @@ export class AuthController {
         versionHash,
       });
 
+      res.locals.userId = activity.userId;
+      res.locals.companyId = activity.companyId;
+
       res.status(200).json({ message: 'Token refreshed' });
     } catch (error) {
       next(error);
@@ -319,6 +325,9 @@ export class AuthController {
       // 2. Format User Groups in Middle Layer
       const groups = formatUserGroups(user.userMappings);
 
+      res.locals.userId = user.id;
+      res.locals.companyId = user.userMappings?.[0]?.companyId;
+
       res.status(200).json({
         user: {
           name: user.name,
@@ -339,15 +348,46 @@ export class AuthController {
       if (refreshToken) {
         // 1. Invalidate Activity in Backend DB
         const refreshTokenHash = HashUtil.hashToken(refreshToken);
-        await internalPost(`${config.backendAuthUrl}/activity/delete`, {
+        const backendRes = await internalPost<any>(`${config.backendAuthUrl}/activity/delete`, {
           refreshTokenHash,
         });
+
+        if (backendRes.ok && backendRes.data) {
+          res.locals.userId = backendRes.data.userId;
+          res.locals.companyId = backendRes.data.companyId;
+        }
       }
 
       // 2. Clear Cookies in Middle Layer
       clearAuthCookies(res);
 
       res.status(200).json({ message: 'Logged out successfully' });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getAccessRights(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { email, companyCode } = req.body;
+
+      if (!email || !companyCode) {
+        throw new AppError('email and companyCode are required', 400);
+      }
+
+      const backendRes = await internalPost<any>(`${config.backendAuthUrl}/access-rights`, {
+        email,
+        companyCode,
+      });
+
+      if (!backendRes.ok) {
+        throw new AppError(
+          backendRes.data?.error || 'Failed to fetch access rights',
+          backendRes.status || 500,
+        );
+      }
+
+      res.status(200).json(backendRes.data);
     } catch (error) {
       next(error);
     }

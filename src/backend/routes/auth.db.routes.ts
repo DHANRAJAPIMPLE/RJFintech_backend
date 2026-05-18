@@ -10,5 +10,6 @@ router.post('/activity/upsert', AuthDbController.upsertActivity);
 router.post('/user/create', AuthDbController.createUser);
 router.post('/get-role', AuthDbController.getUserAdminRole);
 router.post('/get-user-access', AuthDbController.getUserAccess);
+router.post('/access-rights', AuthDbController.getAccessRights);
 
 export default router;

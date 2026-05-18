@@ -30,4 +30,7 @@ router.post('/me', authMiddleware, AuthController.me);
 // Logic: Protected/Semi — End the user session
 router.post('/logout', AuthController.logout);
 
+// Logic: Public/Semi — Fetch user access rights (primary/secondary) by email and companyCode
+router.post('/access-rights', AuthController.getAccessRights);
+
 export default router;

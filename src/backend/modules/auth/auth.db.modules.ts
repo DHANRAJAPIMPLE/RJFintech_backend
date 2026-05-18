@@ -143,11 +143,24 @@ export class AuthDbController {
   static async deleteActivity(req: Request, res: Response, next: NextFunction) {
     try {
       const { refreshTokenHash } = req.body;
+      const activity = await prisma.userActivity.findFirst({
+        where: { refreshToken: refreshTokenHash },
+      });
+
+      if (activity) {
+        res.locals.userId = activity.userId;
+        res.locals.companyId = activity.companyId;
+      }
+
       await prisma.userActivity.updateMany({
         where: { refreshToken: refreshTokenHash },
         data: { refreshToken: null, version: null, expiryAt: null },
       });
-      res.status(200).json({ message: 'Activity deleted' });
+      res.status(200).json({ 
+        message: 'Activity deleted', 
+        userId: activity?.userId, 
+        companyId: activity?.companyId 
+      });
     } catch (error) {
       next(error);
     }
@@ -199,6 +212,78 @@ export class AuthDbController {
       });
 
       res.status(200).json(userAccess);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Fetches the user's primary and secondary access rights for a specific company.
+   */
+  static async getAccessRights(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { email, companyCode } = req.body;
+
+      if (!email || !companyCode) {
+        return res
+          .status(400)
+          .json({ error: 'email and companyCode are required' });
+      }
+
+      const company = await prisma.company.findUnique({
+        where: { companyCode },
+      });
+
+      if (!company) {
+        return res.status(404).json({ error: 'Company not found' });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+        include: {
+          userAccesses: {
+            where: { companyId: company.id },
+            include: {
+              role: true,
+              orgStructure: true,
+            },
+          },
+        },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const primary = user.userAccesses
+        .filter((a) => a.accessType === 'PRIMARY' || a.isGlobalAccess)
+        .map((a) => ({
+          roleCategory: a.role?.category,
+          roleSubCategory: a.role?.subCategory,
+          roleName: a.role?.roleName,
+          nodeName: a.orgStructure?.nodeName,
+          nodePath: a.orgStructure?.nodePath,
+          nodeType: a.orgStructure?.nodeType,
+          accessCategory: a.accessCategory,
+        }));
+
+      const secondary = user.userAccesses
+        .filter((a) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
+        .map((a) => ({
+          roleCategory: a.role?.category,
+          roleSubCategory: a.role?.subCategory,
+          roleName: a.role?.roleName,
+          nodeName: a.orgStructure?.nodeName,
+          nodePath: a.orgStructure?.nodePath,
+          nodeType: a.orgStructure?.nodeType,
+          accessCategory: a.accessCategory,
+        }));
+
+      res.status(200).json({ primary, secondary });
     } catch (error) {
       next(error);
     }

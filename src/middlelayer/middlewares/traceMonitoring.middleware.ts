@@ -19,21 +19,37 @@ const getStringHeader = (
   return value && value.trim() ? value.trim() : null;
 };
 
-const extractCompanyId = (req: MonitoringRequest): string | null => {
+const extractCompanyId = (req: MonitoringRequest, res: Response): string | null => {
+  const resBody = res.locals.monitoringResponseBody;
   return (
+    asUuid(res.locals.companyId) ||
     asUuid(req.user?.companyId) ||
     asUuid(getStringHeader(req, 'x-company-id')) ||
     asUuid(req.body?.companyId) ||
+    asUuid(resBody?.companyId) ||
+    asUuid(resBody?.data?.companyId) ||
+    asUuid(resBody?.user?.companyId) ||
+    asUuid(resBody?.data?.user?.companyId) ||
+    asUuid(resBody?.userMappings?.[0]?.companyId) ||
+    asUuid(resBody?.user?.userMappings?.[0]?.companyId) ||
     null
   );
 };
 
-const extractUserId = (req: MonitoringRequest): string | null => {
+const extractUserId = (req: MonitoringRequest, res: Response): string | null => {
+  const resBody = res.locals.monitoringResponseBody;
   return (
+    asUuid(res.locals.userId) ||
     asUuid(req.user?.id) ||
     asUuid(req.user?.userId) ||
     asUuid(getStringHeader(req, 'x-user-id')) ||
     asUuid(req.body?.userId) ||
+    asUuid(resBody?.userId) ||
+    asUuid(resBody?.id) ||
+    asUuid(resBody?.data?.userId) ||
+    asUuid(resBody?.data?.id) ||
+    asUuid(resBody?.user?.id) ||
+    asUuid(resBody?.data?.user?.id) ||
     null
   );
 };
@@ -88,8 +104,8 @@ export const traceMonitoringMiddleware = (
       resHeaders: sanitizeMonitoringPayload(res.getHeaders()),
       latency: Date.now() - startedAtMs,
       ipAddress: extractClientIp(req),
-      companyId: extractCompanyId(req),
-      userId: extractUserId(req),
+      companyId: extractCompanyId(req, res),
+      userId: extractUserId(req, res),
       startedAt,
       endedAt,
     });
