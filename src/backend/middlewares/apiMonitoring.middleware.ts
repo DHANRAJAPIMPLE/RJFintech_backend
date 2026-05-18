@@ -7,7 +7,7 @@ import {
   asUuid,
 } from '../../shared/utils/monitoring/monitoringIds';
 import { shouldSkipMonitoring } from '../../shared/utils/monitoring/shouldSkipMonitoring';
-import { MonitoringService } from '../modules/monitoring/monitoring.service';
+import { MonitoringService } from '../modules/monitoring/monitoring.db.modules';
 
 type BackendMonitoringRequest = Request & {
   user?: {

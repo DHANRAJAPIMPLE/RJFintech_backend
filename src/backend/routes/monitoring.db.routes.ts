@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { MonitoringController } from '../modules/monitoring/monitoring.controller';
+import { MonitoringController } from '../modules/monitoring/monitoring.db.modules';
 
 const router = Router();
 
