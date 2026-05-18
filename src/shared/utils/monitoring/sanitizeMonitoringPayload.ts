@@ -49,6 +49,32 @@ const sanitizeRecursive = (value: unknown, seen: WeakSet<object>): unknown => {
     if (normalizedKey === 'cookie') {
       sanitized.cookiePresent =
         nestedValue !== undefined && nestedValue !== null;
+      if (typeof nestedValue === 'string') {
+        const lower = nestedValue.toLowerCase();
+        sanitized.cookieAccessToken = lower.includes('accesstoken=');
+        sanitized.cookieRefreshToken = lower.includes('refreshtoken=');
+        sanitized.cookiesHashVersion = lower.includes('versionhash=');
+      }
+      continue;
+    }
+
+    if (normalizedKey === 'xcookieaccesstoken' || normalizedKey === 'cookieaccesstoken') {
+      sanitized.cookieAccessToken = nestedValue === 'true' || nestedValue === true;
+      continue;
+    }
+
+    if (normalizedKey === 'xcookierefreshtoken' || normalizedKey === 'cookierefreshtoken') {
+      sanitized.cookieRefreshToken = nestedValue === 'true' || nestedValue === true;
+      continue;
+    }
+
+    if (
+      normalizedKey === 'xcookieshashversion' ||
+      normalizedKey === 'cookieshashversion' ||
+      normalizedKey === 'xcookiehashversion' ||
+      normalizedKey === 'cookiehashversion'
+    ) {
+      sanitized.cookiesHashVersion = nestedValue === 'true' || nestedValue === true;
       continue;
     }
 

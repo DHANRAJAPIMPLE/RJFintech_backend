@@ -304,7 +304,7 @@ export class AuthController {
   ) {
     try {
       const userId = req.user?.id;
-
+ 
       if (!userId) {
         throw new AppError('Unauthorized', 401);
       }

@@ -20,7 +20,7 @@ export class AuthDbController {
       if (!userId && !email) {
         return res.status(400).json({ error: 'userId or email is required' });
       }
-
+   
       const whereCondition = userId ? { id: userId } : { email: email };
 
       const user = await prisma.user.findUnique({
@@ -120,7 +120,7 @@ export class AuthDbController {
           companyId: data.companyId,
         },
       });
-
+     
       let activity;
       if (existingActivity) {
         activity = await prisma.userActivity.update({
