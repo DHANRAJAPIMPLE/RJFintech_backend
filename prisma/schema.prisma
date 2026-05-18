@@ -8,22 +8,24 @@ datasource db {
 }
 
 model User {
-  id                String               @id @default(uuid())
-  name              String
-  email             String               @unique
-  password          String
-  phone             String
-  apiSpans          ApiSpan[]            @relation("UserApiSpanRel")
-  createdAt         DateTime             @default(now()) @map("created_at")
-  updatedAt         DateTime             @updatedAt @map("updated_at")
-  companyHistory    CompanyHistory[]     @relation("UserCompanyHistoryRel")
-  orgHistory        OrgHistory[]         @relation("UserOrgHistoryRel")
-  userAccesses      UserAccess[]
-  userActivities    UserActivity[]
-  userHistory       UserHistory[]        @relation("UserHistoryRel")
-  managedUsers      UserMapping[]        @relation("ReportingManager")
-  userMappings      UserMapping[]        @relation("UserMappings")
-  workflowHistories WorkflowReqHistory[] @relation("UserWorkflowHistoryRel")
+  id                   String               @id @default(uuid())
+  name                 String
+  email                String               @unique
+  password             String
+  phone                String
+  apiSpans             ApiSpan[]            @relation("UserApiSpanRel")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+  companyHistory       CompanyHistory[]     @relation("UserCompanyHistoryRel")
+  createdNotifications Notification[]       @relation("NotificationCreatedBy")
+  notificationUsers    NotificationUser[]
+  orgHistory           OrgHistory[]         @relation("UserOrgHistoryRel")
+  userAccesses         UserAccess[]
+  userActivities       UserActivity[]
+  userHistory          UserHistory[]        @relation("UserHistoryRel")
+  managedUsers         UserMapping[]        @relation("ReportingManager")
+  userMappings         UserMapping[]        @relation("UserMappings")
+  workflowHistories    WorkflowReqHistory[] @relation("UserWorkflowHistoryRel")
 
   @@map("user")
 }
@@ -42,6 +44,8 @@ model Company {
   createdAt            DateTime             @default(now()) @map("created_at")
   updatedAt            DateTime             @updatedAt @map("updated_at")
   companyMappings      CompanyMapping[]
+  notificationUsers    NotificationUser[]
+  notifications        Notification[]
   orgHistories         OrgHistory[]         @relation("CompanyOrgHistoryRel")
   orgStructures        OrgStructure[]
   orgStructureReqs     OrgStructureReq[]
@@ -176,6 +180,40 @@ model CompanyOnboarding {
   eligibleApprovers String[]         @default([]) @map("eligible_approvers")
 
   @@map("company_onboarding")
+}
+
+model Notification {
+  id                String             @id @default(uuid())
+  companyId         String             @map("company_id")
+  name              String
+  message           String
+  type              String
+  referenceType     String?            @map("reference_type")
+  referenceId       String?            @map("reference_id")
+  createdBy         String             @map("created_by")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  company           Company            @relation(fields: [companyId], references: [id])
+  createdByUser     User               @relation("NotificationCreatedBy", fields: [createdBy], references: [id])
+  notificationUsers NotificationUser[]
+
+  @@map("notifications")
+}
+
+model NotificationUser {
+  id             String       @id @default(uuid())
+  companyId      String       @map("company_id")
+  userId         String       @map("user_id")
+  notificationId String       @map("notification_id")
+  status         String       @default("UNREAD")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  company        Company      @relation(fields: [companyId], references: [id])
+  notification   Notification @relation(fields: [notificationId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
+
+  @@unique([userId, notificationId])
+  @@map("notification_users")
 }
 
 model OrgStructureReq {

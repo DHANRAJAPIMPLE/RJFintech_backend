@@ -18,7 +18,8 @@ router.use(authMiddleware);
 router.use(adminMiddleware);
 
 // -------------company routes------------------------------
-router.post('/groups', AdminController.getGroupCompanies);
+router.post('/groupactive', AdminController.getActiveGroupCompanies);
+router.post('/grouppending', AdminController.getPendingGroupCompanies);
 router.post('/initiate', AdminController.initiateCompanyOnboarding);
 router.post('/action', AdminController.actionCompanyOnboarding);
 router.post('/fetch-history', AdminController.fetchCompanyHistory);

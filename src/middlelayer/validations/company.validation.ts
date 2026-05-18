@@ -136,6 +136,6 @@ export const companyHistory = z
 
 export const companyCodeOnly = z
   .object({
-    companyCode: z.string().trim().min(1, 'Company code is required'),
+    companyCode: z.string().trim().min(1, 'Company code is required')
   })
   .strict();

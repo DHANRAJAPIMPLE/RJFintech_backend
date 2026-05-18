@@ -161,7 +161,10 @@ export const createApiSpanSafely = async (
   }
 };
 
-export const findMiddlelayerMonitoringRows = async (limit: number) => {
+export const findMiddlelayerMonitoringRows = async (
+  limit: number,
+  offset: number,
+) => {
   return prisma.apiSpan.findMany({
     where: {
       type: 'MIDDLELAYER',
@@ -170,6 +173,7 @@ export const findMiddlelayerMonitoringRows = async (limit: number) => {
     orderBy: {
       createdAt: 'desc',
     },
+    skip: offset,
     take: limit,
   });
 };
@@ -313,8 +317,8 @@ export class MonitoringService {
     });
   }
 
-  static async fetchAllMiddlelayerSpans(limit: number) {
-    const parents = await findMiddlelayerMonitoringRows(limit);
+  static async fetchAllMiddlelayerSpans(limit: number, offset: number) {
+    const parents = await findMiddlelayerMonitoringRows(limit, offset);
     const trackingIds = parents.map((parent) => parent.trackingId);
     const counts = await countBackendRowsByTrackingIds(trackingIds);
     const countByTrackingId = new Map(
@@ -365,6 +369,16 @@ const getOptionalLimit = (value: unknown): number => {
   return Math.min(Math.max(Math.trunc(parsed), 1), 500);
 };
 
+const getOptionalOffset = (value: unknown): number => {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+
+  return Math.max(Math.trunc(parsed), 0);
+};
+
 const getTrackingId = (req: Request): string | null => {
   const value =
     req.body?.trackingId ||
@@ -401,6 +415,7 @@ export class MonitoringController {
     try {
       const spans = await MonitoringService.fetchAllMiddlelayerSpans(
         getOptionalLimit(req.body?.limit ?? req.query?.limit),
+        getOptionalOffset(req.body?.offset ?? req.query?.offset),
       );
       return res.status(200).json(spans);
     } catch (error) {

@@ -12,6 +12,7 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
+import { getPagination } from '../../shared/utils/pagination.util';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
@@ -22,29 +23,95 @@ import {
   userStatusUpdateSchema,
   userHistory,
   userCompanyNodesSchema,
-  userFetchByNodePathCountSchema
+  userFetchByNodePathCountSchema,
 } from '../validations/user.validation';
 
 export class UserController {
-  static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { companyCode } = zodParse(companyCodeOnly, req.body);
-
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/user/fetch-all`,
-        { companyCode, userId: (req as any).user?.id },
+  private static async fetchAndProcessUsers(
+    req: Request,
+    listType?: 'active' | 'pending',
+  ) {
+    const { companyCode } = zodParse(companyCodeOnly, req.body);
+    const { offset, limit } = getPagination(req.body);
+    const { data, ok, status } = await internalPost<any>(
+      `${config.backendUrl}/internal/user/fetch-all`,
+      { companyCode, userId: (req as any).user?.id, listType, offset, limit },
+    );
+    if (!ok) {
+      throw new AppError(
+        data?.message || data?.error || 'Failed to fetch users',
+        status,
       );
+    }
+    // Expected from backend: { data: { activeUsers: [], pendingUsers: [], inactiveUsers: [] } }
+    const {
+      activeUsers = [],
+      inactiveUsers = [],
+      pendingUsers = [],
+    } = data?.data || data || {};
+    return {
+      activeUsers,
+      pendingUsers,
+      inactiveUsers,
+      activeCount: data?.activeCount ?? activeUsers.length,
+      inactiveCount: data?.inactiveCount ?? inactiveUsers.length,
+      pendingCount: data?.pendingCount ?? pendingUsers.length,
+      limit: data?.limit ?? limit,
+      offset: data?.offset ?? offset,
+    };
+  }
 
-      if (!ok) {
-        throw new AppError(
-          data?.message || data?.error || 'Failed to fetch users',
-          status,
-        );
-      }
+  static async fetchActiveUsers(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const {
+        activeUsers,
+        activeCount,
+        inactiveCount,
+        pendingCount,
+        limit,
+        offset,
+      } = await UserController.fetchAndProcessUsers(req, 'active');
 
-      // The backend already returns the data in the requested format:
-      // { message, code, data: { activeUsers, pendingUsers, inactiveUsers } }
-      res.status(200).json(data);
+      res.status(200).json({
+        data: activeUsers,
+        activeCount,
+        inactiveCount,
+        pendingCount,
+        limit,
+        offset,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async fetchPendingUsers(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const {
+        pendingUsers,
+        activeCount,
+        inactiveCount,
+        pendingCount,
+        limit,
+        offset,
+      } = await UserController.fetchAndProcessUsers(req, 'pending');
+
+      res.status(200).json({
+        data: pendingUsers,
+        activeCount,
+        inactiveCount,
+        pendingCount,
+        limit,
+        offset,
+      });
     } catch (error) {
       next(error);
     }
@@ -175,10 +242,11 @@ export class UserController {
         const resolveId = req.body.companyId || (req as any).user?.companyId;
 
         if (resolveId) {
-          const { data: initiatorCompany, ok: initOk } = await internalPost<any>(
-            `${config.backendUrl}/internal/company/get-by-id`,
-            { id: resolveId },
-          );
+          const { data: initiatorCompany, ok: initOk } =
+            await internalPost<any>(
+              `${config.backendUrl}/internal/company/get-by-id`,
+              { id: resolveId },
+            );
           if (initOk && initiatorCompany) {
             companyCode = initiatorCompany.companyCode;
             const compMapping = initiatorCompany.companyMappings?.[0];
@@ -244,8 +312,6 @@ export class UserController {
       next(error);
     }
   }
-
-
 
   static async actionUserOnboarding(
     req: Request & { user?: { id: string } },

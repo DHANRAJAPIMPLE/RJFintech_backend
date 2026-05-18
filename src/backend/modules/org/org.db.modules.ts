@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma, ltree } from '../../lib/prisma';
 import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
+import { NotificationService } from '../notifications/notification.db.modules';
 
 /**
  * Controller for managing the organizational hierarchy (nodes) for companies.
@@ -76,6 +77,9 @@ export class OrgStructureDbController {
       if (!id || !status) {
         throw new Error('id and status are required');
       }
+      let notificationCompanyId = '';
+      let notificationRecipients: string[] = [];
+      let notificationSubject = 'Organization request';
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
@@ -104,6 +108,10 @@ export class OrgStructureDbController {
         });
 
         if (!request) throw new Error('Request not found');
+        notificationCompanyId = request.companyId;
+        notificationRecipients = request.eligibleApprovers || [];
+        notificationSubject =
+          (request.data as any)?.newNodeName || notificationSubject;
 
         // --- Prevent Self-Approval ---
         // Block the initiator from approving their own request.
@@ -115,9 +123,17 @@ export class OrgStructureDbController {
         }
 
         // --- Prevent Double Approval ---
-        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'org_structure_req', approverId);
+        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(
+          tx,
+          id,
+          'org_structure_req',
+          approverId,
+        );
         if (alreadyApproved) {
-          throw new AppError('You have already approved this request once', 403);
+          throw new AppError(
+            'You have already approved this request once',
+            403,
+          );
         }
 
         // Fallback: Verify with legacy eligibleApprovers if no WorkflowApprover rows
@@ -181,6 +197,9 @@ export class OrgStructureDbController {
             );
             if (nextLevel) {
               allLevelsApproved = false;
+              notificationRecipients = Array.isArray(nextLevel.approversList)
+                ? (nextLevel.approversList as string[])
+                : notificationRecipients;
             }
           }
 
@@ -198,7 +217,11 @@ export class OrgStructureDbController {
 
           // If NOT all levels approved, return early (partial approval)
           if (!allLevelsApproved) {
-            return { id: request.id, status: 'PARTIAL_APPROVED', level: approvedLevel };
+            return {
+              id: request.id,
+              status: 'PARTIAL_APPROVED',
+              level: approvedLevel,
+            };
           }
 
           // ── All levels approved — proceed with node creation ─────────────
@@ -230,11 +253,13 @@ export class OrgStructureDbController {
 
             const parentNodeIds = parentNodes.map((n) => n.id);
             const directParentPath = ltree.getParent(newNodePath);
-            const directParentId = parentNodes.find(n => n.nodePath === directParentPath)?.id;
+            const directParentId = parentNodes.find(
+              (n) => n.nodePath === directParentPath,
+            )?.id;
 
             if (parentNodeIds.length > 0) {
-              // Fetch only propagating access: 
-              // - ALL_CHILD from any ancestor 
+              // Fetch only propagating access:
+              // - ALL_CHILD from any ancestor
               // - IMMEDIATE_CHILD only from the direct parent
               const parentAccesses = await tx.userAccess.findMany({
                 where: {
@@ -243,7 +268,12 @@ export class OrgStructureDbController {
                   isGlobalAccess: false,
                   OR: [
                     { accessCategory: 'ALL_CHILD' },
-                    directParentId ? { nodeId: directParentId, accessCategory: 'IMMEDIATE_CHILD' } : undefined
+                    directParentId
+                      ? {
+                          nodeId: directParentId,
+                          accessCategory: 'IMMEDIATE_CHILD',
+                        }
+                      : undefined,
                   ].filter(Boolean) as any,
                 },
               });
@@ -254,8 +284,11 @@ export class OrgStructureDbController {
                 const uniqueKey = `${access.userId}_${access.roleCode}`;
                 if (!newAccessesMap.has(uniqueKey)) {
                   // Rule: IMMEDIATE_CHILD on parent becomes NODE on child
-                  const newCategory = access.accessCategory === 'IMMEDIATE_CHILD' ? 'NODE' : access.accessCategory;
-                  
+                  const newCategory =
+                    access.accessCategory === 'IMMEDIATE_CHILD'
+                      ? 'NODE'
+                      : access.accessCategory;
+
                   newAccessesMap.set(uniqueKey, {
                     userId: access.userId,
                     roleCode: access.roleCode,
@@ -302,6 +335,24 @@ export class OrgStructureDbController {
         message = 'Org structure request rejected';
       }
 
+      if (notificationCompanyId) {
+        await NotificationService.createRequestNotification({
+          companyId: notificationCompanyId,
+          name:
+            result?.status === 'REJECTED'
+              ? 'Organization request rejected'
+              : 'Organization request approved',
+          message: `${notificationSubject} request ${
+            result?.status === 'REJECTED' ? 'was rejected' : 'was approved'
+          }`,
+          type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
+          referenceType: 'ORG',
+          referenceId: id,
+          createdBy: approverId,
+          recipientUserIds: notificationRecipients,
+        });
+      }
+
       res.status(200).json({
         success: true,
         message,
@@ -341,12 +392,22 @@ export class OrgStructureDbController {
       }
 
       // Fetch all global access users for this company to ensure they are in the master eligible list
-      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'ORG_STR');
+      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
+        prisma as any,
+        resolvedCompanyId,
+        'ORG_STR',
+      );
 
       // Master eligible list includes both configured and global approvers.
       // Initiator is excluded from all active approval lists.
-      const masterEligible = new Set([...(rest.eligibleApprovers || []), ...globalUsers]);
-      rest.eligibleApprovers = Array.from(masterEligible).filter((id) => id !== initiatorId);
+      const masterEligible = new Set([
+        ...(rest.eligibleApprovers || []),
+        ...globalUsers,
+      ]);
+      rest.eligibleApprovers = Array.from(masterEligible).filter(
+        (id) => id !== initiatorId,
+      );
+      let notificationRecipients = rest.eligibleApprovers;
 
       const request = await prisma.$transaction(async (tx) => {
         const reqRecord = await tx.orgStructureReq.create({
@@ -382,17 +443,20 @@ export class OrgStructureDbController {
         }
 
         if (nodeId && initiatorId) {
-          const { workflowId: resolvedWorkflowId } =
-            await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-              levelsHash: levelsHash || null,
-              module: 'SYSTEM_ACCESS',
-              subModule: 'ORG_STR',
-              companyId: resolvedCompanyId,
-              nodeId,
-              initiatorId,
-              reqId: reqRecord.id,
-              reqTable: 'org_structure_req',
-            });
+          const {
+            workflowId: resolvedWorkflowId,
+            eligibleApprovers: resolvedApprovers,
+          } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+            levelsHash: levelsHash || null,
+            module: 'SYSTEM_ACCESS',
+            subModule: 'ORG_STR',
+            companyId: resolvedCompanyId,
+            nodeId,
+            initiatorId,
+            reqId: reqRecord.id,
+            reqTable: 'org_structure_req',
+          });
+          notificationRecipients = resolvedApprovers;
 
           // Store the resolved workflowId in the request record
           await tx.orgStructureReq.update({
@@ -410,6 +474,16 @@ export class OrgStructureDbController {
           },
         });
         return reqRecord;
+      });
+      await NotificationService.createRequestNotification({
+        companyId: resolvedCompanyId,
+        name: 'Organization request initiated',
+        message: `${rest.data?.newNodeName || 'Organization'} request is pending approval`,
+        type: 'INITIATE',
+        referenceType: 'ORG',
+        referenceId: request.id,
+        createdBy: initiatorId,
+        recipientUserIds: notificationRecipients,
       });
       res.status(201).json(request);
     } catch (error) {
@@ -520,7 +594,10 @@ export class OrgStructureDbController {
         let isRootSearch = false;
 
         if (nodeName && nodePath) {
-          const safeName = nodeName.trim().replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase();
+          const safeName = nodeName
+            .trim()
+            .replace(/[^a-zA-Z0-9_]/g, '_')
+            .toUpperCase();
           if (nodePath.endsWith(safeName)) {
             const parts = nodePath.split('.');
             if (parts.length > 1) {
@@ -553,14 +630,14 @@ export class OrgStructureDbController {
                       equals: 'ROOT',
                     },
                   }
-                : (parentPathForFilter
+                : parentPathForFilter
                   ? {
                       data: {
                         path: ['parentNode', 'nodePath'],
                         equals: parentPathForFilter,
                       },
                     }
-                  : {}),
+                  : {},
             ].filter((obj) => Object.keys(obj).length > 0) as any,
           },
           select: { id: true },
@@ -569,7 +646,6 @@ export class OrgStructureDbController {
         const reqIds = matchingReqs.map((r) => r.id);
         whereCondition.orgReqId = { in: reqIds };
       }
-
 
       let histories = await prisma.orgHistory.findMany({
         where: whereCondition,
@@ -590,13 +666,16 @@ export class OrgStructureDbController {
       // Filter out rejected org structure requests
       const rejectedReqIds = new Set<string>();
       histories.forEach((h) => {
-        if (h.orgReqId && (h.event === 'REJECTED' || h.orgReq?.status === 'REJECTED')) {
+        if (
+          h.orgReqId &&
+          (h.event === 'REJECTED' || h.orgReq?.status === 'REJECTED')
+        ) {
           rejectedReqIds.add(h.orgReqId);
         }
       });
 
       histories = histories.filter(
-        (h) => !h.orgReqId || !rejectedReqIds.has(h.orgReqId)
+        (h) => !h.orgReqId || !rejectedReqIds.has(h.orgReqId),
       );
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
@@ -645,13 +724,14 @@ export class OrgStructureDbController {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
             : [];
-          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
-            resolvedCompanyId,
-            storedList,
-            initiatorId,
-            'ORG_STR',
-            approvedUserIds,
-          );
+          level.approversList =
+            await WorkflowApproverUtil.getEnrichedApproverIds(
+              resolvedCompanyId,
+              storedList,
+              initiatorId,
+              'ORG_STR',
+              approvedUserIds,
+            );
         }
       }
 
@@ -782,9 +862,9 @@ export class OrgStructureDbController {
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
-              name: h.user?.name || 'System',
-              email: h.user?.email || 'system@internal',
-            },
+                name: h.user?.name || 'System',
+                email: h.user?.email || 'system@internal',
+              },
           newNodeName: data?.newNodeName || null,
           nodeType: data?._nodeType || data?.nodeType || null,
           parentNodePath: data?.parentNode?.nodePath || 'ROOT',
@@ -815,12 +895,10 @@ export class OrgStructureDbController {
 
       if (!resolvedCompanyId) {
         if (!companyCode) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: 'companyCode or companyId is required',
-            });
+          return res.status(400).json({
+            success: false,
+            message: 'companyCode or companyId is required',
+          });
         }
         const company = await prisma.company.findUnique({
           where: { companyCode: companyCode },
@@ -855,17 +933,19 @@ export class OrgStructureDbController {
       });
 
       // 3. Resolve workflow names and aliases for pending requests
-      const workflowIds = Array.from(new Set(pendingRequests.map(req => req.workflowId).filter(Boolean))) as string[];
+      const workflowIds = Array.from(
+        new Set(pendingRequests.map((req) => req.workflowId).filter(Boolean)),
+      ) as string[];
       const workflowDetails = await prisma.workflow.findMany({
         where: { id: { in: workflowIds } },
-        select: { id: true, name: true, alias: true }
+        select: { id: true, name: true, alias: true },
       });
-      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
+      const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
 
       const pendingWithDetails = pendingRequests.map((req) => {
         const w = req.workflowId ? workflowMap.get(req.workflowId) : null;
         const initiator = req.orgHistories[0]?.user || { name: '', email: '' };
-        
+
         const { orgHistories, ...rest } = req;
         return {
           ...rest,

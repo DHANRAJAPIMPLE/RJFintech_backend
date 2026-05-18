@@ -2,7 +2,9 @@ import type { Request, Response, NextFunction } from 'express';
 import { createHash } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../../shared/middlewares/error.middleware';
+import { getPagination } from '../../../shared/utils/pagination.util';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
+import { NotificationService } from '../notifications/notification.db.modules';
 
 /**
  * Controller for handling workflow-related database operations.
@@ -120,12 +122,22 @@ export class WorkflowDbController {
       }
 
       // Fetch all global access users for this company to ensure they are in the master eligible list
-      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'WORK_FLOW');
+      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
+        prisma as any,
+        resolvedCompanyId,
+        'WORK_FLOW',
+      );
 
       // Master eligible list includes both configured and global approvers.
       // Initiator is excluded from all active approval lists.
-      const masterEligible = new Set([...(eligibleApprovers || []), ...globalUsers]);
-      const filteredApprovers = Array.from(masterEligible).filter((id) => id !== initiatorId);
+      const masterEligible = new Set([
+        ...(eligibleApprovers || []),
+        ...globalUsers,
+      ]);
+      const filteredApprovers = Array.from(masterEligible).filter(
+        (id) => id !== initiatorId,
+      );
+      let notificationRecipients = filteredApprovers;
 
       // ── Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels} ───────
       let totalApprovers = 0;
@@ -163,17 +175,20 @@ export class WorkflowDbController {
 
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         if (initiatorId) {
-          const { workflowId: resolvedWorkflowId } =
-            await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-              levelsHash: parentLevelsHash || null,
-              module: 'SYSTEM_ACCESS',
-              subModule: 'WORK_FLOW',
-              companyId: resolvedCompanyId,
-              nodeId,
-              initiatorId,
-              reqId: request.id,
-              reqTable: 'workflow_req',
-            });
+          const {
+            workflowId: resolvedWorkflowId,
+            eligibleApprovers: resolvedApprovers,
+          } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+            levelsHash: parentLevelsHash || null,
+            module: 'SYSTEM_ACCESS',
+            subModule: 'WORK_FLOW',
+            companyId: resolvedCompanyId,
+            nodeId,
+            initiatorId,
+            reqId: request.id,
+            reqTable: 'workflow_req',
+          });
+          notificationRecipients = resolvedApprovers;
 
           // Store the resolved workflowId in the request record
           await tx.workflowReq.update({
@@ -193,6 +208,17 @@ export class WorkflowDbController {
         });
 
         return request;
+      });
+
+      await NotificationService.createRequestNotification({
+        companyId: resolvedCompanyId,
+        name: 'Workflow initiated',
+        message: `${data?.name || 'Workflow'} request is pending approval`,
+        type: 'INITIATE',
+        referenceType: 'WORKFLOW',
+        referenceId: result.id,
+        createdBy: initiatorId,
+        recipientUserIds: notificationRecipients,
       });
 
       res.status(201).json(result);
@@ -253,6 +279,7 @@ export class WorkflowDbController {
 
       const result = await prisma.$transaction(async (tx) => {
         const statusStr = status.toString().toLowerCase();
+        let notificationRecipients = request.eligibleApprovers || [];
 
         // --- Prevent Self-Approval ---
         // Block the initiator from approving their own request.
@@ -264,9 +291,17 @@ export class WorkflowDbController {
         }
 
         // --- Prevent Double Approval ---
-        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'workflow_req', approverId);
+        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(
+          tx,
+          id,
+          'workflow_req',
+          approverId,
+        );
         if (alreadyApproved) {
-          throw new AppError('You have already approved this request once', 403);
+          throw new AppError(
+            'You have already approved this request once',
+            403,
+          );
         }
         // --- REJECT FLOW ---
         // Marks the request as REJECTED, rejects all levels, and logs the history.
@@ -293,7 +328,7 @@ export class WorkflowDbController {
             },
           });
 
-          return { ...updated, status: 'REJECTED' };
+          return { ...updated, status: 'REJECTED', notificationRecipients };
         }
 
         // --- APPROVE FLOW ---
@@ -313,6 +348,9 @@ export class WorkflowDbController {
             );
             if (nextLevel) {
               allLevelsApproved = false;
+              notificationRecipients = Array.isArray(nextLevel.approversList)
+                ? (nextLevel.approversList as string[])
+                : notificationRecipients;
             }
           }
 
@@ -334,6 +372,7 @@ export class WorkflowDbController {
               id: request.id,
               status: 'PARTIAL_APPROVED',
               level: approvedLevel,
+              notificationRecipients,
             };
           }
 
@@ -460,7 +499,7 @@ export class WorkflowDbController {
             },
           });
 
-          return { ...updated, status: 'APPROVED' };
+          return { ...updated, status: 'APPROVED', notificationRecipients };
         }
 
         throw new Error('Invalid status');
@@ -475,9 +514,26 @@ export class WorkflowDbController {
         message = 'Workflow request rejected successfully';
       }
 
+      const { notificationRecipients = [], ...responseData } = result as any;
+      await NotificationService.createRequestNotification({
+        companyId: request.companyId,
+        name:
+          result?.status === 'REJECTED'
+            ? 'Workflow rejected'
+            : 'Workflow approved',
+        message: `${(request.data as any)?.name || 'Workflow'} request ${
+          result?.status === 'REJECTED' ? 'was rejected' : 'was approved'
+        }`,
+        type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
+        referenceType: 'WORKFLOW',
+        referenceId: request.id,
+        createdBy: approverId,
+        recipientUserIds: notificationRecipients,
+      });
+
       res.status(200).json({
         message,
-        data: result,
+        data: responseData,
       });
     } catch (error) {
       next(error);
@@ -496,7 +552,15 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, levelsHash, module, subModule, nodePath, userId } = req.body;
+      const {
+        companyCode,
+        companyId,
+        levelsHash,
+        module,
+        subModule,
+        nodePath,
+        userId,
+      } = req.body;
       let whereCondition: any = {};
 
       let resolvedCompanyId = companyId;
@@ -587,13 +651,16 @@ export class WorkflowDbController {
       // Filter out rejected workflows
       const rejectedReqIds = new Set<string>();
       histories.forEach((h) => {
-        if (h.workflowReqId && (h.event === 'REJECTED' || h.workflowReq?.status === 'REJECTED')) {
+        if (
+          h.workflowReqId &&
+          (h.event === 'REJECTED' || h.workflowReq?.status === 'REJECTED')
+        ) {
           rejectedReqIds.add(h.workflowReqId);
         }
       });
 
       histories = histories.filter(
-        (h) => !h.workflowReqId || !rejectedReqIds.has(h.workflowReqId)
+        (h) => !h.workflowReqId || !rejectedReqIds.has(h.workflowReqId),
       );
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
@@ -647,13 +714,14 @@ export class WorkflowDbController {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
             : [];
-          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
-            resolvedCompanyId,
-            storedList,
-            initiatorId,
-            subModule,
-            approvedUserIds,
-          );
+          level.approversList =
+            await WorkflowApproverUtil.getEnrichedApproverIds(
+              resolvedCompanyId,
+              storedList,
+              initiatorId,
+              subModule,
+              approvedUserIds,
+            );
         }
       }
 
@@ -726,7 +794,6 @@ export class WorkflowDbController {
 
       // 4. Format the output for the UI
       const formattedHistories = histories.map((h) => {
-
         const companyId = h.company.id;
         const initiatorAccesses =
           h.user?.userAccesses?.filter((a) => a.companyId === companyId) || [];
@@ -789,9 +856,9 @@ export class WorkflowDbController {
           user: isTeams
             ? { name: 'Teams', email: 'Teams' }
             : {
-              name: h.user?.name || 'System',
-              email: h.user?.email || 'system@internal',
-            },
+                name: h.user?.name || 'System',
+                email: h.user?.email || 'system@internal',
+              },
         };
       });
 
@@ -814,7 +881,8 @@ export class WorkflowDbController {
    */
   static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode, companyId, userId } = req.body;
+      const { companyCode, companyId, userId, listType } = req.body;
+      const { offset, limit } = getPagination(req.body);
 
       let resolvedCompanyId = companyId;
 
@@ -848,97 +916,119 @@ export class WorkflowDbController {
             select: { nodeId: true },
           });
           userNodeIds = accesses.map((a) => a.nodeId);
-          }
+        }
       }
 
-      // Active production workflows
-      const activeWorkflows = await prisma.workflow.findMany({
-        where: {
-          companyId: resolvedCompanyId,
-          ...(isGlobal
-            ? {}
-            : {
-                OR: [
-                  { nodeId: { in: userNodeIds } },
-                  { name: { contains: 'DEFAULT' } },
-                ],
-              }),
-        },
-        select: {
-          name: true,
-          alias: true,
-          module: true,
-          subModule: true,
-          orgStructure: {
-            select: {
-              nodePath: true,
-              nodeName: true,
-              nodeType: true,
-            },
-          },
-          levelsHash: true,
-          levels: {
-            select: {
-              level: true,
-              approver1: true,
-              approver2: true,
-              approverType: true,
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+      const activeWhere = {
+        companyId: resolvedCompanyId,
+        ...(isGlobal
+          ? {}
+          : {
+              OR: [
+                { nodeId: { in: userNodeIds } },
+                { name: { contains: 'DEFAULT' } },
+              ],
+            }),
+      };
+      const pendingWhere = {
+        companyId: resolvedCompanyId,
+        status: 'PENDING' as const,
+        ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
+      };
 
-      // Pending onboarding requests
-      const pendingRequestsRaw = await prisma.workflowReq.findMany({
-        where: {
-          companyId: resolvedCompanyId,
-          status: 'PENDING',
-          ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
-        },
-        select: {
-          id: true,
-          nodeId: true,
-          workflowId: true,
-          data: true,
-          status: true,
-          alias: true,
-          approvalRemark: true,
-          levelsHash: true,
-          createdAt: true,
-          workflowHistories: {
-            where: { event: 'INITIATE' },
-            select: {
-              createdAt: true,
-              user: {
-                select: {
-                  name: true,
-                  email: true,
+      const [activeCount, pendingCount] = await prisma.$transaction([
+        prisma.workflow.count({ where: activeWhere }),
+        prisma.workflowReq.count({ where: pendingWhere }),
+      ]);
+
+      // Active production workflows
+      const activeWorkflows =
+        listType === 'pending'
+          ? []
+          : await prisma.workflow.findMany({
+              where: activeWhere,
+              select: {
+                name: true,
+                alias: true,
+                module: true,
+                subModule: true,
+                orgStructure: {
+                  select: {
+                    nodePath: true,
+                    nodeName: true,
+                    nodeType: true,
+                  },
+                },
+                levelsHash: true,
+                levels: {
+                  select: {
+                    level: true,
+                    approver1: true,
+                    approver2: true,
+                    approverType: true,
+                  },
                 },
               },
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+              orderBy: { createdAt: 'desc' },
+              ...(listType === 'active' ? { skip: offset, take: limit } : {}),
+            });
+
+      // Pending onboarding requests
+      const pendingRequestsRaw =
+        listType === 'active'
+          ? []
+          : await prisma.workflowReq.findMany({
+              where: pendingWhere,
+              select: {
+                id: true,
+                nodeId: true,
+                workflowId: true,
+                data: true,
+                status: true,
+                alias: true,
+                approvalRemark: true,
+                levelsHash: true,
+                createdAt: true,
+                workflowHistories: {
+                  where: { event: 'INITIATE' },
+                  select: {
+                    createdAt: true,
+                    user: {
+                      select: {
+                        name: true,
+                        email: true,
+                      },
+                    },
+                  },
+                },
+              },
+              orderBy: { createdAt: 'desc' },
+              ...(listType === 'pending' ? { skip: offset, take: limit } : {}),
+            });
 
       // 1. Resolve all unique workflow IDs and node IDs from pending requests
-      const workflowIds = Array.from(new Set(pendingRequestsRaw.map(req => req.workflowId).filter(Boolean))) as string[];
-      const nodeIds = Array.from(new Set(pendingRequestsRaw.map(req => req.nodeId))) as string[];
+      const workflowIds = Array.from(
+        new Set(
+          pendingRequestsRaw.map((req) => req.workflowId).filter(Boolean),
+        ),
+      ) as string[];
+      const nodeIds = Array.from(
+        new Set(pendingRequestsRaw.map((req) => req.nodeId)),
+      ) as string[];
 
       const [workflowDetails, nodeDetails] = await Promise.all([
         prisma.workflow.findMany({
           where: { id: { in: workflowIds } },
-          select: { id: true, name: true, alias: true }
+          select: { id: true, name: true, alias: true },
         }),
         prisma.orgStructure.findMany({
           where: { id: { in: nodeIds } },
-          select: { id: true, nodeType: true }
-        })
+          select: { id: true, nodeType: true },
+        }),
       ]);
 
-      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
-      const nodeMap = new Map(nodeDetails.map(n => [n.id, n]));
+      const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
+      const nodeMap = new Map(nodeDetails.map((n) => [n.id, n]));
 
       // 2. Flatten initiator, node info, and workflow info for frontend
       const pendingRequests = pendingRequestsRaw.map((req) => {
@@ -976,6 +1066,11 @@ export class WorkflowDbController {
       res.status(200).json({
         active: activeWorkflows,
         pending: pendingRequests,
+        activeCount,
+        inactiveCount: 0,
+        pendingCount,
+        limit,
+        offset,
       });
     } catch (error) {
       next(error);

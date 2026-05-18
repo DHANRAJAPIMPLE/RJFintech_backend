@@ -2,12 +2,392 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
 import { AppError } from '../../middlewares/error.middleware';
+import { getPagination } from '../../../shared/utils/pagination.util';
 
 /**
  * Controller for managing company records, group associations, and the company onboarding lifecycle.
  * Handles the transition from a pending company request to a live production environment.
  */
 export class CompanyDbController {
+  private static getPendingGroupKey(onboarding: {
+    id: string;
+    groupCode?: string | null;
+    companyCode?: string | null;
+  }) {
+    return (
+      onboarding.groupCode ||
+      `SOLO_PENDING_${onboarding.companyCode || onboarding.id}`
+    );
+  }
+
+  private static mapSignatories(userAccesses: any[], companyId: string) {
+    return userAccesses.map((ua: any) => {
+      const mapping = ua.user.userMappings.find(
+        (m: any) => m.companyId === companyId,
+      );
+      return {
+        name: ua.user.name,
+        email: ua.user.email,
+        phone: ua.user.phone,
+        designation: mapping?.designation || null,
+        employeeId: mapping?.employeeId || null,
+      };
+    });
+  }
+
+  private static formatCompanyDetails(company: any) {
+    return {
+      companyCode: company.companyCode,
+      name: company.legalName,
+      gst: company.gstNumber,
+      brand: company.brandName,
+      ieCode: company.ieCode || '',
+      registration: company.registrationDate,
+      address: company.address || '',
+      signatories: company.signatories || [],
+    };
+  }
+
+  private static async getGroupCompanyCounts() {
+    const [
+      activeGroupCount,
+      activeSoloCount,
+      inactiveGroupFromActiveCount,
+      inactiveGroupCount,
+      inactiveSoloCount,
+      pendingGroupRows,
+      pendingSoloCount,
+    ] = await Promise.all([
+      prisma.groupCompany.count({
+        where: {
+          status: 'ACTIVE',
+          companyMappings: {
+            some: { company: { status: 'ACTIVE' } },
+          },
+        },
+      }),
+      prisma.company.count({
+        where: {
+          status: 'ACTIVE',
+          companyMappings: { none: {} },
+        },
+      }),
+      prisma.groupCompany.count({
+        where: {
+          status: 'ACTIVE',
+          companyMappings: {
+            some: { company: { status: 'INACTIVE' } },
+          },
+        },
+      }),
+      prisma.groupCompany.count({
+        where: { status: 'INACTIVE' },
+      }),
+      prisma.company.count({
+        where: {
+          status: 'INACTIVE',
+          companyMappings: { none: {} },
+        },
+      }),
+      prisma.companyOnboarding.groupBy({
+        by: ['groupCode'],
+        where: {
+          status: 'PENDING',
+          groupCode: { not: null },
+        },
+      }),
+      prisma.companyOnboarding.count({
+        where: {
+          status: 'PENDING',
+          groupCode: null,
+        },
+      }),
+    ]);
+
+    return {
+      activeCount: activeGroupCount + activeSoloCount,
+      inactiveCount:
+        inactiveGroupFromActiveCount + inactiveGroupCount + inactiveSoloCount,
+      pendingCount: pendingGroupRows.length + pendingSoloCount,
+    };
+  }
+
+  private static async getPaginatedActiveGroups(offset: number, limit: number) {
+    const activeGroupCount = await prisma.groupCompany.count({
+      where: {
+        status: 'ACTIVE',
+        companyMappings: {
+          some: { company: { status: 'ACTIVE' } },
+        },
+      },
+    });
+
+    const groupTake =
+      offset < activeGroupCount
+        ? Math.min(limit, activeGroupCount - offset)
+        : 0;
+    const soloTake = limit - groupTake;
+    const soloOffset = Math.max(0, offset - activeGroupCount);
+
+    const [groups, soloCompanies] = await Promise.all([
+      groupTake > 0
+        ? prisma.groupCompany.findMany({
+            where: {
+              status: 'ACTIVE',
+              companyMappings: {
+                some: { company: { status: 'ACTIVE' } },
+              },
+            },
+            skip: offset,
+            take: groupTake,
+            orderBy: { createdAt: 'desc' },
+            include: {
+              companyMappings: {
+                where: { company: { status: 'ACTIVE' } },
+                include: {
+                  company: {
+                    include: {
+                      userAccesses: {
+                        where: { isGlobalAccess: true },
+                        include: {
+                          user: {
+                            include: {
+                              userMappings: true,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      soloTake > 0
+        ? prisma.company.findMany({
+            where: {
+              status: 'ACTIVE',
+              companyMappings: { none: {} },
+            },
+            skip: soloOffset,
+            take: soloTake,
+            orderBy: { createdAt: 'desc' },
+            include: {
+              userAccesses: {
+                where: { isGlobalAccess: true },
+                include: {
+                  user: {
+                    include: {
+                      userMappings: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const groupRows = groups.map((g: any) => ({
+      groupDetails: {
+        groupCode: g.groupCode,
+        groupName: g.name,
+      },
+      companyDetails: g.companyMappings.map((cm: any) => {
+        const signatories = CompanyDbController.mapSignatories(
+          cm.company.userAccesses,
+          cm.company.id,
+        );
+        return CompanyDbController.formatCompanyDetails({
+          ...cm.company,
+          signatories,
+        });
+      }),
+    }));
+
+    const soloRows = soloCompanies.map((c: any) => {
+      const signatories = CompanyDbController.mapSignatories(
+        c.userAccesses,
+        c.id,
+      );
+      return {
+        groupDetails: null,
+        companyDetails: [
+          CompanyDbController.formatCompanyDetails({ ...c, signatories }),
+        ],
+      };
+    });
+
+    return [...groupRows, ...soloRows];
+  }
+
+  private static async getPaginatedPendingGroups(
+    offset: number,
+    limit: number,
+  ) {
+    const [groupRows, soloRows] = await Promise.all([
+      prisma.companyOnboarding.groupBy({
+        by: ['groupCode'],
+        where: {
+          status: 'PENDING',
+          groupCode: { not: null },
+        },
+        _max: { createdAt: true },
+        orderBy: { _max: { createdAt: 'desc' } },
+      }),
+      prisma.companyOnboarding.findMany({
+        where: {
+          status: 'PENDING',
+          groupCode: null,
+        },
+        select: { id: true, companyCode: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    const pageKeys = [
+      ...groupRows.map((row) => ({
+        groupKey: row.groupCode as string,
+        groupCode: row.groupCode as string,
+        id: null as string | null,
+        sortDate: row._max.createdAt || new Date(0),
+      })),
+      ...soloRows.map((row) => ({
+        groupKey: CompanyDbController.getPendingGroupKey(row),
+        groupCode: null as string | null,
+        id: row.id,
+        sortDate: row.createdAt,
+      })),
+    ]
+      .sort((a, b) => b.sortDate.getTime() - a.sortDate.getTime())
+      .slice(offset, offset + limit);
+
+    if (pageKeys.length === 0) return [];
+
+    const groupCodes = pageKeys
+      .map((key) => key.groupCode)
+      .filter(Boolean) as string[];
+    const soloIds = pageKeys.map((key) => key.id).filter(Boolean) as string[];
+    const orderMap = new Map(
+      pageKeys.map((key, index) => [key.groupKey, index]),
+    );
+
+    const pendingOnboardings = (
+      await prisma.companyOnboarding.findMany({
+        where: {
+          status: 'PENDING',
+          OR: [
+            ...(groupCodes.length > 0
+              ? [{ groupCode: { in: groupCodes } }]
+              : []),
+            ...(soloIds.length > 0 ? [{ id: { in: soloIds } }] : []),
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+    )
+      .map((onb) => ({
+        ...onb,
+        groupKey: CompanyDbController.getPendingGroupKey(onb),
+      }))
+      .sort((a, b) => {
+        const groupDiff =
+          (orderMap.get(a.groupKey) ?? 0) - (orderMap.get(b.groupKey) ?? 0);
+        if (groupDiff !== 0) return groupDiff;
+        return b.createdAt.getTime() - a.createdAt.getTime();
+      });
+
+    const companyCodes = pendingOnboardings
+      .map((onb) => onb.companyCode)
+      .filter(Boolean);
+    const histories =
+      companyCodes.length > 0
+        ? await prisma.companyHistory.findMany({
+            where: {
+              companyCode: { in: companyCodes },
+            },
+            include: {
+              user: { select: { name: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [];
+
+    const historyMap = new Map();
+    histories.forEach((h) => {
+      const key = `${h.companyCode}_${h.event}`;
+      if (!historyMap.has(key)) {
+        historyMap.set(key, {
+          user: h.user,
+          createdAt: h.createdAt,
+        });
+      }
+    });
+
+    const pendingGroups: Record<string, any> = {};
+    pendingOnboardings.forEach((onb: any) => {
+      const onbData = onb.data || {};
+      const group = onbData.group || {};
+      const company = onbData.company || {};
+      const signatories = onbData.signatories || [];
+      const groupKey = onb.groupKey;
+
+      if (!pendingGroups[groupKey]) {
+        pendingGroups[groupKey] = {
+          groupDetails: onb.groupCode
+            ? {
+                groupCode: onb.groupCode,
+                groupName: group.name || 'Pending Group',
+              }
+            : null,
+          companyDetails: [],
+        };
+      }
+
+      const init = historyMap.get(`${onb.companyCode}_INITIATE`);
+      pendingGroups[groupKey].companyDetails.push({
+        companyId: onb.id,
+        companyCode: onb.companyCode,
+        name: company.name || '',
+        gst: company.gst || '',
+        brand: company.brand || '',
+        iecode: company.ieCode || '',
+        registration: company.registeredAt ? company.registeredAt : '',
+        address: company.address || '',
+        initiatorName: init?.user?.name || null,
+        initiatorEmail: init?.user?.email || null,
+        initiatedDate: onb.createdAt,
+        signatories: signatories.map((s: any) => ({
+          name: s.name || '',
+          email: s.email || '',
+          phone: s.phone || '',
+          designation: s.designation || '',
+          employeeId: s.employeeId || '',
+        })),
+      });
+    });
+
+    return Object.values(pendingGroups);
+  }
+
+  private static async getPaginatedGroupCompanies(req: Request, res: Response) {
+    const { listType } = req.body;
+    const { offset, limit } = getPagination(req.body);
+    const counts = await CompanyDbController.getGroupCompanyCounts();
+    const data =
+      listType === 'active'
+        ? await CompanyDbController.getPaginatedActiveGroups(offset, limit)
+        : await CompanyDbController.getPaginatedPendingGroups(offset, limit);
+
+    return res.status(200).json({
+      data,
+      ...counts,
+      limit,
+      offset,
+    });
+  }
+
   /**
    * Fetches all companies that a specific user is mapped to.
    */
@@ -42,6 +422,11 @@ export class CompanyDbController {
     next: NextFunction,
   ) {
     try {
+      if (req.body.listType === 'active' || req.body.listType === 'pending') {
+        await CompanyDbController.getPaginatedGroupCompanies(req, res);
+        return;
+      }
+
       // 1. Fetch groups and their companies (Active)
       const groups = await prisma.groupCompany.findMany({
         include: {
@@ -599,7 +984,7 @@ export class CompanyDbController {
           const existingAccess = await tx.userAccess.findFirst({
             where: {
               userId: user.id,
-              roleCode: "CORP_ADMIN",
+              roleCode: 'CORP_ADMIN',
               companyId: newCompany.id,
               nodeId: rootNode.id,
             },
@@ -615,7 +1000,7 @@ export class CompanyDbController {
           await tx.userAccess.create({
             data: {
               userId: user.id,
-              roleCode: "CORP_ADMIN",
+              roleCode: 'CORP_ADMIN',
               nodeId: rootNode.id,
               accessType: 'PRIMARY',
               companyId: newCompany.id,
