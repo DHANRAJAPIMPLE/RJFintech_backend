@@ -44,11 +44,7 @@ router.post(
   authorize('view', 'USER_ACC'),
   UserController.fetchPendingUsers,
 );
-// router.post(
-//   '/user/update-status',
-//   authorize('modify', 'USER_ACC'),
-//   UserController.updateUserStatus,
-// );
+
 router.post(
   '/user/fetch-history',
   authorize('view', 'USER_ACC'),
@@ -101,14 +97,9 @@ router.post(
   WorkflowController.actionWorkflow,
 );
 router.post(
-  '/workflow/fetch-all-active-workflow',
+  '/workflow/fetch',
   authorize('view', 'WORK_FLOW'),
-  WorkflowController.fetchActiveWorkflows,
-);
-router.post(
-  '/workflow/fetch-all-pending-workflow',
-  authorize('view', 'WORK_FLOW'),
-  WorkflowController.fetchPendingWorkflows,
+  WorkflowController.fetchAllWorkflows,
 );
 router.post(
   '/workflow/fetch-history',

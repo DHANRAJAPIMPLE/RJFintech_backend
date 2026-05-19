@@ -11,6 +11,89 @@ import { NotificationService } from '../notifications/notification.db.modules';
  * Handles production user data and pending user requests.
  */
 export class UserDbController {
+  private static encodeCursor(row?: { id: string; createdAt: Date } | null) {
+    if (!row) return null;
+
+    return Buffer.from(
+      JSON.stringify({
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+      }),
+    ).toString('base64url');
+  }
+
+  private static decodeCursor(value: unknown) {
+    if (typeof value !== 'string' || !value.trim()) return null;
+
+    try {
+      const payload = JSON.parse(
+        Buffer.from(value.trim(), 'base64url').toString('utf8'),
+      );
+      const createdAt = new Date(payload.createdAt);
+      if (
+        typeof payload.id !== 'string' ||
+        !payload.id ||
+        Number.isNaN(createdAt.getTime())
+      ) {
+        throw new Error('Invalid cursor payload');
+      }
+
+      return { id: payload.id, createdAt };
+    } catch {
+      throw new AppError('Invalid pagination cursor', 400);
+    }
+  }
+
+  private static appendCursorWhere(
+    where: any,
+    cursor: { id: string; createdAt: Date } | null,
+    direction: 'older' | 'newer',
+  ) {
+    if (!cursor) return where;
+
+    const createdAtOperator = direction === 'older' ? 'lt' : 'gt';
+    const idOperator = direction === 'older' ? 'lt' : 'gt';
+
+    return {
+      AND: [
+        where,
+        {
+          OR: [
+            { createdAt: { [createdAtOperator]: cursor.createdAt } },
+            {
+              createdAt: cursor.createdAt,
+              id: { [idOperator]: cursor.id },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  private static buildPageInfo(
+    rows: Array<{ id: string; createdAt: Date }>,
+    limit: number,
+    requestedTopCursor: string | null,
+    newCount: number,
+  ) {
+    const pageRows = rows.length > limit ? rows.slice(0, limit) : rows;
+    const firstRow = pageRows[0] || null;
+    const lastRow = pageRows[pageRows.length - 1] || null;
+
+    return {
+      pageRows,
+      pageInfo: {
+        nextCursor:
+          rows.length > limit ? UserDbController.encodeCursor(lastRow) : null,
+        topCursor:
+          requestedTopCursor || UserDbController.encodeCursor(firstRow),
+        hasNext: rows.length > limit,
+        hasNewData: newCount > 0,
+        newCount,
+      },
+    };
+  }
+
   private static formatProductionUser(u: any) {
     const mapping = u.userMappings[0];
 
@@ -57,6 +140,9 @@ export class UserDbController {
     offset: number;
     limit: number;
     applyPagination: boolean;
+    cursor?: { id: string; createdAt: Date } | null;
+    topCursor?: { id: string; createdAt: Date } | null;
+    requestedTopCursor?: string | null;
   }) {
     const {
       resolvedCompanyId,
@@ -65,6 +151,9 @@ export class UserDbController {
       offset,
       limit,
       applyPagination,
+      cursor = null,
+      topCursor = null,
+      requestedTopCursor = null,
     } = params;
 
     if (isGlobal) {
@@ -72,20 +161,55 @@ export class UserDbController {
         status: 'PENDING' as const,
         companyId: resolvedCompanyId,
       };
-      const [pendingCount, pendingOnboardings] = await prisma.$transaction([
+      const pageWhere =
+        applyPagination && cursor
+          ? UserDbController.appendCursorWhere(where, cursor, 'older')
+          : where;
+      const newWhere =
+        applyPagination && topCursor
+          ? UserDbController.appendCursorWhere(where, topCursor, 'newer')
+          : null;
+
+      const [pendingCount, pendingOnboardings, newCount] = await Promise.all([
         prisma.userOnboarding.count({ where }),
         prisma.userOnboarding.findMany({
-          where,
-          orderBy: { createdAt: 'desc' },
-          ...(applyPagination ? { skip: offset, take: limit } : {}),
+          where: pageWhere,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          ...(applyPagination
+            ? { skip: cursor ? 0 : offset, take: limit + 1 }
+            : {}),
         }),
+        newWhere
+          ? prisma.userOnboarding.count({ where: newWhere })
+          : Promise.resolve(0),
       ]);
 
-      return { pendingCount, pendingOnboardings };
+      if (!applyPagination) {
+        return { pendingCount, pendingOnboardings };
+      }
+
+      const { pageRows, pageInfo } = UserDbController.buildPageInfo(
+        pendingOnboardings,
+        limit,
+        requestedTopCursor,
+        newCount,
+      );
+
+      return { pendingCount, pendingOnboardings: pageRows, pageInfo };
     }
 
     if (visibleNodePaths.length === 0) {
-      return { pendingCount: 0, pendingOnboardings: [] };
+      return {
+        pendingCount: 0,
+        pendingOnboardings: [],
+        pageInfo: {
+          nextCursor: null,
+          topCursor: requestedTopCursor,
+          hasNext: false,
+          hasNewData: false,
+          newCount: 0,
+        },
+      };
     }
 
     const visiblePermissionFilters = visibleNodePaths.map((nodePath) => ({
@@ -116,18 +240,47 @@ export class UserDbController {
       ],
     };
 
-    const [pendingCount, pendingOnboardings] = await prisma.$transaction([
+    const pageWhere =
+      applyPagination && cursor
+        ? UserDbController.appendCursorWhere(where, cursor, 'older')
+        : where;
+    const newWhere =
+      applyPagination && topCursor
+        ? UserDbController.appendCursorWhere(where, topCursor, 'newer')
+        : null;
+
+    const [pendingCount, pendingOnboardings, newCount] = await Promise.all([
       prisma.userOnboarding.count({ where }),
       prisma.userOnboarding.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        ...(applyPagination ? { skip: offset, take: limit } : {}),
+        where: pageWhere,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        ...(applyPagination
+          ? { skip: cursor ? 0 : offset, take: limit + 1 }
+          : {}),
       }),
+      newWhere
+        ? prisma.userOnboarding.count({ where: newWhere })
+        : Promise.resolve(0),
     ]);
+
+    if (!applyPagination) {
+      return {
+        pendingCount,
+        pendingOnboardings,
+      };
+    }
+
+    const { pageRows, pageInfo } = UserDbController.buildPageInfo(
+      pendingOnboardings,
+      limit,
+      requestedTopCursor,
+      newCount,
+    );
 
     return {
       pendingCount,
-      pendingOnboardings,
+      pendingOnboardings: pageRows,
+      pageInfo,
     };
   }
 
@@ -262,6 +415,11 @@ export class UserDbController {
     try {
       const { companyCode, companyId, userId, listType } = req.body;
       const { offset, limit } = getPagination(req.body);
+      const requestedCursor =
+        req.body?.cursor || req.body?.nextCursor || req.body?.cursorId || null;
+      const requestedTopCursor = req.body?.topCursor || null;
+      const cursor = UserDbController.decodeCursor(requestedCursor);
+      const topCursor = UserDbController.decodeCursor(requestedTopCursor);
       let resolvedCompanyId = companyId;
 
       // Resolve companyId for filtering production users
@@ -403,35 +561,65 @@ export class UserDbController {
         prisma.user.count({ where: buildUserWhere('INACTIVE') }),
       ]);
 
-      const [activeRows, inactiveRows, pendingResult] = await Promise.all([
-        listType === 'pending'
-          ? Promise.resolve([])
-          : prisma.user.findMany({
-              where: buildUserWhere('ACTIVE'),
-              include: userInclude,
-              orderBy: { createdAt: 'desc' },
-              ...(listType === 'active' ? { skip: offset, take: limit } : {}),
-            }),
-        listType
-          ? Promise.resolve([])
-          : prisma.user.findMany({
-              where: buildUserWhere('INACTIVE'),
-              include: userInclude,
-              orderBy: { createdAt: 'desc' },
-            }),
-        listType === 'active'
-          ? Promise.resolve({ pendingCount: 0, pendingOnboardings: [] })
-          : UserDbController.fetchPendingUserOnboardings({
-              resolvedCompanyId,
-              isGlobal,
-              visibleNodePaths: allVisibleNodePaths,
-              offset,
-              limit,
-              applyPagination: listType === 'pending',
-            }),
-      ]);
+      const activeWhere = buildUserWhere('ACTIVE');
+      const activePageWhere =
+        listType === 'active' && cursor
+          ? UserDbController.appendCursorWhere(activeWhere, cursor, 'older')
+          : activeWhere;
+      const activeNewWhere =
+        listType === 'active' && topCursor
+          ? UserDbController.appendCursorWhere(activeWhere, topCursor, 'newer')
+          : null;
 
-      const activeUsers = activeRows.map(UserDbController.formatProductionUser);
+      const [activeRows, inactiveRows, pendingResult, activeNewCount] =
+        await Promise.all([
+          listType === 'pending'
+            ? Promise.resolve([])
+            : prisma.user.findMany({
+                where: activePageWhere,
+                include: userInclude,
+                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+                ...(listType === 'active'
+                  ? { skip: cursor ? 0 : offset, take: limit + 1 }
+                  : {}),
+              }),
+          listType
+            ? Promise.resolve([])
+            : prisma.user.findMany({
+                where: buildUserWhere('INACTIVE'),
+                include: userInclude,
+                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              }),
+          listType === 'active'
+            ? Promise.resolve({ pendingCount: 0, pendingOnboardings: [] })
+            : UserDbController.fetchPendingUserOnboardings({
+                resolvedCompanyId,
+                isGlobal,
+                visibleNodePaths: allVisibleNodePaths,
+                offset,
+                limit,
+                applyPagination: listType === 'pending',
+                cursor,
+                topCursor,
+                requestedTopCursor,
+              }),
+          activeNewWhere
+            ? prisma.user.count({ where: activeNewWhere })
+            : Promise.resolve(0),
+        ]);
+
+      const activePage =
+        listType === 'active'
+          ? UserDbController.buildPageInfo(
+              activeRows,
+              limit,
+              requestedTopCursor,
+              activeNewCount,
+            )
+          : { pageRows: activeRows, pageInfo: null };
+      const activeUsers = activePage.pageRows.map(
+        UserDbController.formatProductionUser,
+      );
       const inactiveUsers = inactiveRows.map(
         UserDbController.formatProductionUser,
       );
@@ -466,6 +654,10 @@ export class UserDbController {
         pendingCount,
         limit,
         offset,
+        pageInfo:
+          listType === 'active'
+            ? activePage.pageInfo
+            : (pendingResult as any).pageInfo || null,
       });
     } catch (error) {
       next(error);

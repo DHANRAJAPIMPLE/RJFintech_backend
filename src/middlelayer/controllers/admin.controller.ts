@@ -11,7 +11,6 @@
 import type { AuthRequest } from '../middlewares/auth.middleware';
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
-import { getPagination } from '../../shared/utils/pagination.util';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
@@ -24,114 +23,38 @@ import {
 import { CodeGenUtil } from '../utils/code-gen.util';
 
 export class AdminController {
-  static async fetchAndProcessGroups(
+
+
+  static async getGroupCompanies(
     req: AuthRequest,
-    listType?: 'active' | 'pending',
+    res: Response,
+    next: NextFunction,
   ) {
-    // 1. Fetch raw data from Backend (5001)
-    const { offset, limit } = getPagination(req.body);
-    const { data, ok, status } = await internalPost<any>(
-      `${config.backendCompanyUrl}/groups`,
-      { listType, offset, limit },
-    );
-
-    if (!ok) {
-      throw new AppError(
-        data?.message || data?.error || 'Failed to fetch groups',
-        status,
-      );
-    }
-
-    if (Array.isArray(data?.data)) {
-      return {
-        active: listType === 'active' ? data.data : [],
-        pending: listType === 'pending' ? data.data : [],
-        inactive: [],
-        activeCount: data.activeCount ?? 0,
-        inactiveCount: data.inactiveCount ?? 0,
-        pendingCount: data.pendingCount ?? 0,
-        limit: data.limit ?? limit,
-        offset: data.offset ?? offset,
-      };
-    }
-
-    const { groups, soloCompanies, pendingOnboardings } = data;
-
-    const active: any[] = [];
-    const inactive: any[] = [];
-    const pending: any[] = [];
-
-    // 2. Process Groups
-    groups.forEach((g: any) => {
-      const processCompanies = (companies: any[]) => {
-        const signatoryMap = new Map();
-        const companyDetails = companies.map((c: any) => ({
-          companyCode: c.companyCode,
-          name: c.legalName,
-          gst: c.gstNumber,
-          brand: c.brandName,
-          ieCode: c.ieCode || '',
-          registration: c.registrationDate,
-          address: c.address || '',
-          signatories: c.signatories || [],
-        }));
-
-        companies.forEach((c: any) => {
-          if (c.signatories) {
-            c.signatories.forEach((s: any) => {
-              if (!signatoryMap.has(s.email)) {
-                signatoryMap.set(s.email, s);
-              }
-            });
-          }
-        });
-
-        return {
-          groupDetails: {
-            groupCode: g.groupCode,
-            groupName: g.name,
-          },
-          companyDetails: companyDetails,
-        };
-      };
-
-      const mappedCompanies = g.companyMappings.map((cm: any) => cm.company);
-      const activeGroupCompanies = mappedCompanies.filter(
-        (c: any) => c.status === 'ACTIVE',
-      );
-      const inactiveGroupCompanies = mappedCompanies.filter(
-        (c: any) => c.status === 'INACTIVE',
+    try {
+      // 1. Fetch raw data from Backend (5001)
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendCompanyUrl}/groups`,
+        {},
       );
 
-      if (g.status === 'ACTIVE') {
-        if (activeGroupCompanies.length > 0) {
-          active.push(processCompanies(activeGroupCompanies));
-        }
-        if (inactiveGroupCompanies.length > 0) {
-          inactive.push(processCompanies(inactiveGroupCompanies));
-        }
-      } else {
-        if (mappedCompanies.length > 0) {
-          inactive.push(processCompanies(mappedCompanies));
-        } else {
-          inactive.push({
-            groupDetails: {
-              groupCode: g.groupCode,
-              groupName: g.name,
-            },
-            companyDetails: [],
-            signatories: [],
-          });
-        }
+      if (!ok) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch groups',
+          status,
+        );
       }
-    });
 
-    // 3. Process Solo Companies
-    soloCompanies.forEach((c: any) => {
-      const soloEntry = {
-        groupDetails: null,
-        companyDetails: [
-          {
+      const { groups, soloCompanies, pendingOnboardings } = data;
+
+      const active: any[] = [];
+      const inactive: any[] = [];
+      const pending: any[] = [];
+
+      // 2. Process Groups
+      groups.forEach((g: any) => {
+        const processCompanies = (companies: any[]) => {
+          const signatoryMap = new Map();
+          const companyDetails = companies.map((c: any) => ({
             companyCode: c.companyCode,
             name: c.legalName,
             gst: c.gstNumber,
@@ -140,124 +63,139 @@ export class AdminController {
             registration: c.registrationDate,
             address: c.address || '',
             signatories: c.signatories || [],
-          },
-        ],
-      };
+          }));
 
-      if (c.status === 'ACTIVE') {
-        active.push(soloEntry);
-      } else {
-        inactive.push(soloEntry);
-      }
-    });
+          companies.forEach((c: any) => {
+            if (c.signatories) {
+              c.signatories.forEach((s: any) => {
+                if (!signatoryMap.has(s.email)) {
+                  signatoryMap.set(s.email, s);
+                }
+              });
+            }
+          });
 
-    // 4. Process Pending Onboardings
-    const pendingGroups: Record<string, any> = {};
-    pendingOnboardings.forEach((onb: any) => {
-      const onbData = onb.data || {};
-      const group = onbData.group || {};
-      const company = onbData.company || {};
-      const signatories = onbData.signatories || [];
-      const groupCode =
-        onb.groupCode || `SOLO_PENDING_${onb.companyCode || onb.id}`;
-
-      if (!pendingGroups[groupCode]) {
-        pendingGroups[groupCode] = {
-          groupDetails: onb.groupCode
-            ? {
-                groupCode: onb.groupCode,
-                groupName: group.name || 'Pending Group',
-              }
-            : null,
-          companyDetails: [],
+          return {
+            groupDetails: {
+              groupCode: g.groupCode,
+              groupName: g.name,
+            },
+            companyDetails: companyDetails,
+          };
         };
-      }
 
-      pendingGroups[groupCode].companyDetails.push({
-        companyId: onb.id,
-        companyCode: onb.companyCode,
-        name: company.name || '',
-        gst: company.gst || '',
-        brand: company.brand || '',
-        iecode: company.ieCode || '',
-        registration: company.registeredAt ? company.registeredAt : '',
-        address: company.address || '',
-        initiatorName: onb.initiator?.name || null,
-        initiatorEmail: onb.initiator?.email || null,
-        initiatedDate: onb.createdAt,
-        signatories: signatories.map((s: any) => ({
-          name: s.name || '',
-          email: s.email || '',
-          phone: s.phone || '',
-          designation: s.designation || '',
-          employeeId: s.employeeId || '',
-        })),
+        const mappedCompanies = g.companyMappings.map((cm: any) => cm.company);
+        const activeGroupCompanies = mappedCompanies.filter(
+          (c: any) => c.status === 'ACTIVE',
+        );
+        const inactiveGroupCompanies = mappedCompanies.filter(
+          (c: any) => c.status === 'INACTIVE',
+        );
+
+        if (g.status === 'ACTIVE') {
+          if (activeGroupCompanies.length > 0) {
+            active.push(processCompanies(activeGroupCompanies));
+          }
+          if (inactiveGroupCompanies.length > 0) {
+            inactive.push(processCompanies(inactiveGroupCompanies));
+          }
+        } else {
+          // If the group itself is inactive, all companies go to the inactive list
+          if (mappedCompanies.length > 0) {
+            inactive.push(processCompanies(mappedCompanies));
+          } else {
+            // Even if no companies, still show the inactive group if it's inactive?
+            // The original code did this. Let's keep it.
+            inactive.push({
+              groupDetails: {
+                groupCode: g.groupCode,
+                groupName: g.name,
+              },
+              companyDetails: [],
+              signatories: [],
+            });
+          }
+        }
       });
-    });
-    pending.push(...Object.values(pendingGroups));
 
-    return {
-      active,
-      pending,
-      inactive,
-      activeCount: active.length,
-      inactiveCount: inactive.length,
-      pendingCount: pending.length,
-      limit,
-      offset,
-    };
-  }
+      // 3. Process Solo Companies
+      soloCompanies.forEach((c: any) => {
+        const soloEntry = {
+          groupDetails: null,
+          companyDetails: [
+            {
+              companyCode: c.companyCode,
+              name: c.legalName,
+              gst: c.gstNumber,
+              brand: c.brandName,
+              ieCode: c.ieCode || '',
+              registration: c.registrationDate,
+              address: c.address || '',
+              signatories: c.signatories || [],
+            },
+          ],
+        };
 
-  static async getActiveGroupCompanies(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const {
-        active,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
-      } = await AdminController.fetchAndProcessGroups(req, 'active');
-
-      res.status(200).json({
-        data: active,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
+        if (c.status === 'ACTIVE') {
+          active.push(soloEntry);
+        } else {
+          inactive.push(soloEntry);
+        }
       });
-    } catch (error) {
-      next(error);
-    }
-  }
 
-  static async getPendingGroupCompanies(
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const {
-        pending,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
-      } = await AdminController.fetchAndProcessGroups(req, 'pending');
+      // 4. Process Pending Onboardings
+      const pendingGroups: Record<string, any> = {};
+      pendingOnboardings.forEach((onb: any) => {
+        const onbData = onb.data || {};
+        const group = onbData.group || {};
+        const company = onbData.company || {};
+        const signatories = onbData.signatories || [];
+        const groupCode =
+          onb.groupCode || `SOLO_PENDING_${onb.companyCode || onb.id}`;
 
+        if (!pendingGroups[groupCode]) {
+          pendingGroups[groupCode] = {
+            groupDetails: onb.groupCode
+              ? {
+                  groupCode: onb.groupCode,
+                  groupName: group.name || 'Pending Group',
+                }
+              : null,
+            companyDetails: [],
+          };
+        }
+
+        pendingGroups[groupCode].companyDetails.push({
+          companyId: onb.id,
+          companyCode: onb.companyCode,
+          name: company.name || '',
+          gst: company.gst || '',
+          brand: company.brand || '',
+          iecode: company.ieCode || '',
+          registration: company.registeredAt ? company.registeredAt : '',
+          address: company.address || '',
+          initiatorName: onb.initiator?.name || null,
+          initiatorEmail: onb.initiator?.email || null,
+          initiatedDate: onb.createdAt,
+          signatories: signatories.map((s: any) => ({
+            name: s.name || '',
+            email: s.email || '',
+            phone: s.phone || '',
+            designation: s.designation || '',
+            employeeId: s.employeeId || '',
+          })),
+        });
+      });
+      pending.push(...Object.values(pendingGroups));
+
+      // 5. Final Response
       res.status(200).json({
-        data: pending,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
+        message: 'Companies fetched successfully!',
+        companies: {
+          active,
+          pending,
+          inactive,
+        },
       });
     } catch (error) {
       next(error);
@@ -403,6 +341,7 @@ export class AdminController {
         `${config.backendUrl}/internal/company/create`,
         {
           initiatorId,
+          notificationCompanyId: (req.user as any)?.companyId,
           companyCode: finalCompanyCode,
           groupCode: finalGroupCode,
           data: {
@@ -478,6 +417,7 @@ export class AdminController {
         action,
         approverId,
         remark,
+        notificationCompanyId: (req.user as any)?.companyId,
       });
 
       if (!updateStatusOk) {
@@ -489,9 +429,12 @@ export class AdminController {
         );
       }
 
-      res
-        .status(200)
-        .json({ message: 'Onboarding request approved and data populated' });
+      res.status(200).json({
+        message:
+          updateStatusRes?.message ||
+          `Onboarding request ${action === 'reject' ? 'rejected' : 'approved'}`,
+        data: updateStatusRes,
+      });
     } catch (error) {
       next(error);
     }

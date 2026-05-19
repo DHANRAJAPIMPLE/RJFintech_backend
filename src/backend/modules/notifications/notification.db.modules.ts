@@ -5,17 +5,30 @@ import { getPagination } from '../../../shared/utils/pagination.util';
 import { prisma } from '../../lib/prisma';
 
 type NotificationType = 'INITIATE' | 'APPROVE' | 'REJECT';
+type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 
 type CreateNotificationInput = {
   companyId: string;
   name: string;
   message: string;
   type: NotificationType;
-  referenceType?: string | null;
+  referenceType?: NotificationReferenceType | null;
   referenceId?: string | null;
   createdBy: string;
   recipientUserIds?: string[];
 };
+
+const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
+  'INITIATE',
+  'APPROVE',
+  'REJECT',
+];
+const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
+  'USER',
+  'ORG',
+  'WORKFLOW',
+  'COMPANY',
+];
 
 const normalizeStatus = (value: unknown) => {
   const status = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
@@ -24,21 +37,80 @@ const normalizeStatus = (value: unknown) => {
     : 'ALL';
 };
 
+const normalizeFetchStatus = (value: unknown) => {
+  const status = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
+  return ['READ', 'UNREAD', 'ALL'].includes(status) ? status : 'ALL';
+};
+
+const normalizeCursorId = (value: unknown) => {
+  if (typeof value !== 'string') return null;
+  const cursorId = value.trim();
+  return cursorId || null;
+};
+
 const formatNotification = (row: any) => ({
   id: row.id,
   name: row.notification.name,
   message: row.notification.message,
   type: row.notification.type,
   refType: row.notification.referenceType,
+  referenceId: row.notification.referenceId,
   status: row.status,
   createdByname: row.notification.createdByUser?.name || null,
   createdByemail: row.notification.createdByUser?.email || null,
-  createat_timestamp: row.notification.createdAt,
+  ['createat_timestamp']: row.notification.createdAt,
 });
 
 export class NotificationService {
   private static unique(values: Array<string | null | undefined>) {
-    return Array.from(new Set(values.filter(Boolean) as string[]));
+    return Array.from(
+      new Set(
+        values
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private static validateNotificationInput(input: CreateNotificationInput) {
+    if (!input.companyId || !input.createdBy) {
+      throw new Error('companyId and createdBy are required');
+    }
+
+    if (!SUPPORTED_NOTIFICATION_TYPES.includes(input.type)) {
+      throw new Error(`Unsupported notification type: ${input.type}`);
+    }
+
+    if (
+      input.referenceType &&
+      !SUPPORTED_REFERENCE_TYPES.includes(input.referenceType)
+    ) {
+      throw new Error(
+        `Unsupported notification reference type: ${input.referenceType}`,
+      );
+    }
+  }
+
+  private static async filterActiveCompanyUserIds(
+    companyId: string,
+    userIds: string[],
+  ) {
+    const uniqueUserIds = NotificationService.unique(userIds);
+    if (uniqueUserIds.length === 0) return [];
+
+    const mappings = await prisma.userMapping.findMany({
+      where: {
+        companyId,
+        userId: { in: uniqueUserIds },
+        status: 'ACTIVE',
+      },
+      select: { userId: true },
+    });
+
+    return NotificationService.unique(
+      mappings.map((mapping) => mapping.userId),
+    );
   }
 
   private static async getSaasAdminUserIds(companyId: string) {
@@ -58,6 +130,40 @@ export class NotificationService {
     return accesses.map((access) => access.userId);
   }
 
+  private static getHistoryConfig(reqTable: string) {
+    switch (reqTable) {
+      case 'user_onboarding':
+        return { table: 'userHistory', field: 'reqId' };
+      case 'org_structure_req':
+        return { table: 'orgHistory', field: 'orgReqId' };
+      case 'workflow_req':
+        return { table: 'workflowReqHistory', field: 'workflowReqId' };
+      default:
+        return null;
+    }
+  }
+
+  private static async getExcludedApproverIds(reqId: string, reqTable: string) {
+    const config = NotificationService.getHistoryConfig(reqTable);
+    if (!config) return [];
+
+    const [initiatorLog, approvalLogs] = await Promise.all([
+      (prisma as any)[config.table].findFirst({
+        where: { [config.field]: reqId, event: 'INITIATE' },
+        select: { eventUserId: true },
+      }),
+      (prisma as any)[config.table].findMany({
+        where: { [config.field]: reqId, event: 'APPROVED' },
+        select: { eventUserId: true },
+      }),
+    ]);
+
+    return NotificationService.unique([
+      initiatorLog?.eventUserId,
+      ...approvalLogs.map((log: any) => log.eventUserId),
+    ]);
+  }
+
   static async getCurrentApproverIds(
     reqId: string,
     reqTable: string,
@@ -68,21 +174,34 @@ export class NotificationService {
       orderBy: { level: 'asc' },
     });
 
-    if (Array.isArray(currentLevel?.approversList)) {
-      return currentLevel.approversList as string[];
+    if (!Array.isArray(currentLevel?.approversList)) {
+      return NotificationService.unique(fallbackUserIds);
     }
 
-    return fallbackUserIds;
+    const excludedApproverIds = new Set(
+      await NotificationService.getExcludedApproverIds(reqId, reqTable),
+    );
+
+    return NotificationService.unique(
+      currentLevel.approversList as string[],
+    ).filter((userId) => !excludedApproverIds.has(userId));
   }
 
   static async createNotification(input: CreateNotificationInput) {
+    NotificationService.validateNotificationInput(input);
+
     const saasAdmins = await NotificationService.getSaasAdminUserIds(
       input.companyId,
     );
-    const recipientUserIds = NotificationService.unique([
+    const requestedRecipients = NotificationService.unique([
       ...(input.recipientUserIds || []),
       ...saasAdmins,
     ]).filter((userId) => userId !== input.createdBy);
+    const recipientUserIds =
+      await NotificationService.filterActiveCompanyUserIds(
+        input.companyId,
+        requestedRecipients,
+      );
 
     if (recipientUserIds.length === 0) return null;
 
@@ -154,39 +273,72 @@ export class NotificationService {
     status?: string;
     limit: number;
     offset: number;
+    cursorId?: string | null;
   }) {
-    const status = normalizeStatus(params.status);
-    const where = {
+    const status = normalizeFetchStatus(params.status);
+    const cursorId = normalizeCursorId(params.cursorId);
+    const where: any = {
       userId: params.userId,
       companyId: params.companyId,
       ...(status === 'ALL' ? {} : { status }),
     };
 
-    const [count, rows] = await Promise.all([
+    const [count, cursorRow] = await Promise.all([
       prisma.notificationUser.count({ where }),
-      prisma.notificationUser.findMany({
-        where,
-        include: {
-          notification: {
-            include: {
-              createdByUser: {
-                select: { name: true, email: true },
-              },
+      cursorId
+        ? prisma.notificationUser.findFirst({
+            where: { ...where, id: cursorId },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    if (cursorId && !cursorRow) {
+      return {
+        data: [],
+        count,
+        limit: params.limit,
+        offset: params.offset,
+        status,
+        cursorId,
+        nextCursorId: null,
+        hasNextPage: false,
+      };
+    }
+
+    const rows = await prisma.notificationUser.findMany({
+      where,
+      include: {
+        notification: {
+          include: {
+            createdByUser: {
+              select: { name: true, email: true },
             },
           },
         },
-        orderBy: { createdAt: 'desc' },
-        skip: params.offset,
-        take: params.limit,
-      }),
-    ]);
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      ...(cursorId
+        ? { cursor: { id: cursorId }, skip: 1 }
+        : { skip: params.offset }),
+      take: params.limit + 1,
+    });
+
+    const hasNextPage = rows.length > params.limit;
+    const pageRows = hasNextPage ? rows.slice(0, params.limit) : rows;
+    const nextCursorId = hasNextPage
+      ? pageRows[pageRows.length - 1]?.id || null
+      : null;
 
     return {
-      data: rows.map(formatNotification),
+      data: pageRows.map(formatNotification),
       count,
       limit: params.limit,
-      offset: params.offset,
+      offset: cursorId ? 0 : params.offset,
       status,
+      cursorId,
+      nextCursorId,
+      hasNextPage,
     };
   }
 
@@ -233,7 +385,7 @@ export class NotificationService {
 export class NotificationDbController {
   static async fetch(req: Request, res: Response, next: NextFunction) {
     try {
-      const { userId, companyId, status } = req.body;
+      const { userId, companyId, status, cursorId } = req.body;
       const { offset, limit } = getPagination(req.body);
 
       if (!userId || !companyId) {
@@ -246,6 +398,7 @@ export class NotificationDbController {
         status,
         limit,
         offset,
+        cursorId,
       });
 
       return res.status(200).json(result);

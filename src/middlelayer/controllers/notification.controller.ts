@@ -57,12 +57,14 @@ export class NotificationController {
       }
 
       const { offset, limit } = getPagination(req.body);
+      const cursorId = req.body?.cursorId || req.body?.cursor || null;
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/notifications/fetch`,
         {
           status: req.body?.status || 'ALL',
           userId,
           companyId,
+          cursorId,
           offset,
           limit,
         },

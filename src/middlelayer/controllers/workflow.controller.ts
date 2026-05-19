@@ -11,7 +11,6 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
-import { getPagination } from '../../shared/utils/pagination.util';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
@@ -176,97 +175,45 @@ export class WorkflowController {
         );
       }
 
-      res.status(200).json({
-        message:
-          commitRes?.message || `Workflow request ${action}ed successfully`,
-      });
+      res
+        .status(200)
+        .json({
+          message:
+            commitRes?.message || `Workflow request ${action}ed successfully`,
+        });
     } catch (error) {
       next(error);
     }
   }
 
-  private static async fetchAndProcessWorkflows(
+  static async fetchAllWorkflows(
     req: Request & { user?: { id: string; companyId: string } },
-    listType?: 'active' | 'pending',
+    res: Response,
+    next: NextFunction,
   ) {
-    const companyId = req.user?.companyId;
-    if (!companyId) {
-      throw new AppError('Unauthorized: Company information missing', 401);
-    }
-    const { offset, limit } = getPagination(req.body);
-    const { data, ok, status } = await internalPost<any>(
-      `${config.backendUrl}/internal/workflow/fetch`,
-      { companyId, userId: req.user?.id, listType, offset, limit },
-    );
-    if (!ok) {
-      throw new AppError(
-        data?.message || data?.error || 'Failed to fetch workflows',
-        status,
+    try {
+      const companyId = req.user?.companyId;
+
+      if (!companyId) {
+        throw new AppError('Unauthorized: Company information missing', 401);
+      }
+
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendUrl}/internal/workflow/fetch`,
+        { companyId, userId: req.user?.id },
       );
-    }
-    const active = data?.data?.active || data?.active || [];
-    const pending = data?.data?.pending || data?.pending || [];
-    return {
-      active,
-      pending,
-      activeCount: data?.activeCount ?? active.length,
-      inactiveCount: data?.inactiveCount ?? 0,
-      pendingCount: data?.pendingCount ?? pending.length,
-      limit: data?.limit ?? limit,
-      offset: data?.offset ?? offset,
-    };
-  }
 
-  static async fetchActiveWorkflows(
-    req: Request & { user?: { id: string; companyId: string } },
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const {
-        active,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
-      } = await WorkflowController.fetchAndProcessWorkflows(req, 'active');
+      if (!ok) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch workflows',
+          status,
+        );
+      }
 
       res.status(200).json({
-        data: active,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  static async fetchPendingWorkflows(
-    req: Request & { user?: { id: string; companyId: string } },
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const {
-        pending,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
-      } = await WorkflowController.fetchAndProcessWorkflows(req, 'pending');
-
-      res.status(200).json({
-        data: pending,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        limit,
-        offset,
+        message: 'Workflows fetched successfully!',
+        code: 200,
+        data: data,
       });
     } catch (error) {
       next(error);
@@ -278,10 +225,7 @@ export class WorkflowController {
     next: NextFunction,
   ) {
     try {
-      const { levelsHash, module, subModule, nodePath } = zodParse(
-        workflowHistorySchema,
-        req.body,
-      );
+      const { levelsHash, module, subModule, nodePath } = zodParse(workflowHistorySchema, req.body);
       const companyId = req.user?.companyId;
 
       if (!companyId) {
@@ -290,14 +234,7 @@ export class WorkflowController {
 
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/workflow/history`,
-        {
-          companyId,
-          levelsHash,
-          module,
-          subModule,
-          nodePath,
-          userId: req.user?.id,
-        },
+        { companyId, levelsHash, module, subModule, nodePath, userId: req.user?.id },
       );
 
       if (!ok) {

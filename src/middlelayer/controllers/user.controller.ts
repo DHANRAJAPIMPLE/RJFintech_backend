@@ -33,9 +33,20 @@ export class UserController {
   ) {
     const { companyCode } = zodParse(companyCodeOnly, req.body);
     const { offset, limit } = getPagination(req.body);
+    const cursor =
+      req.body?.cursor || req.body?.nextCursor || req.body?.cursorId || null;
+    const topCursor = req.body?.topCursor || null;
     const { data, ok, status } = await internalPost<any>(
       `${config.backendUrl}/internal/user/fetch-all`,
-      { companyCode, userId: (req as any).user?.id, listType, offset, limit },
+      {
+        companyCode,
+        userId: (req as any).user?.id,
+        listType,
+        cursor,
+        topCursor,
+        offset,
+        limit,
+      },
     );
     if (!ok) {
       throw new AppError(
@@ -58,6 +69,13 @@ export class UserController {
       pendingCount: data?.pendingCount ?? pendingUsers.length,
       limit: data?.limit ?? limit,
       offset: data?.offset ?? offset,
+      pageInfo: data?.pageInfo || {
+        nextCursor: null,
+        topCursor: null,
+        hasNext: false,
+        hasNewData: false,
+        newCount: 0,
+      },
     };
   }
 
@@ -72,8 +90,7 @@ export class UserController {
         activeCount,
         inactiveCount,
         pendingCount,
-        limit,
-        offset,
+        pageInfo,
       } = await UserController.fetchAndProcessUsers(req, 'active');
 
       res.status(200).json({
@@ -81,8 +98,7 @@ export class UserController {
         activeCount,
         inactiveCount,
         pendingCount,
-        limit,
-        offset,
+        pageInfo,
       });
     } catch (error) {
       next(error);
@@ -100,8 +116,7 @@ export class UserController {
         activeCount,
         inactiveCount,
         pendingCount,
-        limit,
-        offset,
+        pageInfo,
       } = await UserController.fetchAndProcessUsers(req, 'pending');
 
       res.status(200).json({
@@ -109,8 +124,7 @@ export class UserController {
         activeCount,
         inactiveCount,
         pendingCount,
-        limit,
-        offset,
+        pageInfo,
       });
     } catch (error) {
       next(error);
@@ -274,7 +288,7 @@ export class UserController {
       ]);
 
       // Combine and deduplicate
-      let eligibleApprovers = Array.from(
+      const eligibleApprovers = Array.from(
         new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
       );
 
