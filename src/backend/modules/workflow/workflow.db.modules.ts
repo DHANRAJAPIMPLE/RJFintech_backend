@@ -507,6 +507,14 @@ export class WorkflowDbController {
           );
       }
 
+      const requestInitiatorId =
+        await NotificationService.getRequestInitiatorId(id, 'workflow_req');
+      const notificationRecipientUserIds =
+        NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+          requestInitiatorId,
+        );
+
       await NotificationService.createRequestNotification({
         companyId: request.companyId,
         type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
@@ -514,7 +522,7 @@ export class WorkflowDbController {
         referenceId: request.id,
         referenceName: (request.data as any)?.name,
         createdBy: approverId,
-        recipientUserIds: notificationRecipients,
+        recipientUserIds: notificationRecipientUserIds,
       });
 
       res.status(200).json({

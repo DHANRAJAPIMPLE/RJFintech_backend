@@ -1391,11 +1391,25 @@ import { NotificationService } from '../notifications/notification.db.modules';
       let message = `User onboarding ${status}d successfully`;
       if (result && result.status === 'PARTIAL_APPROVED') {
         message = `User request approved at Level ${result.level}, pending remaining approval`;
+        notificationRecipients =
+          await NotificationService.getCurrentApproverIds(
+            id,
+            'user_onboarding',
+            notificationRecipients,
+          );
       } else if (result && result.status === 'APPROVED') {
         message = 'User approved and onboarded';
       } else if (result && result.status === 'REJECTED') {
         message = 'User request rejected';
       }
+
+      const requestInitiatorId =
+        await NotificationService.getRequestInitiatorId(id, 'user_onboarding');
+      const notificationRecipientUserIds =
+        NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+          requestInitiatorId,
+        );
 
       await NotificationService.createRequestNotification({
         companyId: onboarding.companyId,
@@ -1404,7 +1418,7 @@ import { NotificationService } from '../notifications/notification.db.modules';
         referenceId: id,
         referenceName: email,
         createdBy: approverId,
-        recipientUserIds: notificationRecipients,
+        recipientUserIds: notificationRecipientUserIds,
       });
 
       res.status(200).json({

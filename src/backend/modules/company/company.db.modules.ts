@@ -305,7 +305,11 @@ export class CompanyDbController {
         initiatorId,
         notificationCompanyId,
       );
-    const notificationRecipients = onboardingData.eligibleApprovers || [];
+    onboardingData.eligibleApprovers =
+      NotificationService.mergeRecipientUserIds(
+        onboardingData.eligibleApprovers || [],
+      ).filter((userId) => userId !== initiatorId);
+    const notificationRecipients = onboardingData.eligibleApprovers;
 
     const onboarding = await prisma.$transaction(async (tx) => {
       const onb = await tx.companyOnboarding.create({
@@ -407,6 +411,7 @@ export class CompanyDbController {
         );
       let notificationRecipients: string[] = [];
       let notificationSubject = 'Company';
+      let notificationCompanyCode: string | null = null;
 
       const result = await prisma.$transaction(async (tx) => {
         // 1. Fetch onboarding record
@@ -423,6 +428,7 @@ export class CompanyDbController {
         }
 
         notificationRecipients = onboarding.eligibleApprovers || [];
+        notificationCompanyCode = onboarding.companyCode || null;
         notificationSubject =
           (onboarding.data as any)?.company?.name ||
           onboarding.companyCode ||
@@ -726,6 +732,16 @@ export class CompanyDbController {
       });
 
       if (resolvedNotificationCompanyId && approverId) {
+        const requestInitiatorId =
+          await NotificationService.getCompanyRequestInitiatorId(
+            notificationCompanyCode,
+          );
+        const notificationRecipientUserIds =
+          NotificationService.mergeRecipientUserIds(
+            notificationRecipients,
+            requestInitiatorId,
+          );
+
         await NotificationService.createRequestNotification({
           companyId: resolvedNotificationCompanyId,
           type: result.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
@@ -733,7 +749,7 @@ export class CompanyDbController {
           referenceId: id,
           referenceName: notificationSubject,
           createdBy: approverId,
-          recipientUserIds: notificationRecipients,
+          recipientUserIds: notificationRecipientUserIds,
         });
       }
 

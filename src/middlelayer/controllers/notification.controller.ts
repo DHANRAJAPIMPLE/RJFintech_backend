@@ -7,6 +7,19 @@ import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 
 export class NotificationController {
+  private static async isSaasAdmin(userId: string) {
+    const { data, ok } = await internalPost<any>(
+      `${config.backendAuthUrl}/get-role`,
+      { userId },
+    );
+
+    return (
+      ok &&
+      Array.isArray(data) &&
+      data.some((access) => access?.roleCode === 'SAAS_ADMIN')
+    );
+  }
+
   static async stream(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const userId = req.user?.id;
@@ -15,6 +28,9 @@ export class NotificationController {
       if (!userId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
+
+      const includeAllCompanies =
+        await NotificationController.isSaasAdmin(userId);
 
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
@@ -29,7 +45,10 @@ export class NotificationController {
       send('connected', { ok: true });
 
       const unsubscribe = onNotificationEvent((payload) => {
-        if (payload.userId === userId && payload.companyId === companyId) {
+        if (
+          payload.userId === userId &&
+          (includeAllCompanies || payload.companyId === companyId)
+        ) {
           send('notification', payload.notification);
         }
       });
@@ -67,6 +86,7 @@ export class NotificationController {
           cursorId,
           offset,
           limit,
+          includeAllCompanies: true,
         },
       );
 
@@ -97,6 +117,7 @@ export class NotificationController {
           ...req.body,
           userId,
           companyId,
+          includeAllCompanies: true,
         },
       );
 

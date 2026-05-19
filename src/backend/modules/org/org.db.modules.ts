@@ -329,6 +329,12 @@ export class OrgStructureDbController {
       let message = 'Org structure request processed';
       if (result && result.status === 'PARTIAL_APPROVED') {
         message = `Org structure request approved at Level ${result.level}, pending remaining approval`;
+        notificationRecipients =
+          await NotificationService.getCurrentApproverIds(
+            id,
+            'org_structure_req',
+            notificationRecipients,
+          );
       } else if (result && result.status === 'APPROVED') {
         message = 'Org structure request approved and node created';
       } else if (result && result.status === 'REJECTED') {
@@ -336,6 +342,17 @@ export class OrgStructureDbController {
       }
 
       if (notificationCompanyId) {
+        const requestInitiatorId =
+          await NotificationService.getRequestInitiatorId(
+            id,
+            'org_structure_req',
+          );
+        const notificationRecipientUserIds =
+          NotificationService.mergeRecipientUserIds(
+            notificationRecipients,
+            requestInitiatorId,
+          );
+
         await NotificationService.createRequestNotification({
           companyId: notificationCompanyId,
           type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
@@ -343,7 +360,7 @@ export class OrgStructureDbController {
           referenceId: id,
           referenceName: notificationSubject,
           createdBy: approverId,
-          recipientUserIds: notificationRecipients,
+          recipientUserIds: notificationRecipientUserIds,
         });
       }
 

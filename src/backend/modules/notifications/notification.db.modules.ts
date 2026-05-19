@@ -80,6 +80,16 @@ export class NotificationService {
     );
   }
 
+  static mergeRecipientUserIds(
+    ...groups: Array<
+      string | null | undefined | Array<string | null | undefined>
+    >
+  ) {
+    return NotificationService.unique(
+      groups.flatMap((group) => (Array.isArray(group) ? group : [group])),
+    );
+  }
+
   private static validateNotificationInput(input: CreateNotificationInput) {
     if (!input.companyId || !input.createdBy) {
       throw new Error('companyId and createdBy are required');
@@ -206,21 +216,42 @@ export class NotificationService {
     );
   }
 
-  private static async getSaasAdminUserIds(companyId: string) {
+  private static async getSaasAdminUserIds() {
     const accesses = await prisma.userAccess.findMany({
       where: {
-        companyId,
         roleCode: 'SAAS_ADMIN',
         user: {
           userMappings: {
-            some: { companyId, status: 'ACTIVE' },
+            some: { status: 'ACTIVE' },
           },
         },
       },
       select: { userId: true },
     });
 
-    return accesses.map((access) => access.userId);
+    return NotificationService.unique(accesses.map((access) => access.userId));
+  }
+
+  private static async canReadAllCompanyNotifications(
+    userId: string,
+    requested?: boolean,
+  ) {
+    if (!requested) return false;
+
+    const access = await prisma.userAccess.findFirst({
+      where: {
+        userId,
+        roleCode: 'SAAS_ADMIN',
+        user: {
+          userMappings: {
+            some: { status: 'ACTIVE' },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    return Boolean(access);
   }
 
   private static getHistoryConfig(reqTable: string) {
@@ -234,6 +265,31 @@ export class NotificationService {
       default:
         return null;
     }
+  }
+
+  static async getRequestInitiatorId(reqId: string, reqTable: string) {
+    const config = NotificationService.getHistoryConfig(reqTable);
+    if (!config) return null;
+
+    const row = await (prisma as any)[config.table].findFirst({
+      where: { [config.field]: reqId, event: 'INITIATE' },
+      orderBy: { createdAt: 'asc' },
+      select: { eventUserId: true },
+    });
+
+    return row?.eventUserId || null;
+  }
+
+  static async getCompanyRequestInitiatorId(companyCode?: string | null) {
+    if (!companyCode) return null;
+
+    const row = await prisma.companyHistory.findFirst({
+      where: { companyCode, event: 'INITIATE' },
+      orderBy: { createdAt: 'desc' },
+      select: { eventUserId: true },
+    });
+
+    return row?.eventUserId || null;
   }
 
   private static async getExcludedApproverIds(reqId: string, reqTable: string) {
@@ -284,7 +340,7 @@ export class NotificationService {
     NotificationService.validateNotificationInput(input);
 
     const [saasAdmins, createdByUser] = await Promise.all([
-      NotificationService.getSaasAdminUserIds(input.companyId),
+      NotificationService.getSaasAdminUserIds(),
       prisma.user.findUnique({
         where: { id: input.createdBy },
         select: { name: true, email: true },
@@ -295,15 +351,18 @@ export class NotificationService {
       input,
       actorName,
     );
-    const requestedRecipients = NotificationService.unique([
-      ...(input.recipientUserIds || []),
-      ...saasAdmins,
-    ]).filter((userId) => userId !== input.createdBy);
-    const recipientUserIds =
+    const requestedRecipients = NotificationService.unique(
+      input.recipientUserIds || [],
+    ).filter((userId) => userId !== input.createdBy);
+    const companyRecipientUserIds =
       await NotificationService.filterActiveCompanyUserIds(
         input.companyId,
         requestedRecipients,
       );
+    const recipientUserIds = NotificationService.unique([
+      ...companyRecipientUserIds,
+      ...saasAdmins,
+    ]).filter((userId) => userId !== input.createdBy);
 
     if (recipientUserIds.length === 0) return null;
 
@@ -376,12 +435,18 @@ export class NotificationService {
     limit: number;
     offset: number;
     cursorId?: string | null;
+    includeAllCompanies?: boolean;
   }) {
     const status = normalizeFetchStatus(params.status);
     const cursorId = normalizeCursorId(params.cursorId);
+    const includeAllCompanies =
+      await NotificationService.canReadAllCompanyNotifications(
+        params.userId,
+        params.includeAllCompanies,
+      );
     const where: any = {
       userId: params.userId,
-      companyId: params.companyId,
+      ...(includeAllCompanies ? {} : { companyId: params.companyId }),
       ...(status === 'ALL' ? {} : { status }),
     };
 
@@ -450,12 +515,18 @@ export class NotificationService {
     notificationUserId?: string;
     notificationId?: string;
     status?: string;
+    includeAllCompanies?: boolean;
   }) {
     const status = normalizeStatus(params.status || 'READ');
     const nextStatus = status === 'ALL' ? 'READ' : status;
+    const includeAllCompanies =
+      await NotificationService.canReadAllCompanyNotifications(
+        params.userId,
+        params.includeAllCompanies,
+      );
     const where = {
       userId: params.userId,
-      companyId: params.companyId,
+      ...(includeAllCompanies ? {} : { companyId: params.companyId }),
       ...(params.notificationUserId
         ? { id: params.notificationUserId }
         : { notificationId: params.notificationId }),
@@ -501,6 +572,7 @@ export class NotificationDbController {
         limit,
         offset,
         cursorId,
+        includeAllCompanies: req.body?.includeAllCompanies === true,
       });
 
       return res.status(200).json(result);
@@ -537,6 +609,7 @@ export class NotificationDbController {
         notificationUserId: targetNotificationUserId,
         notificationId,
         status,
+        includeAllCompanies: req.body?.includeAllCompanies === true,
       });
 
       return res.status(200).json({

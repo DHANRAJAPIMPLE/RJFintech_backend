@@ -980,7 +980,11 @@ export class WorkflowApproverUtil {
     },
   ) {
     const pendingRows = await (tx as any).workflowApprover.findMany({
-      where: { reqId: opts.reqId, reqTable: opts.reqTable, status: 'PENDING' },
+      where: {
+        reqId: opts.reqId,
+        reqTable: opts.reqTable,
+        status: 'PENDING',
+      },
       orderBy: { level: 'asc' },
       select: {
         level: true,
