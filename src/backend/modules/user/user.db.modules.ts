@@ -10,7 +10,14 @@ import { NotificationService } from '../notifications/notification.db.modules';
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
  * Handles production user data and pending user requests.
  */
-export class UserDbController {
+  export class UserDbController {
+  private static normalizePageDirection(value: unknown): 'next' | 'prev' {
+    return typeof value === 'string' &&
+      ['prev', 'previous'].includes(value.trim().toLowerCase())
+      ? 'prev'
+      : 'next';
+  }
+
   private static encodeCursor(row?: { id: string; createdAt: Date } | null) {
     if (!row) return null;
 
@@ -84,23 +91,37 @@ export class UserDbController {
     limit: number,
     requestedTopCursor: string | null,
     newCount: number,
+    direction: 'next' | 'prev',
+    cursor: { id: string; createdAt: Date } | null,
   ) {
-    const pageRows = rows.length > limit ? rows.slice(0, limit) : rows;
+    const hasExtra = rows.length > limit;
+    const limitedRows = hasExtra ? rows.slice(0, limit) : rows;
+    const pageRows =
+      direction === 'prev' ? [...limitedRows].reverse() : limitedRows;
     const firstRow = pageRows[0] || null;
     const lastRow = pageRows[pageRows.length - 1] || null;
+    const hasNext = direction === 'prev' ? !!cursor : hasExtra;
+    const hasPrev = direction === 'prev' ? hasExtra : !!cursor;
 
     return {
       pageRows,
       pageInfo: {
-        nextCursor:
-          rows.length > limit ? UserDbController.encodeCursor(lastRow) : null,
+        nextCursor: hasNext ? UserDbController.encodeCursor(lastRow) : null,
+        prevCursor: hasPrev ? UserDbController.encodeCursor(firstRow) : null,
         topCursor:
           requestedTopCursor || UserDbController.encodeCursor(firstRow),
-        hasNext: rows.length > limit,
+        hasNext,
+        hasPrev,
         hasNewData: newCount > 0,
         newCount,
       },
     };
+  }
+
+  private static getPageOrder(direction: 'next' | 'prev'): any[] {
+    return direction === 'prev'
+      ? [{ createdAt: 'asc' }, { id: 'asc' }]
+      : [{ createdAt: 'desc' }, { id: 'desc' }];
   }
 
   private static formatProductionUser(u: any) {
@@ -152,6 +173,7 @@ export class UserDbController {
     cursor?: { id: string; createdAt: Date } | null;
     topCursor?: { id: string; createdAt: Date } | null;
     requestedTopCursor?: string | null;
+    direction?: 'next' | 'prev';
   }) {
     const {
       resolvedCompanyId,
@@ -163,7 +185,9 @@ export class UserDbController {
       cursor = null,
       topCursor = null,
       requestedTopCursor = null,
+      direction = 'next',
     } = params;
+    const effectiveDirection = cursor ? direction : 'next';
 
     if (isGlobal) {
       const where = {
@@ -172,7 +196,11 @@ export class UserDbController {
       };
       const pageWhere =
         applyPagination && cursor
-          ? UserDbController.appendCursorWhere(where, cursor, 'older')
+          ? UserDbController.appendCursorWhere(
+              where,
+              cursor,
+              effectiveDirection === 'prev' ? 'newer' : 'older',
+            )
           : where;
       const newWhere =
         applyPagination && topCursor
@@ -183,7 +211,7 @@ export class UserDbController {
         prisma.userOnboarding.count({ where }),
         prisma.userOnboarding.findMany({
           where: pageWhere,
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          orderBy: UserDbController.getPageOrder(effectiveDirection),
           ...(applyPagination
             ? { skip: cursor ? 0 : offset, take: limit + 1 }
             : {}),
@@ -202,6 +230,8 @@ export class UserDbController {
         limit,
         requestedTopCursor,
         newCount,
+        effectiveDirection,
+        cursor,
       );
 
       return { pendingCount, pendingOnboardings: pageRows, pageInfo };
@@ -213,8 +243,10 @@ export class UserDbController {
         pendingOnboardings: [],
         pageInfo: {
           nextCursor: null,
+          prevCursor: null,
           topCursor: requestedTopCursor,
           hasNext: false,
+          hasPrev: false,
           hasNewData: false,
           newCount: 0,
         },
@@ -251,7 +283,11 @@ export class UserDbController {
 
     const pageWhere =
       applyPagination && cursor
-        ? UserDbController.appendCursorWhere(where, cursor, 'older')
+        ? UserDbController.appendCursorWhere(
+            where,
+            cursor,
+            effectiveDirection === 'prev' ? 'newer' : 'older',
+          )
         : where;
     const newWhere =
       applyPagination && topCursor
@@ -262,7 +298,7 @@ export class UserDbController {
       prisma.userOnboarding.count({ where }),
       prisma.userOnboarding.findMany({
         where: pageWhere,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: UserDbController.getPageOrder(effectiveDirection),
         ...(applyPagination
           ? { skip: cursor ? 0 : offset, take: limit + 1 }
           : {}),
@@ -284,6 +320,8 @@ export class UserDbController {
       limit,
       requestedTopCursor,
       newCount,
+      effectiveDirection,
+      cursor,
     );
 
     return {
@@ -424,11 +462,18 @@ export class UserDbController {
     try {
       const { companyCode, companyId, userId, listType } = req.body;
       const { offset, limit } = getPagination(req.body);
+      const pageDirection = UserDbController.normalizePageDirection(
+        req.body?.direction,
+      );
       const requestedCursor =
-        req.body?.cursor || req.body?.nextCursor || req.body?.cursorId || null;
+        req.body?.cursor ??
+        (pageDirection === 'prev' ? req.body?.prevCursor : req.body?.nextCursor) ??
+        req.body?.cursorId ??
+        null;
       const requestedTopCursor = req.body?.topCursor || null;
       const cursor = UserDbController.decodeCursor(requestedCursor);
       const topCursor = UserDbController.decodeCursor(requestedTopCursor);
+      const effectiveDirection = cursor ? pageDirection : 'next';
       let resolvedCompanyId = companyId;
 
       // Resolve companyId for filtering production users
@@ -573,7 +618,11 @@ export class UserDbController {
       const activeWhere = buildUserWhere('ACTIVE');
       const activePageWhere =
         listType === 'active' && cursor
-          ? UserDbController.appendCursorWhere(activeWhere, cursor, 'older')
+          ? UserDbController.appendCursorWhere(
+              activeWhere,
+              cursor,
+              effectiveDirection === 'prev' ? 'newer' : 'older',
+            )
           : activeWhere;
       const activeNewWhere =
         listType === 'active' && topCursor
@@ -587,7 +636,7 @@ export class UserDbController {
             : prisma.user.findMany({
                 where: activePageWhere,
                 include: userInclude,
-                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+                orderBy: UserDbController.getPageOrder(effectiveDirection),
                 ...(listType === 'active'
                   ? { skip: cursor ? 0 : offset, take: limit + 1 }
                   : {}),
@@ -611,6 +660,7 @@ export class UserDbController {
                 cursor,
                 topCursor,
                 requestedTopCursor,
+                direction: effectiveDirection,
               }),
           activeNewWhere
             ? prisma.user.count({ where: activeNewWhere })
@@ -624,6 +674,8 @@ export class UserDbController {
               limit,
               requestedTopCursor,
               activeNewCount,
+              effectiveDirection,
+              cursor,
             )
           : { pageRows: activeRows, pageInfo: null };
       const activeUsers = activePage.pageRows.map(

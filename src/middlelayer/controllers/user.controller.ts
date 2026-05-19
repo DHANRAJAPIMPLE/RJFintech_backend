@@ -35,8 +35,16 @@ export class UserController {
       companyCode: req.body?.companyCode,
     });
     const { offset, limit } = getPagination(req.body);
+    const direction =
+      typeof req.body?.direction === 'string' &&
+      ['prev', 'previous'].includes(req.body.direction.trim().toLowerCase())
+        ? 'prev'
+        : 'next';
     const cursor =
-      req.body?.cursor || req.body?.nextCursor || req.body?.cursorId || null;
+      req.body?.cursor ??
+      (direction === 'prev' ? req.body?.prevCursor : req.body?.nextCursor) ??
+      req.body?.cursorId ??
+      null;
     const topCursor = req.body?.topCursor || null;
     const { data, ok, status } = await internalPost<any>(
       `${config.backendUrl}/internal/user/fetch-all`,
@@ -44,6 +52,7 @@ export class UserController {
         companyCode,
         userId: (req as any).user?.id,
         listType,
+        direction,
         cursor,
         topCursor,
         offset,
@@ -73,8 +82,10 @@ export class UserController {
       offset: data?.offset ?? offset,
       pageInfo: data?.pageInfo || {
         nextCursor: null,
+        prevCursor: null,
         topCursor: null,
         hasNext: false,
+        hasPrev: false,
         hasNewData: false,
         newCount: 0,
       },
