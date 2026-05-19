@@ -10,7 +10,7 @@ import { NotificationService } from '../notifications/notification.db.modules';
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
  * Handles production user data and pending user requests.
  */
-  export class UserDbController {
+export class UserDbController {
   private static normalizePageDirection(value: unknown): 'next' | 'prev' {
     return typeof value === 'string' &&
       ['prev', 'previous'].includes(value.trim().toLowerCase())
@@ -118,6 +118,25 @@ import { NotificationService } from '../notifications/notification.db.modules';
     };
   }
 
+  private static isRowInCursorDirection(
+    row: { id: string; createdAt: Date },
+    cursor: { id: string; createdAt: Date },
+    direction: 'older' | 'newer',
+  ) {
+    const rowTime = row.createdAt.getTime();
+    const cursorTime = cursor.createdAt.getTime();
+
+    if (direction === 'older') {
+      return (
+        rowTime < cursorTime || (rowTime === cursorTime && row.id < cursor.id)
+      );
+    }
+
+    return (
+      rowTime > cursorTime || (rowTime === cursorTime && row.id > cursor.id)
+    );
+  }
+
   private static getPageOrder(direction: 'next' | 'prev'): any[] {
     return direction === 'prev'
       ? [{ createdAt: 'asc' }, { id: 'asc' }]
@@ -161,6 +180,30 @@ import { NotificationService } from '../notifications/notification.db.modules';
           accessCategory: a.accessCategory,
         })),
     };
+  }
+
+  private static isPendingOnboardingVisibleToNodePaths(
+    onboarding: any,
+    visibleNodePaths: Set<string>,
+  ) {
+    const data = onboarding.data as any;
+    const basic = data?.basicDetails || {};
+    const permissions = Array.isArray(data?.permissions)
+      ? data.permissions
+      : [];
+
+    const isGlobalRequest =
+      basic.isGlobalUser === true ||
+      permissions.some((p: any) => p.roleName === 'Corp Admin');
+
+    if (isGlobalRequest) return false;
+
+    return permissions.some(
+      (p: any) =>
+        p.accessType === 'PRIMARY' &&
+        typeof p.nodePath === 'string' &&
+        visibleNodePaths.has(p.nodePath),
+    );
   }
 
   private static async fetchPendingUserOnboardings(params: {
@@ -253,60 +296,44 @@ import { NotificationService } from '../notifications/notification.db.modules';
       };
     }
 
-    const visiblePermissionFilters = visibleNodePaths.map((nodePath) => ({
-      data: {
-        path: ['permissions'],
-        array_contains: [{ accessType: 'PRIMARY', nodePath }],
-      },
-    }));
+    const visibleNodePathSet = new Set(visibleNodePaths);
 
-    const where: any = {
-      status: 'PENDING',
+    const where = {
+      status: 'PENDING' as const,
       companyId: resolvedCompanyId,
-      AND: [
-        {
-          NOT: {
-            data: { path: ['basicDetails', 'isGlobalUser'], equals: true },
-          },
-        },
-        {
-          NOT: {
-            data: {
-              path: ['permissions'],
-              array_contains: [{ roleName: 'Corp Admin' }],
-            },
-          },
-        },
-        { OR: visiblePermissionFilters },
-      ],
     };
 
-    const pageWhere =
-      applyPagination && cursor
-        ? UserDbController.appendCursorWhere(
-            where,
-            cursor,
-            effectiveDirection === 'prev' ? 'newer' : 'older',
-          )
-        : where;
-    const newWhere =
-      applyPagination && topCursor
-        ? UserDbController.appendCursorWhere(where, topCursor, 'newer')
-        : null;
+    const allPendingOnboardings = await prisma.userOnboarding.findMany({
+      where,
+      orderBy: UserDbController.getPageOrder(effectiveDirection),
+    });
 
-    const [pendingCount, pendingOnboardings, newCount] = await Promise.all([
-      prisma.userOnboarding.count({ where }),
-      prisma.userOnboarding.findMany({
-        where: pageWhere,
-        orderBy: UserDbController.getPageOrder(effectiveDirection),
-        ...(applyPagination
-          ? { skip: cursor ? 0 : offset, take: limit + 1 }
-          : {}),
-      }),
-      newWhere
-        ? prisma.userOnboarding.count({ where: newWhere })
-        : Promise.resolve(0),
-    ]);
+    const visiblePendingOnboardings = allPendingOnboardings.filter((onb) =>
+      UserDbController.isPendingOnboardingVisibleToNodePaths(
+        onb,
+        visibleNodePathSet,
+      ),
+    );
+    const pendingCount = visiblePendingOnboardings.length;
+    const newCount =
+      applyPagination && topCursor
+        ? visiblePendingOnboardings.filter((onb) =>
+            UserDbController.isRowInCursorDirection(onb, topCursor, 'newer'),
+          ).length
+        : 0;
+    const pendingOnboardings = applyPagination
+      ? visiblePendingOnboardings
+          .filter((onb) =>
+            cursor
+              ? UserDbController.isRowInCursorDirection(
+                  onb,
+                  cursor,
+                  effectiveDirection === 'prev' ? 'newer' : 'older',
+                )
+              : true,
+          )
+          .slice(cursor ? 0 : offset, (cursor ? 0 : offset) + limit + 1)
+      : visiblePendingOnboardings;
 
     if (!applyPagination) {
       return {
@@ -467,7 +494,9 @@ import { NotificationService } from '../notifications/notification.db.modules';
       );
       const requestedCursor =
         req.body?.cursor ??
-        (pageDirection === 'prev' ? req.body?.prevCursor : req.body?.nextCursor) ??
+        (pageDirection === 'prev'
+          ? req.body?.prevCursor
+          : req.body?.nextCursor) ??
         req.body?.cursorId ??
         null;
       const requestedTopCursor = req.body?.topCursor || null;
