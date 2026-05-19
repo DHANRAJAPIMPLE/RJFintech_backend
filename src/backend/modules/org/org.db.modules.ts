@@ -338,16 +338,10 @@ export class OrgStructureDbController {
       if (notificationCompanyId) {
         await NotificationService.createRequestNotification({
           companyId: notificationCompanyId,
-          name:
-            result?.status === 'REJECTED'
-              ? 'Organization request rejected'
-              : 'Organization request approved',
-          message: `${notificationSubject} request ${
-            result?.status === 'REJECTED' ? 'was rejected' : 'was approved'
-          }`,
           type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
           referenceType: 'ORG',
           referenceId: id,
+          referenceName: notificationSubject,
           createdBy: approverId,
           recipientUserIds: notificationRecipients,
         });
@@ -477,11 +471,10 @@ export class OrgStructureDbController {
       });
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
-        name: 'Organization request initiated',
-        message: `${rest.data?.newNodeName || 'Organization'} request is pending approval`,
         type: 'INITIATE',
         referenceType: 'ORG',
         referenceId: request.id,
+        referenceName: rest.data?.newNodeName,
         createdBy: initiatorId,
         recipientUserIds: notificationRecipients,
       });

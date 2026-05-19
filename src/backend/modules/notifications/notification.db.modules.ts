@@ -9,11 +9,12 @@ type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 
 type CreateNotificationInput = {
   companyId: string;
-  name: string;
-  message: string;
+  name?: string;
+  message?: string;
   type: NotificationType;
   referenceType?: NotificationReferenceType | null;
   referenceId?: string | null;
+  referenceName?: string | null;
   createdBy: string;
   recipientUserIds?: string[];
 };
@@ -46,6 +47,12 @@ const normalizeCursorId = (value: unknown) => {
   if (typeof value !== 'string') return null;
   const cursorId = value.trim();
   return cursorId || null;
+};
+
+const getDisplayValue = (value: unknown, fallback: string) => {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim();
+  return normalized || fallback;
 };
 
 const formatNotification = (row: any) => ({
@@ -89,6 +96,92 @@ export class NotificationService {
       throw new Error(
         `Unsupported notification reference type: ${input.referenceType}`,
       );
+    }
+
+    if (!input.referenceType && (!input.name || !input.message)) {
+      throw new Error('name and message are required');
+    }
+  }
+
+  private static getActorName(user: { name?: string | null; email?: string }) {
+    return getDisplayValue(user.name, getDisplayValue(user.email, 'Someone'));
+  }
+
+  private static getRequestNotificationContent(
+    input: CreateNotificationInput,
+    actorName: string,
+  ) {
+    const userName = getDisplayValue(input.referenceName, 'the user');
+    const orgName = getDisplayValue(input.referenceName, 'the organization');
+    const workflowName = getDisplayValue(input.referenceName, 'the workflow');
+    const companyName = getDisplayValue(input.referenceName, 'the company');
+
+    switch (`${input.referenceType}:${input.type}`) {
+      case 'USER:INITIATE':
+        return {
+          name: 'User onboarding initiated',
+          message: `${actorName} initiated user onboarding for ${userName}`,
+        };
+      case 'USER:APPROVE':
+        return {
+          name: 'User onboarding approved',
+          message: `${actorName} approved user onboarding for ${userName}`,
+        };
+      case 'USER:REJECT':
+        return {
+          name: 'User onboarding rejected',
+          message: `${actorName} rejected user onboarding for ${userName}`,
+        };
+      case 'ORG:INITIATE':
+        return {
+          name: 'Organization request initiated',
+          message: `${actorName} initiated organization request for ${orgName}`,
+        };
+      case 'ORG:APPROVE':
+        return {
+          name: 'Organization request approved',
+          message: `${actorName} approved organization request for ${orgName}`,
+        };
+      case 'ORG:REJECT':
+        return {
+          name: 'Organization request rejected',
+          message: `${actorName} rejected organization request for ${orgName}`,
+        };
+      case 'WORKFLOW:INITIATE':
+        return {
+          name: 'Workflow request initiated',
+          message: `${actorName} initiated workflow request for ${workflowName}`,
+        };
+      case 'WORKFLOW:APPROVE':
+        return {
+          name: 'Workflow request approved',
+          message: `${actorName} approved workflow request for ${workflowName}`,
+        };
+      case 'WORKFLOW:REJECT':
+        return {
+          name: 'Workflow request rejected',
+          message: `${actorName} rejected workflow request for ${workflowName}`,
+        };
+      case 'COMPANY:INITIATE':
+        return {
+          name: 'Company onboarding initiated',
+          message: `${actorName} initiated company onboarding for ${companyName}`,
+        };
+      case 'COMPANY:APPROVE':
+        return {
+          name: 'Company onboarding approved',
+          message: `${actorName} approved company onboarding for ${companyName}`,
+        };
+      case 'COMPANY:REJECT':
+        return {
+          name: 'Company onboarding rejected',
+          message: `${actorName} rejected company onboarding for ${companyName}`,
+        };
+      default:
+        return {
+          name: input.name || 'Notification',
+          message: input.message || `${actorName} updated a notification`,
+        };
     }
   }
 
@@ -190,8 +283,17 @@ export class NotificationService {
   static async createNotification(input: CreateNotificationInput) {
     NotificationService.validateNotificationInput(input);
 
-    const saasAdmins = await NotificationService.getSaasAdminUserIds(
-      input.companyId,
+    const [saasAdmins, createdByUser] = await Promise.all([
+      NotificationService.getSaasAdminUserIds(input.companyId),
+      prisma.user.findUnique({
+        where: { id: input.createdBy },
+        select: { name: true, email: true },
+      }),
+    ]);
+    const actorName = NotificationService.getActorName(createdByUser || {});
+    const content = NotificationService.getRequestNotificationContent(
+      input,
+      actorName,
     );
     const requestedRecipients = NotificationService.unique([
       ...(input.recipientUserIds || []),
@@ -221,8 +323,8 @@ export class NotificationService {
         data: {
           id: notificationId,
           companyId: input.companyId,
-          name: input.name,
-          message: input.message,
+          name: content.name,
+          message: content.message,
           type: input.type,
           referenceType: input.referenceType || null,
           referenceId: input.referenceId || null,

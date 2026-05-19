@@ -23,11 +23,20 @@ export class UserDbController {
   }
 
   private static decodeCursor(value: unknown) {
-    if (typeof value !== 'string' || !value.trim()) return null;
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'string') return null;
+
+    const normalizedValue = value.trim();
+    if (
+      !normalizedValue ||
+      ['null', 'undefined'].includes(normalizedValue.toLowerCase())
+    ) {
+      return null;
+    }
 
     try {
       const payload = JSON.parse(
-        Buffer.from(value.trim(), 'base64url').toString('utf8'),
+        Buffer.from(normalizedValue, 'base64url').toString('utf8'),
       );
       const createdAt = new Date(payload.createdAt);
       if (
@@ -842,11 +851,10 @@ export class UserDbController {
     });
     await NotificationService.createRequestNotification({
       companyId: resolvedCompanyId,
-      name: 'User onboarding initiated',
-      message: `${email || 'A user'} onboarding request is pending approval`,
       type: 'INITIATE',
       referenceType: 'USER',
       referenceId: onboarding.id,
+      referenceName: email,
       createdBy: initiatorId,
       recipientUserIds: notificationRecipients,
     });
@@ -1339,14 +1347,10 @@ export class UserDbController {
 
       await NotificationService.createRequestNotification({
         companyId: onboarding.companyId,
-        name:
-          result?.status === 'REJECTED'
-            ? 'User onboarding rejected'
-            : 'User onboarding approved',
-        message: `${email || 'User'} request ${result?.status === 'REJECTED' ? 'was rejected' : 'was approved'}`,
         type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
         referenceType: 'USER',
         referenceId: id,
+        referenceName: email,
         createdBy: approverId,
         recipientUserIds: notificationRecipients,
       });

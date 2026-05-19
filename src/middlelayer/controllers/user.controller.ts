@@ -31,7 +31,9 @@ export class UserController {
     req: Request,
     listType?: 'active' | 'pending',
   ) {
-    const { companyCode } = zodParse(companyCodeOnly, req.body);
+    const { companyCode } = zodParse(companyCodeOnly, {
+      companyCode: req.body?.companyCode,
+    });
     const { offset, limit } = getPagination(req.body);
     const cursor =
       req.body?.cursor || req.body?.nextCursor || req.body?.cursorId || null;

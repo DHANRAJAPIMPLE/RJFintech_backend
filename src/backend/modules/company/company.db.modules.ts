@@ -346,15 +346,10 @@ export class CompanyDbController {
     if (resolvedNotificationCompanyId && initiatorId) {
       await NotificationService.createRequestNotification({
         companyId: resolvedNotificationCompanyId,
-        name: 'Company onboarding initiated',
-        message: `${
-          (onboardingData.data as any)?.company?.name ||
-          companyCode ||
-          'Company'
-        } onboarding request is pending approval`,
         type: 'INITIATE',
         referenceType: 'COMPANY',
         referenceId: onboarding.id,
+        referenceName: (onboardingData.data as any)?.company?.name,
         createdBy: initiatorId,
         recipientUserIds: notificationRecipients,
       });
@@ -733,16 +728,10 @@ export class CompanyDbController {
       if (resolvedNotificationCompanyId && approverId) {
         await NotificationService.createRequestNotification({
           companyId: resolvedNotificationCompanyId,
-          name:
-            result.status === 'REJECTED'
-              ? 'Company onboarding rejected'
-              : 'Company onboarding approved',
-          message: `${notificationSubject} onboarding request ${
-            result.status === 'REJECTED' ? 'was rejected' : 'was approved'
-          }`,
           type: result.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
           referenceType: 'COMPANY',
           referenceId: id,
+          referenceName: notificationSubject,
           createdBy: approverId,
           recipientUserIds: notificationRecipients,
         });

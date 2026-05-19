@@ -206,11 +206,10 @@ export class WorkflowDbController {
 
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
-        name: 'Workflow request initiated',
-        message: `${data?.name || 'Workflow'} request is pending approval`,
         type: 'INITIATE',
         referenceType: 'WORKFLOW',
         referenceId: result.id,
+        referenceName: data?.name,
         createdBy: initiatorId,
         recipientUserIds: notificationRecipients,
       });
@@ -510,16 +509,10 @@ export class WorkflowDbController {
 
       await NotificationService.createRequestNotification({
         companyId: request.companyId,
-        name:
-          result?.status === 'REJECTED'
-            ? 'Workflow request rejected'
-            : 'Workflow request approved',
-        message: `${(request.data as any)?.name || 'Workflow'} request ${
-          result?.status === 'REJECTED' ? 'was rejected' : 'was approved'
-        }`,
         type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
         referenceType: 'WORKFLOW',
         referenceId: request.id,
+        referenceName: (request.data as any)?.name,
         createdBy: approverId,
         recipientUserIds: notificationRecipients,
       });
