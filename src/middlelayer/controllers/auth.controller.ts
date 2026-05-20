@@ -22,6 +22,14 @@ import { setAuthCookies, clearAuthCookies } from '../utils/cookie.util';
 import { zodParse } from '../utils/zod-parse.util';
 import { registerSchema, loginSchema } from '../validations/auth.validation';
 import console from 'console';
+import type {
+  AuthBackendLoginUser,
+  AuthBackendUser,
+  AuthLoginApiResponse,
+  AuthLoginResponse,
+  AuthMeResponse,
+  AuthUserGroup,
+} from './auth.type';
 
 export class AuthController {
   static async register(req: Request, res: Response, next: NextFunction) {
@@ -72,7 +80,11 @@ export class AuthController {
     }
   }
 
-  static async login(req: Request, res: Response, next: NextFunction) {
+  static async login(
+    req: Request,
+    res: Response<AuthLoginApiResponse>,
+    next: NextFunction,
+  ) {
     try {
       const validatedData = zodParse(loginSchema, { body: req.body });
       const {
@@ -86,7 +98,7 @@ export class AuthController {
       const userAgent = req.headers['user-agent'] || 'unknown';
 
       // 1. Get user from Backend DB
-      const userRes = await internalPost<any>(
+      const userRes = await internalPost<AuthBackendLoginUser>(
         `${config.backendAuthUrl}/get-user`,
         { email },
       );
@@ -96,7 +108,12 @@ export class AuthController {
         throw new AppError('Invalid credentials', 401);
       }
   
-      const companyId = user.userMappings[0].companyId;
+      const firstMapping = user.userMappings[0];
+      if (!firstMapping) {
+        throw new AppError('Company mapping not found', 400);
+      }
+
+      const companyId = firstMapping.companyId;
 
       // 2. Validate password
       const isPasswordValid = await HashUtil.verify(user.password, password);
@@ -187,9 +204,9 @@ export class AuthController {
       res.locals.companyId = companyId;
 
       // 9. Response shaping
-      const groups = formatUserGroups(user.userMappings);
+      const groups = formatUserGroups(user.userMappings) as AuthUserGroup[];
 
-      res.status(200).json({
+      const response: AuthLoginResponse = {
         message: 'Login successful',
         user: {
           name: user.name,
@@ -197,7 +214,9 @@ export class AuthController {
           phone: user.phone,
           groups,
         },
-      });
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
@@ -299,7 +318,7 @@ export class AuthController {
 
   static async me(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<AuthMeResponse>,
     next: NextFunction,
   ) {
     try {
@@ -314,28 +333,33 @@ export class AuthController {
         data: user,
         ok,
         status,
-      } = await internalPost<any>(`${config.backendAuthUrl}/get-user`, {
-        userId,
-      });
+      } = await internalPost<AuthBackendUser>(
+        `${config.backendAuthUrl}/get-user`,
+        {
+          userId,
+        },
+      );
 
       if (!ok || !user) {
         throw new AppError('Failed to fetch user data', status || 404);
       }
 
       // 2. Format User Groups in Middle Layer
-      const groups = formatUserGroups(user.userMappings);
+      const groups = formatUserGroups(user.userMappings) as AuthUserGroup[];
 
       res.locals.userId = user.id;
       res.locals.companyId = user.userMappings?.[0]?.companyId;
 
-      res.status(200).json({
+      const response: AuthMeResponse = {
         user: {
           name: user.name,
           email: user.email,
           phone: user.phone,
           groups,
         },
-      });
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

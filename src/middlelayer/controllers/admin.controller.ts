@@ -19,40 +19,56 @@ import {
   companyActionSchema,
   companyHistory,
 } from '../validations/company.validation';
+import type {
+  AdminApiErrorResponse,
+  AdminBackendCompany,
+  AdminBackendPendingOnboarding,
+  AdminCompanyGroup,
+  AdminPendingCompanyGroup,
+  AdminPendingCompanyDetails,
+  FetchAdminGroupsInternalResponse,
+  FetchAdminGroupsInternalSuccess,
+  FetchAdminGroupsResponse,
+} from './admin.type';
 
 import { CodeGenUtil } from '../utils/code-gen.util';
 
 export class AdminController {
   static async getGroupCompanies(
     req: AuthRequest,
-    res: Response,
+    res: Response<FetchAdminGroupsResponse>,
     next: NextFunction,
   ) {
     try {
       // 1. Fetch raw data from Backend (5001)
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendCompanyUrl}/groups`,
-        { userId: req.user?.id },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchAdminGroupsInternalResponse>(
+          `${config.backendCompanyUrl}/groups`,
+          { userId: req.user?.id },
+        );
 
       if (!ok) {
+        const errorData = data as AdminApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch groups',
+          errorData?.message || errorData?.error || 'Failed to fetch groups',
           status,
         );
       }
 
-      const { groups, soloCompanies, pendingOnboardings } = data;
+      const backendData = data as FetchAdminGroupsInternalSuccess;
+      const { groups, soloCompanies, pendingOnboardings } = backendData;
 
-      const active: any[] = [];
-      const inactive: any[] = [];
-      const pending: any[] = [];
+      const active: AdminCompanyGroup[] = [];
+      const inactive: AdminCompanyGroup[] = [];
+      const pending: AdminPendingCompanyGroup[] = [];
 
       // 2. Process Groups
-      groups.forEach((g: any) => {
-        const processCompanies = (companies: any[]) => {
+      groups.forEach((g) => {
+        const processCompanies = (
+          companies: AdminBackendCompany[],
+        ): AdminCompanyGroup => {
           const signatoryMap = new Map();
-          const companyDetails = companies.map((c: any) => ({
+          const companyDetails = companies.map((c) => ({
             companyCode: c.companyCode,
             name: c.legalName,
             gst: c.gstNumber,
@@ -63,9 +79,9 @@ export class AdminController {
             signatories: c.signatories || [],
           }));
 
-          companies.forEach((c: any) => {
+          companies.forEach((c) => {
             if (c.signatories) {
-              c.signatories.forEach((s: any) => {
+              c.signatories.forEach((s) => {
                 if (!signatoryMap.has(s.email)) {
                   signatoryMap.set(s.email, s);
                 }
@@ -82,12 +98,12 @@ export class AdminController {
           };
         };
 
-        const mappedCompanies = g.companyMappings.map((cm: any) => cm.company);
+        const mappedCompanies = g.companyMappings.map((cm) => cm.company);
         const activeGroupCompanies = mappedCompanies.filter(
-          (c: any) => c.status === 'ACTIVE',
+          (c) => c.status === 'ACTIVE',
         );
         const inactiveGroupCompanies = mappedCompanies.filter(
-          (c: any) => c.status === 'INACTIVE',
+          (c) => c.status === 'INACTIVE',
         );
 
         if (g.status === 'ACTIVE') {
@@ -117,8 +133,8 @@ export class AdminController {
       });
 
       // 3. Process Solo Companies
-      soloCompanies.forEach((c: any) => {
-        const soloEntry = {
+      soloCompanies.forEach((c) => {
+        const soloEntry: AdminCompanyGroup = {
           groupDetails: null,
           companyDetails: [
             {
@@ -142,8 +158,8 @@ export class AdminController {
       });
 
       // 4. Process Pending Onboardings
-      const pendingGroups: Record<string, any> = {};
-      pendingOnboardings.forEach((onb: any) => {
+      const pendingGroups: Record<string, AdminPendingCompanyGroup> = {};
+      pendingOnboardings.forEach((onb: AdminBackendPendingOnboarding) => {
         const onbData = onb.data || {};
         const group = onbData.group || {};
         const company = onbData.company || {};
@@ -163,7 +179,7 @@ export class AdminController {
           };
         }
 
-        pendingGroups[groupCode].companyDetails.push({
+        const companyDetails: AdminPendingCompanyDetails = {
           companyId: onb.id,
           companyCode: onb.companyCode,
           name: company.name || '',
@@ -182,19 +198,23 @@ export class AdminController {
             designation: s.designation || '',
             employeeId: s.employeeId || '',
           })),
-        });
+        };
+
+        pendingGroups[groupCode].companyDetails.push(companyDetails);
       });
       pending.push(...Object.values(pendingGroups));
 
       // 5. Final Response
-      res.status(200).json({
+      const response: FetchAdminGroupsResponse = {
         message: 'Companies fetched successfully!',
         companies: {
           active,
           pending,
           inactive,
         },
-      });
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

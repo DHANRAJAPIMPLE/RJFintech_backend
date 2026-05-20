@@ -20,6 +20,14 @@ import {
   orgOnboardingAction,
   orgHistory,
 } from '../validations/org.validation';
+import type {
+  FetchOrgStructureInternalResponse,
+  FetchOrgStructureInternalSuccess,
+  FetchOrgStructureResponse,
+  OrgApiErrorResponse,
+  OrgPendingInternalItem,
+  OrgPendingItem,
+} from './org.type';
 
 export class OrgController {
 
@@ -254,7 +262,7 @@ export class OrgController {
 
   static async fetchOrgStructure(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<FetchOrgStructureResponse>,
     next: NextFunction,
   ) {
     try {
@@ -266,42 +274,52 @@ export class OrgController {
       }
 
       // Forward to Backend (5001)
-      const { data, ok, status } = await internalPost(
-        `${config.backendUrl}/internal/org/fetch`,
-        { companyCode, userId },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchOrgStructureInternalResponse>(
+          `${config.backendUrl}/internal/org/fetch`,
+          { companyCode, userId },
+        );
 
       if (!ok) {
+        const errorData = data as OrgApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch org structure',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch org structure',
           status,
         );
       }
 
-      // Format response with active and pending arrays
-      const formattedPending = data.data.pending.map((req: any) => {
-        const reqData = req.data || {};
-        return {
-          id: req.id,
-          newNodeName: reqData.newNodeName,
-          nodeType: reqData.nodeType,
-          parentNode: reqData.parentNode,
-          initiatorName: req.initiator?.name || null,
-          initiatorEmail: req.initiator?.email || null,
-          initiatedDate: req.createdAt,
-          workflowName: req.workflowName,
-          alias: req.alias,
-        };
-      });
+      const orgData = data as FetchOrgStructureInternalSuccess;
 
-      res.status(200).json({
+      // Format response with active and pending arrays
+      const formattedPending: OrgPendingItem[] = orgData.data.pending.map(
+        (req: OrgPendingInternalItem) => {
+          const reqData = req.data || {};
+          return {
+            id: req.id,
+            newNodeName: reqData.newNodeName,
+            nodeType: reqData.nodeType,
+            parentNode: reqData.parentNode,
+            initiatorName: req.initiator?.name || null,
+            initiatorEmail: req.initiator?.email || null,
+            initiatedDate: req.createdAt,
+            workflowName: req.workflowName,
+            alias: req.alias,
+          };
+        },
+      );
+
+      const response: FetchOrgStructureResponse = {
         message: 'Organization structure fetched successfully!',
         code: 200,
         data: {
-          active: data.data.nodes,
+          active: orgData.data.nodes,
           pending: formattedPending,
         },
-      });
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

@@ -2,27 +2,40 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import type {
+  FetchMonitoringSpansInternalResponse,
+  FetchMonitoringSpansResponse,
+  MonitoringApiErrorResponse,
+} from './monitoring.type';
 
 export class MonitoringController {
-  static async fetchAll(req: Request, res: Response, next: NextFunction) {
+  static async fetchAll(
+    req: Request,
+    res: Response<FetchMonitoringSpansResponse>,
+    next: NextFunction,
+  ) {
     try {
       const body =
         req.body && typeof req.body === 'object' && Object.keys(req.body).length
           ? req.body
           : undefined;
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/monitoring/fetch-all`,
-        body,
-      );
+      const { data, ok, status } =
+        await internalPost<FetchMonitoringSpansInternalResponse>(
+          `${config.backendUrl}/monitoring/fetch-all`,
+          body,
+        );
 
       if (!ok) {
+        const errorData = data as MonitoringApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch monitoring spans',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch monitoring spans',
           status,
         );
       }
 
-      return res.status(200).json(data);
+      return res.status(200).json(data as FetchMonitoringSpansResponse);
     } catch (error) {
       return next(error);
     }

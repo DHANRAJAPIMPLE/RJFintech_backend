@@ -12,6 +12,12 @@ import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
 import { zodParse } from '../utils/zod-parse.util';
 import { roleUpsertSchema } from '../validations/onboarding.validator';
+import type {
+  FetchAllRolesInternalResponse,
+  FetchAllRolesItem,
+  FetchAllRolesResponse,
+  RoleApiErrorResponse,
+} from './role.type';
 
 export class RoleController {
   static async createRoles(
@@ -62,7 +68,7 @@ export class RoleController {
 
   static async fetchAllRoles(
     req: Request & { user?: { id: string; companyId?: string } },
-    res: Response,
+    res: Response<FetchAllRolesResponse>,
     next: NextFunction,
   ) {
     try {
@@ -73,31 +79,35 @@ export class RoleController {
       }
 
       // 1. Fetch raw data from Backend
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/roles/fetch-all`,
-        { userId, companyId: req.user?.companyId },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchAllRolesInternalResponse>(
+          `${config.backendUrl}/internal/roles/fetch-all`,
+          { userId, companyId: req.user?.companyId },
+        );
 
       if (!ok) {
+        const errorData = data as RoleApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch roles',
+          errorData?.message || errorData?.error || 'Failed to fetch roles',
           status,
         );
       }
 
       // 2. Logic: Apply formatting
       const roles = Array.isArray(data) ? data : [];
-      const formattedRoles = roles.map((role) => ({
+      const formattedRoles: FetchAllRolesItem[] = roles.map((role) => ({
         roleName: role.roleName,
         category: role.category,
         subCategory: role.subCategory,
         permissionLevel: role.permissionLevel,
       }));
 
-      res.status(200).json({
+      const response: FetchAllRolesResponse = {
         success: true,
         data: formattedRoles,
-      });
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

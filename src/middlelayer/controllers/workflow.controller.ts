@@ -19,6 +19,12 @@ import {
   workflowActionSchema,
   workflowHistorySchema,
 } from '../validations/workflow.validation';
+import type {
+  FetchWorkflowsData,
+  FetchWorkflowsInternalResponse,
+  FetchWorkflowsResponse,
+  WorkflowApiErrorResponse,
+} from './workflow.type';
 
 export class WorkflowController {
   static async initiateWorkflow(
@@ -188,7 +194,7 @@ export class WorkflowController {
 
   static async fetchAllWorkflows(
     req: Request & { user?: { id: string; companyId: string } },
-    res: Response,
+    res: Response<FetchWorkflowsResponse>,
     next: NextFunction,
   ) {
     try {
@@ -198,23 +204,30 @@ export class WorkflowController {
         throw new AppError('Unauthorized: Company information missing', 401);
       }
 
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/workflow/fetch`,
-        { companyId, userId: req.user?.id },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchWorkflowsInternalResponse>(
+          `${config.backendUrl}/internal/workflow/fetch`,
+          { companyId, userId: req.user?.id },
+        );
 
       if (!ok) {
+        const errorData = data as WorkflowApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch workflows',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch workflows',
           status,
         );
       }
 
-      res.status(200).json({
+      const workflowData = data as FetchWorkflowsData;
+      const response: FetchWorkflowsResponse = {
         message: 'Workflows fetched successfully!',
         code: 200,
-        data: data,
-      });
+        data: workflowData,
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
