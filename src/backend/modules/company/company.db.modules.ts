@@ -654,7 +654,7 @@ export class CompanyDbController {
             nodeName: rootNode.nodeName,
             nodeType: rootNode.nodeType,
             levelsHash,
-            alias: '1M_1C_1',
+            alias: '1M_1C_D',
             levels: {
               1: {
                 approver1: 'NODE_APPROVER',

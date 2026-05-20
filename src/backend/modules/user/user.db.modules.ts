@@ -2281,6 +2281,13 @@ export class UserDbController {
           companyId,
           isGlobalAccess: true,
         },
+        include: {
+          role: {
+            select: {
+              roleName: true,
+            },
+          },
+        },
       });
 
       if (globalAccess) {
@@ -2303,7 +2310,7 @@ export class UserDbController {
 
         const nodes = companyNodes.map((node) => ({
           ...node,
-          roleCode: globalAccess.roleCode,
+          roleName: globalAccess.role?.roleName || globalAccess.roleCode,
         }));
 
         return res.status(200).json({
@@ -2323,6 +2330,11 @@ export class UserDbController {
             },
           },
           include: {
+            role: {
+              select: {
+                roleName: true,
+              },
+            },
             orgStructure: {
               select: {
                 nodeName: true,
@@ -2344,7 +2356,7 @@ export class UserDbController {
         const nodes = userAccesses
           .map((ua) => ({
             ...ua.orgStructure,
-            roleCode: ua.roleCode,
+            roleName: ua.role?.roleName || ua.roleCode,
           }))
           .filter(
             (node, index, self) =>

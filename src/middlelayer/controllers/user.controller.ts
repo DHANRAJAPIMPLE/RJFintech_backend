@@ -31,6 +31,8 @@ import type {
   FetchActiveUsersResponse,
   FetchAndProcessUsersResult,
   FetchPendingUsersResponse,
+  FetchUsersByNodePathCountInternalResponse,
+  FetchUsersByNodePathCountResponse,
   InitiateUserOnboardingResponse,
 } from './user.type';
 
@@ -608,13 +610,14 @@ export class UserController {
       const { nodePath } = zodParse(userFetchByNodePathCountSchema, req.body);
       const companyId = req.user?.companyId;
 
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/user/fetch-users-by-nodepath-count`,
-        {
-          nodePath,
-          companyId,
-        },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchUsersByNodePathCountInternalResponse>(
+          `${config.backendUrl}/internal/user/fetch-users-by-nodepath-count`,
+          {
+            nodePath,
+            companyId,
+          },
+        );
 
       if (!ok) {
         throw new AppError(
@@ -623,7 +626,13 @@ export class UserController {
         );
       }
 
-      res.status(200).json(data);
+      const response: FetchUsersByNodePathCountResponse = {
+        message: 'User counts fetched successfully!',
+        code: 200,
+        data: data?.data || {},
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

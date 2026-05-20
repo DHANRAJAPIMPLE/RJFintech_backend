@@ -21,7 +21,7 @@ export type UserCompanyNode = {
   nodePath: string;
   nodeType: UserCompanyNodeType;
   workflows: UserCompanyNodeWorkflow[];
-  roleCode: string;
+  roleName: string;
 };
 
 export type FetchCompanyNodesInternalResponse =
@@ -36,6 +36,33 @@ export type FetchCompanyNodesResponse = {
   message: 'User nodes fetched successfully!' | 'User nodes not found';
   code: 200;
   data: UserCompanyNode[];
+};
+
+export type UserNodePathCountPermissionLevel = 'MANAGER' | 'USER' | 'VIEWER';
+
+export type UserNodePathCountLabel = 'Checker' | 'Maker' | 'Viewer';
+
+export type UserNodePathCountItem = {
+  label: UserNodePathCountLabel;
+  count: number;
+  permissionlevel: UserNodePathCountPermissionLevel;
+};
+
+export type FetchUsersByNodePathCountData = Partial<
+  Record<UserCompanyNodesSubCategory, UserNodePathCountItem[]>
+>;
+
+export type FetchUsersByNodePathCountInternalResponse = {
+  message?: string;
+  code?: number;
+  data?: FetchUsersByNodePathCountData;
+  error?: string;
+};
+
+export type FetchUsersByNodePathCountResponse = {
+  message: 'User counts fetched successfully!';
+  code: 200;
+  data: FetchUsersByNodePathCountData;
 };
 
 export type UserListBasicDetails = {

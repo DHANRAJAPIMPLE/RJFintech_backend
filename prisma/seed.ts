@@ -510,7 +510,7 @@ for (const role of roles) {
       const workflow = await prisma.workflow.create({
         data: {
           name: dwf.name,
-          alias: '1M_1C_1',
+          alias: '1M_1C_D',
           module: 'SYSTEM_ACCESS',
           subModule: dwf.subModule,
           roleCode: dwf.roleCode,
