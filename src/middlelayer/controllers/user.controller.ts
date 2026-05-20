@@ -25,16 +25,27 @@ import {
   userCompanyNodesSchema,
   userFetchByNodePathCountSchema,
 } from '../validations/user.validation';
+import type {
+  FetchCompanyNodesInternalResponse,
+  FetchCompanyNodesResponse,
+  FetchActiveUsersResponse,
+  FetchAndProcessUsersResult,
+  FetchPendingUsersResponse,
+  InitiateUserOnboardingResponse,
+} from './user.type';
 
 export class UserController {
   private static async fetchAndProcessUsers(
     req: Request,
     listType?: 'active' | 'pending',
-  ) {
+  ): Promise<FetchAndProcessUsersResult> {
     const { companyCode } = zodParse(companyCodeOnly, {
       companyCode: req.body?.companyCode,
     });
     const { offset, limit } = getPagination(req.body);
+    const rawPage = Number(req.body?.page);
+    const page =
+      Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
     const direction =
       typeof req.body?.direction === 'string' &&
       ['prev', 'previous'].includes(req.body.direction.trim().toLowerCase())
@@ -82,6 +93,7 @@ export class UserController {
       limit: data?.limit ?? limit,
       offset: data?.offset ?? offset,
       pageInfo: data?.pageInfo || {
+        page,
         nextCursor: null,
         prevCursor: null,
         topCursor: null,
@@ -107,13 +119,15 @@ export class UserController {
         pageInfo,
       } = await UserController.fetchAndProcessUsers(req, 'active');
 
-      res.status(200).json({
+      const response: FetchActiveUsersResponse = {
         data: activeUsers,
         activeCount,
         inactiveCount,
         pendingCount,
         pageInfo,
-      });
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
@@ -133,13 +147,15 @@ export class UserController {
         pageInfo,
       } = await UserController.fetchAndProcessUsers(req, 'pending');
 
-      res.status(200).json({
+      const response: FetchPendingUsersResponse = {
         data: pendingUsers,
         activeCount,
         inactiveCount,
         pendingCount,
         pageInfo,
-      });
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
@@ -370,9 +386,11 @@ export class UserController {
         );
       }
 
-      res
-        .status(201)
-        .json({ message: 'User onboarding initiated successfully' });
+      const response: InitiateUserOnboardingResponse = {
+        message: 'User onboarding initiated successfully',
+      };
+
+      res.status(201).json(response);
     } catch (error) {
       next(error);
     }
@@ -544,35 +562,38 @@ export class UserController {
         throw new AppError('Unauthorized', 401);
       }
 
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/user/fetch-company-nodes`,
-        {
-          userId,
-          companyId,
-          subCategory,
-        },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchCompanyNodesInternalResponse>(
+          `${config.backendUrl}/internal/user/fetch-company-nodes`,
+          {
+            userId,
+            companyId,
+            subCategory,
+          },
+        );
+      const errorMessage = Array.isArray(data)
+        ? undefined
+        : data?.message || data?.error;
 
       if (!ok) {
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch company nodes',
+          errorMessage || 'Failed to fetch company nodes',
           status,
         );
       }
 
-      // res.status(200).json(data);
-      const nodes = data?.nodes || [];
-  
+      const nodes = Array.isArray(data) ? data : data?.nodes || [];
 
-      res.status(200).json({
+      const response: FetchCompanyNodesResponse = {
         message:
           nodes.length > 0
             ? 'User nodes fetched successfully!'
             : 'User nodes not found',
         code: 200,
-        data: nodes
-       
-      });
+        data: nodes,
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
