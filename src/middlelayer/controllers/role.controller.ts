@@ -61,7 +61,7 @@ export class RoleController {
   }
 
   static async fetchAllRoles(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId?: string } },
     res: Response,
     next: NextFunction,
   ) {
@@ -75,6 +75,7 @@ export class RoleController {
       // 1. Fetch raw data from Backend
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/roles/fetch-all`,
+        { userId, companyId: req.user?.companyId },
       );
 
       if (!ok) {

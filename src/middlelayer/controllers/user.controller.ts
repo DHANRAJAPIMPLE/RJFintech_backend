@@ -562,7 +562,7 @@ export class UserController {
 
       // res.status(200).json(data);
       const nodes = data?.nodes || [];
-      const access = data?.access || {};
+  
 
       res.status(200).json({
         message:
@@ -570,8 +570,8 @@ export class UserController {
             ? 'User nodes fetched successfully!'
             : 'User nodes not found',
         code: 200,
-        data: nodes,
-        access,
+        data: nodes
+       
       });
     } catch (error) {
       next(error);

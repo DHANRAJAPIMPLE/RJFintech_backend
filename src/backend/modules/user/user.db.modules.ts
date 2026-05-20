@@ -2284,7 +2284,7 @@ export class UserDbController {
       });
 
       if (globalAccess) {
-        const nodes = await prisma.orgStructure.findMany({
+        const companyNodes = await prisma.orgStructure.findMany({
           where: { companyId },
           select: {
             nodeName: true,
@@ -2300,12 +2300,14 @@ export class UserDbController {
             },
           },
         });
+
+        const nodes = companyNodes.map((node) => ({
+          ...node,
+          roleCode: globalAccess.roleCode,
+        }));
+
         return res.status(200).json({
           nodes,
-          access: {
-            designation,
-            isGlobalUser: !!globalAccess,
-          },
         });
       } else {
         if (!subCategory) {
@@ -2340,7 +2342,10 @@ export class UserDbController {
         });
 
         const nodes = userAccesses
-          .map((ua) => ua.orgStructure)
+          .map((ua) => ({
+            ...ua.orgStructure,
+            roleCode: ua.roleCode,
+          }))
           .filter(
             (node, index, self) =>
               index === self.findIndex((t) => t.nodePath === node.nodePath),
@@ -2348,10 +2353,6 @@ export class UserDbController {
 
         return res.status(200).json({
           nodes,
-          access: {
-            designation,
-            isGlobalUser: !!globalAccess,
-          },
         });
       }
     } catch (error) {

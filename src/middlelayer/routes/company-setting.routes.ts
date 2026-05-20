@@ -57,7 +57,7 @@ router.post(
 );
 router.post(
   '/user/fetch-company-nodes',
-  authorize('view'),
+  authorize('initiate'),
   UserController.fetchCompanyNodes,
 );
 router.post(

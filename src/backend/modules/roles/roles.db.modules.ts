@@ -1,6 +1,13 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 
+const SYSTEM_ROLE_CODE = 'SAAS_ADMIN';
+const CORP_ADMIN_ROLE_CODE = 'CORP_ADMIN';
+const CORP_ADMIN_VISIBLE_TO_ROLE_CODES = [
+  SYSTEM_ROLE_CODE,
+  CORP_ADMIN_ROLE_CODE,
+];
+
 /**
  * Controller for managing Role-Based Access Control (RBAC) roles.
  * Defines the permissions and capabilities available to users across different modules.
@@ -63,9 +70,24 @@ export class RolesDbController {
    */
   static async fetchAllRoles(req: Request, res: Response, next: NextFunction) {
     try {
+      const { userId, companyId } = req.body;
+      const privilegedAccess = userId
+        ? await prisma.userAccess.findFirst({
+            where: {
+              userId,
+              ...(companyId ? { companyId } : {}),
+              roleCode: { in: CORP_ADMIN_VISIBLE_TO_ROLE_CODES },
+            },
+            select: { id: true },
+          })
+        : null;
+      const hiddenRoleCodes = privilegedAccess
+        ? [SYSTEM_ROLE_CODE]
+        : [SYSTEM_ROLE_CODE, CORP_ADMIN_ROLE_CODE];
+
       const roles = await prisma.roles.findMany({
         where: {
-          roleCode: { not: 'SAAS_ADMIN' },
+          roleCode: { notIn: hiddenRoleCodes },
         },
       });
       res.status(200).json(roles);
