@@ -61,18 +61,23 @@ export class NodeAccessUtil {
       }
 
       if (nodes.length === 0) {
-        // If no specific nodes were resolved, check if the user has broad
-        // company-level initiation access (Global Access or SAAS_ADMIN).
-        const hasGlobal = await this.hasGlobalInitiateAccess(userId, companyId);
+        // Discovery-style requests may not carry a target node yet. In that
+        // case, allow any active primary or secondary module access that can
+        // initiate, plus global access and SAAS_ADMIN.
+        const hasModuleAccess = await this.hasAnyInitiateAccess(
+          userId,
+          companyId,
+          module,
+        );
 
-        if (hasGlobal) {
+        if (hasModuleAccess) {
           return true;
         }
 
-        // Only enforce node-scoped restriction if the user DOES NOT have global access.
+        // Only enforce node-scoped restriction if the user has no initiate access.
         if (this.NODE_SCOPED_INITIATE_MODULES.has(module)) {
           console.warn(
-            `[NodeAccess] Missing node context for '${module}' initiate request and user ${userId} lacks global access`,
+            `[NodeAccess] Missing node context for '${module}' initiate request and user ${userId} lacks initiate access`,
           );
           return false;
         }
@@ -190,9 +195,10 @@ export class NodeAccessUtil {
     };
   }
 
-  private static async hasGlobalInitiateAccess(
+  private static async hasAnyInitiateAccess(
     userId: string,
     companyId: string,
+    module: string,
   ): Promise<boolean> {
     const access = await prisma.userAccess.findFirst({
       where: {
@@ -203,8 +209,18 @@ export class NodeAccessUtil {
             some: { companyId, status: Status.ACTIVE },
           },
         },
-        OR: [{ roleCode: 'SAAS_ADMIN' }, { isGlobalAccess: true }],
+        OR: [
+          { roleCode: 'SAAS_ADMIN' },
+          { isGlobalAccess: true },
+          {
+            role: {
+              subCategory: module,
+              initiate: true,
+            },
+          },
+        ],
       },
+      select: { id: true },
     });
 
     return !!access;
