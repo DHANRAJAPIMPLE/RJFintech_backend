@@ -24,13 +24,18 @@ export type UserCompanyNode = {
   roleName: string;
 };
 
+export type UserCompanyNodeInternal = Omit<UserCompanyNode, 'roleName'> & {
+  roleName?: string;
+  roleCode?: string;
+};
+
 export type FetchCompanyNodesInternalResponse =
   | {
-      nodes?: UserCompanyNode[];
+      nodes?: UserCompanyNodeInternal[];
       message?: string;
       error?: string;
     }
-  | UserCompanyNode[];
+  | UserCompanyNodeInternal[];
 
 export type FetchCompanyNodesResponse = {
   message: 'User nodes fetched successfully!' | 'User nodes not found';

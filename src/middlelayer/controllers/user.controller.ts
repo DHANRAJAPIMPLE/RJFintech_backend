@@ -28,6 +28,7 @@ import {
 import type {
   FetchCompanyNodesInternalResponse,
   FetchCompanyNodesResponse,
+  UserCompanyNode,
   FetchActiveUsersResponse,
   FetchAndProcessUsersResult,
   FetchPendingUsersResponse,
@@ -584,7 +585,13 @@ export class UserController {
         );
       }
 
-      const nodes = Array.isArray(data) ? data : data?.nodes || [];
+      const rawNodes = Array.isArray(data) ? data : data?.nodes || [];
+      const nodes: UserCompanyNode[] = rawNodes.map(
+        ({ roleCode, roleName, ...node }) => ({
+          ...node,
+          roleName: roleName || roleCode || '',
+        }),
+      );
 
       const response: FetchCompanyNodesResponse = {
         message:
