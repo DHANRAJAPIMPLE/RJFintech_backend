@@ -6,11 +6,122 @@ import { getPagination } from '../../../shared/utils/pagination.util';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 
+type TextFilterOption = {
+  label: string;
+  value: string;
+};
+
+type NodeFilterOption = {
+  label: string;
+  value: string;
+  nodeName: string;
+  nodePath: string;
+  nodeType: string | null;
+};
+
+type ManagerFilterOption = {
+  label: string;
+  value: string;
+  id: string | null;
+  name: string | null;
+  email: string;
+};
+
 /**
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
  * Handles production user data and pending user requests.
  */
 export class UserDbController {
+  private static normalizeFilterText(value: unknown) {
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim();
+    return normalized || null;
+  }
+
+  private static addTextFilterOption(
+    optionMap: Map<string, TextFilterOption>,
+    value: unknown,
+  ) {
+    const normalizedValue = UserDbController.normalizeFilterText(value);
+    if (!normalizedValue) return;
+
+    const key = normalizedValue.toLowerCase();
+    if (!optionMap.has(key)) {
+      optionMap.set(key, {
+        label: normalizedValue,
+        value: normalizedValue,
+      });
+    }
+  }
+
+  private static addNodeFilterOption(
+    optionMap: Map<string, NodeFilterOption>,
+    node: {
+      nodeName?: unknown;
+      nodePath?: unknown;
+      nodeType?: unknown;
+    } | null,
+  ) {
+    if (!node) return null;
+
+    const nodePath = UserDbController.normalizeFilterText(node.nodePath);
+    if (!nodePath) return null;
+
+    const nodeName =
+      UserDbController.normalizeFilterText(node.nodeName) || nodePath;
+    const nodeType = UserDbController.normalizeFilterText(node.nodeType);
+    const key = nodePath.toLowerCase();
+
+    if (!optionMap.has(key)) {
+      optionMap.set(key, {
+        label: nodeName,
+        value: nodePath,
+        nodeName,
+        nodePath,
+        nodeType,
+      });
+    }
+
+    return optionMap.get(key) || null;
+  }
+
+  private static addManagerFilterOption(
+    optionMap: Map<string, ManagerFilterOption>,
+    manager: {
+      id?: unknown;
+      name?: unknown;
+      email?: unknown;
+    } | null,
+  ) {
+    if (!manager) return;
+
+    const email = UserDbController.normalizeFilterText(manager.email);
+    if (!email) return;
+
+    const name = UserDbController.normalizeFilterText(manager.name);
+    const id = UserDbController.normalizeFilterText(manager.id);
+    const key = email.toLowerCase();
+
+    if (!optionMap.has(key)) {
+      optionMap.set(key, {
+        label: name ? `${name} (${email})` : email,
+        value: email,
+        id,
+        name,
+        email,
+      });
+    }
+  }
+
+  private static sortFilterOptions<T extends { label: string }>(
+    optionMap: Map<string, T>,
+  ) {
+    return Array.from(optionMap.values()).sort((a, b) =>
+      a.label.localeCompare(b.label),
+    );
+  }
+
   private static normalizePageDirection(value: unknown): 'next' | 'prev' {
     return typeof value === 'string' &&
       ['prev', 'previous'].includes(value.trim().toLowerCase())
@@ -826,6 +937,308 @@ export class UserDbController {
           listType === 'active'
             ? activePage.pageInfo
             : (pendingResult as any).pageInfo || null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Fetches unique user filter options for ACTIVE users and PENDING user requests.
+   */
+  static async fetchUserFilterOptions(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { companyCode, companyId } = req.body;
+
+      const company = companyId
+        ? await prisma.company.findUnique({
+            where: { id: companyId },
+            select: { id: true, companyCode: true },
+          })
+        : companyCode
+          ? await prisma.company.findUnique({
+              where: { companyCode },
+              select: { id: true, companyCode: true },
+            })
+          : null;
+
+      if (!company) {
+        throw new AppError('Company not found', 404);
+      }
+
+      const resolvedCompanyId = company.id;
+
+      const [activeUsers, pendingOnboardings] = await Promise.all([
+        prisma.user.findMany({
+          where: {
+            userMappings: {
+              some: {
+                companyId: resolvedCompanyId,
+                status: 'ACTIVE',
+              },
+            },
+          },
+          select: {
+            userMappings: {
+              where: {
+                companyId: resolvedCompanyId,
+                status: 'ACTIVE',
+              },
+              select: {
+                designation: true,
+                manager: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+            userAccesses: {
+              where: { companyId: resolvedCompanyId },
+              select: {
+                accessType: true,
+                isGlobalAccess: true,
+                role: {
+                  select: {
+                    category: true,
+                    subCategory: true,
+                  },
+                },
+                orgStructure: {
+                  select: {
+                    nodeName: true,
+                    nodePath: true,
+                    nodeType: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+        prisma.userOnboarding.findMany({
+          where: {
+            companyId: resolvedCompanyId,
+            status: 'PENDING',
+          },
+          select: {
+            data: true,
+          },
+        }),
+      ]);
+
+      const pendingManagerEmails = new Set<string>();
+      const pendingNodePaths = new Set<string>();
+
+      pendingOnboardings.forEach((onboarding) => {
+        const dataBlob = onboarding.data as any;
+        const basicDetails = dataBlob?.basicDetails || {};
+        const permissions = Array.isArray(dataBlob?.permissions)
+          ? dataBlob.permissions
+          : [];
+        const managerEmail = UserDbController.normalizeFilterText(
+          basicDetails.reportingManager,
+        );
+
+        if (managerEmail) {
+          pendingManagerEmails.add(managerEmail.toLowerCase());
+        }
+
+        permissions.forEach((permission: any) => {
+          const nodePath = UserDbController.normalizeFilterText(
+            permission?.nodePath,
+          );
+          if (nodePath) {
+            pendingNodePaths.add(nodePath);
+          }
+        });
+      });
+
+      const [pendingManagers, pendingNodes] = await Promise.all([
+        pendingManagerEmails.size > 0
+          ? prisma.user.findMany({
+              where: {
+                email: {
+                  in: Array.from(pendingManagerEmails),
+                  mode: 'insensitive',
+                },
+              },
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            })
+          : Promise.resolve([]),
+        pendingNodePaths.size > 0
+          ? prisma.orgStructure.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                nodePath: {
+                  in: Array.from(pendingNodePaths),
+                },
+              },
+              select: {
+                nodeName: true,
+                nodePath: true,
+                nodeType: true,
+              },
+            })
+          : Promise.resolve([]),
+      ]);
+
+      const pendingManagerByEmail = new Map(
+        pendingManagers.map((manager) => [
+          manager.email.toLowerCase(),
+          manager,
+        ]),
+      );
+      const pendingNodeByPath = new Map(
+        pendingNodes.map((node) => [node.nodePath.toLowerCase(), node]),
+      );
+
+      const designationOptions = new Map<string, TextFilterOption>();
+      const departmentOptions = new Map<string, NodeFilterOption>();
+      const categoryOptions = new Map<string, TextFilterOption>();
+      const subCategoryOptions = new Map<string, TextFilterOption>();
+      const primaryNodeOptions = new Map<string, NodeFilterOption>();
+      const secondaryNodeOptions = new Map<string, NodeFilterOption>();
+      const reportingManagerOptions = new Map<string, ManagerFilterOption>();
+
+      const addDepartmentIfNeeded = (node: NodeFilterOption | null) => {
+        if (node?.nodeType === 'DEPARTMENT') {
+          UserDbController.addNodeFilterOption(departmentOptions, node);
+        }
+      };
+
+      activeUsers.forEach((user) => {
+        const mapping = user.userMappings[0];
+
+        UserDbController.addTextFilterOption(
+          designationOptions,
+          mapping?.designation,
+        );
+        UserDbController.addManagerFilterOption(
+          reportingManagerOptions,
+          mapping?.manager || null,
+        );
+
+        user.userAccesses.forEach((access) => {
+          UserDbController.addTextFilterOption(
+            categoryOptions,
+            access.role?.category,
+          );
+          UserDbController.addTextFilterOption(
+            subCategoryOptions,
+            access.role?.subCategory,
+          );
+
+          if (access.isGlobalAccess || access.accessType === 'PRIMARY') {
+            const node = UserDbController.addNodeFilterOption(
+              primaryNodeOptions,
+              access.orgStructure,
+            );
+            addDepartmentIfNeeded(node);
+          } else if (access.accessType === 'SECONDARY') {
+            const node = UserDbController.addNodeFilterOption(
+              secondaryNodeOptions,
+              access.orgStructure,
+            );
+            addDepartmentIfNeeded(node);
+          }
+        });
+      });
+
+      pendingOnboardings.forEach((onboarding) => {
+        const dataBlob = onboarding.data as any;
+        const basicDetails = dataBlob?.basicDetails || {};
+        const permissions = Array.isArray(dataBlob?.permissions)
+          ? dataBlob.permissions
+          : [];
+
+        UserDbController.addTextFilterOption(
+          designationOptions,
+          basicDetails.designation,
+        );
+
+        const managerEmail = UserDbController.normalizeFilterText(
+          basicDetails.reportingManager,
+        );
+        if (managerEmail) {
+          const manager = pendingManagerByEmail.get(
+            managerEmail.toLowerCase(),
+          ) || {
+            email: managerEmail,
+          };
+          UserDbController.addManagerFilterOption(
+            reportingManagerOptions,
+            manager,
+          );
+        }
+
+        permissions.forEach((permission: any) => {
+          UserDbController.addTextFilterOption(
+            categoryOptions,
+            permission?.roleCategory,
+          );
+          UserDbController.addTextFilterOption(
+            subCategoryOptions,
+            permission?.roleSubCategory,
+          );
+
+          const pendingNodePath = UserDbController.normalizeFilterText(
+            permission?.nodePath,
+          );
+          const nodeFromDb = pendingNodePath
+            ? pendingNodeByPath.get(pendingNodePath.toLowerCase())
+            : null;
+          const node = {
+            nodeName: nodeFromDb?.nodeName || permission?.nodeName,
+            nodePath: nodeFromDb?.nodePath || permission?.nodePath,
+            nodeType: nodeFromDb?.nodeType || permission?.nodeType,
+          };
+          const isPrimary =
+            permission?.isGlobal === true ||
+            permission?.isGlobalAccess === true ||
+            permission?.accessType === 'PRIMARY';
+
+          if (isPrimary) {
+            const primaryNode = UserDbController.addNodeFilterOption(
+              primaryNodeOptions,
+              node,
+            );
+            addDepartmentIfNeeded(primaryNode);
+          } else {
+            const secondaryNode = UserDbController.addNodeFilterOption(
+              secondaryNodeOptions,
+              node,
+            );
+            addDepartmentIfNeeded(secondaryNode);
+          }
+        });
+      });
+
+      res.status(200).json({
+        message: 'User filter options fetched successfully!',
+        code: 200,
+        companyCode: company.companyCode,
+        data: {
+          designation: UserDbController.sortFilterOptions(designationOptions),
+          department: UserDbController.sortFilterOptions(departmentOptions),
+          category: UserDbController.sortFilterOptions(categoryOptions),
+          subCategory: UserDbController.sortFilterOptions(subCategoryOptions),
+          primaryNode: UserDbController.sortFilterOptions(primaryNodeOptions),
+          secondaryNode:
+            UserDbController.sortFilterOptions(secondaryNodeOptions),
+          reportingManager: UserDbController.sortFilterOptions(
+            reportingManagerOptions,
+          ),
+        },
       });
     } catch (error) {
       next(error);

@@ -44,6 +44,11 @@ router.post(
   authorize('view', 'USER_ACC'),
   UserController.fetchPendingUsers,
 );
+router.post(
+  '/user-filter-option',
+  authorize('view', 'USER_ACC'),
+  UserController.fetchUserFilterOptions,
+);
 
 router.post(
   '/user/fetch-history',

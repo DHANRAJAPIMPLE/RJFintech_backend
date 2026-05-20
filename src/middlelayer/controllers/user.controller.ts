@@ -57,6 +57,7 @@ export class UserController {
         topCursor,
         offset,
         limit,
+        page: req.body?.page,
       },
     );
     if (!ok) {
@@ -139,6 +140,43 @@ export class UserController {
         pendingCount,
         pageInfo,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async fetchUserFilterOptions(
+    req: Request & { user?: { companyId?: string } },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const companyId = req.user?.companyId;
+      const companyCode =
+        typeof req.body?.companyCode === 'string'
+          ? req.body.companyCode.trim()
+          : undefined;
+
+      if (!companyId && !companyCode) {
+        throw new AppError('Company context is required', 400);
+      }
+
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendUrl}/internal/user/filter-option`,
+        {
+          companyId,
+          companyCode,
+        },
+      );
+
+      if (!ok) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch user filter options',
+          status,
+        );
+      }
+
+      res.status(200).json(data);
     } catch (error) {
       next(error);
     }
