@@ -28,6 +28,12 @@ type ManagerFilterOption = {
   email: string;
 };
 
+type CompanyNodeWorkflowOption = {
+  levelsHash: string;
+  name: string;
+  alias: string;
+};
+
 /**
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
  * Handles production user data and pending user requests.
@@ -150,6 +156,44 @@ export class UserDbController {
     return Array.from(optionMap.values()).sort((a, b) =>
       a.label.localeCompare(b.label),
     );
+  }
+
+  private static async fetchDefaultWorkflowOption(
+    companyId: string,
+    subCategory: unknown,
+  ): Promise<CompanyNodeWorkflowOption | null> {
+    const normalizedSubCategory =
+      UserDbController.normalizeFilterText(subCategory);
+    if (!normalizedSubCategory) return null;
+
+    return prisma.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: normalizedSubCategory,
+        name: { contains: 'DEFAULT' },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        levelsHash: true,
+        name: true,
+        alias: true,
+      },
+    });
+  }
+
+  private static withDefaultWorkflowOption<
+    T extends { workflows?: CompanyNodeWorkflowOption[] | null },
+  >(node: T, defaultWorkflow: CompanyNodeWorkflowOption | null) {
+    const workflows = node.workflows || [];
+
+    return {
+      ...node,
+      workflows:
+        workflows.length > 0 || !defaultWorkflow
+          ? workflows
+          : [defaultWorkflow],
+    };
   }
 
   private static normalizePageDirection(value: unknown): 'next' | 'prev' {
@@ -2262,6 +2306,8 @@ export class UserDbController {
   ) {
     try {
       const { userId, companyId, subCategory } = req.body;
+      const workflowSubCategory =
+        UserDbController.normalizeFilterText(subCategory);
 
       const userMapping = await prisma.userMapping.findUnique({
         where: {
@@ -2290,6 +2336,12 @@ export class UserDbController {
         },
       });
 
+      const defaultWorkflow =
+        await UserDbController.fetchDefaultWorkflowOption(
+          companyId,
+          workflowSubCategory,
+        );
+
       if (globalAccess) {
         const companyNodes = await prisma.orgStructure.findMany({
           where: { companyId },
@@ -2298,7 +2350,11 @@ export class UserDbController {
             nodePath: true,
             nodeType: true,
             workflows: {
-              where: { subModule: subCategory },
+              where: {
+                ...(workflowSubCategory
+                  ? { subModule: workflowSubCategory }
+                  : {}),
+              },
               select: {
                 levelsHash: true,
                 name: true,
@@ -2309,7 +2365,10 @@ export class UserDbController {
         });
 
         const nodes = companyNodes.map((node) => ({
-          ...node,
+          ...UserDbController.withDefaultWorkflowOption(
+            node,
+            defaultWorkflow,
+          ),
           roleName: globalAccess.role?.roleName || globalAccess.roleCode,
         }));
 
@@ -2317,7 +2376,7 @@ export class UserDbController {
           nodes,
         });
       } else {
-        if (!subCategory) {
+        if (!workflowSubCategory) {
           return res.status(200).json([]);
         }
 
@@ -2326,7 +2385,7 @@ export class UserDbController {
             userId,
             companyId,
             role: {
-              subCategory: subCategory,
+              subCategory: workflowSubCategory,
             },
           },
           include: {
@@ -2341,7 +2400,7 @@ export class UserDbController {
                 nodePath: true,
                 nodeType: true,
                 workflows: {
-                  where: { subModule: subCategory },
+                  where: { subModule: workflowSubCategory },
                   select: {
                     levelsHash: true,
                     name: true,
@@ -2355,7 +2414,10 @@ export class UserDbController {
 
         const nodes = userAccesses
           .map((ua) => ({
-            ...ua.orgStructure,
+            ...UserDbController.withDefaultWorkflowOption(
+              ua.orgStructure,
+              defaultWorkflow,
+            ),
             roleName: ua.role?.roleName || ua.roleCode,
           }))
           .filter(
