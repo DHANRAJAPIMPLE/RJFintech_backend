@@ -5,6 +5,7 @@ import { AppError } from '../../middlewares/error.middleware';
 import { getPagination } from '../../../shared/utils/pagination.util';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
+import { HistoryUserUtil } from '../../utils/history-user.util';
 
 type TextFilterOption = {
   label: string;
@@ -84,6 +85,35 @@ export class UserDbController {
     }
 
     return optionMap.get(key) || null;
+  }
+
+  private static addDepartmentFilterOption(
+    optionMap: Map<string, NodeFilterOption>,
+    node: {
+      nodeName?: unknown;
+      nodePath?: unknown;
+      nodeType?: unknown;
+    } | null,
+  ) {
+    if (!node) return;
+
+    const nodeName = UserDbController.normalizeFilterText(node.nodeName);
+    if (!nodeName) return;
+
+    const nodePath =
+      UserDbController.normalizeFilterText(node.nodePath) || nodeName;
+    const nodeType = UserDbController.normalizeFilterText(node.nodeType);
+    const key = nodeName.toLowerCase();
+
+    if (!optionMap.has(key)) {
+      optionMap.set(key, {
+        label: nodeName,
+        value: nodeName,
+        nodeName,
+        nodePath,
+        nodeType,
+      });
+    }
   }
 
   private static addManagerFilterOption(
@@ -571,7 +601,7 @@ export class UserDbController {
       const email = basic.email;
       const managerEmail = basic.reportingManager;
       const init = historyMap.get(`${email}_INITIATE`);
-      const approve = historyMap.get(`${email}_APPROVE`);
+      const approve = historyMap.get(`${email}_APPROVED`);
       const managerInfo = managerMap.get(managerEmail);
       const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
 
@@ -1110,10 +1140,8 @@ export class UserDbController {
       const secondaryNodeOptions = new Map<string, NodeFilterOption>();
       const reportingManagerOptions = new Map<string, ManagerFilterOption>();
 
-      const addDepartmentIfNeeded = (node: NodeFilterOption | null) => {
-        if (node?.nodeType === 'DEPARTMENT') {
-          UserDbController.addNodeFilterOption(departmentOptions, node);
-        }
+      const addDepartment = (node: NodeFilterOption | null) => {
+        UserDbController.addDepartmentFilterOption(departmentOptions, node);
       };
 
       activeUsers.forEach((user) => {
@@ -1143,13 +1171,13 @@ export class UserDbController {
               primaryNodeOptions,
               access.orgStructure,
             );
-            addDepartmentIfNeeded(node);
+            addDepartment(node);
           } else if (access.accessType === 'SECONDARY') {
             const node = UserDbController.addNodeFilterOption(
               secondaryNodeOptions,
               access.orgStructure,
             );
-            addDepartmentIfNeeded(node);
+            addDepartment(node);
           }
         });
       });
@@ -1212,13 +1240,13 @@ export class UserDbController {
               primaryNodeOptions,
               node,
             );
-            addDepartmentIfNeeded(primaryNode);
+            addDepartment(primaryNode);
           } else {
             const secondaryNode = UserDbController.addNodeFilterOption(
               secondaryNodeOptions,
               node,
             );
-            addDepartmentIfNeeded(secondaryNode);
+            addDepartment(secondaryNode);
           }
         });
       });
@@ -1955,7 +1983,7 @@ export class UserDbController {
    */
   static async getUserHistory(req: Request, res: Response, next: NextFunction) {
     try {
-      const { email, companyCode, companyId } = req.body;
+      const { email, companyCode, companyId, userId: viewerUserId } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -2080,25 +2108,24 @@ export class UserDbController {
           id: true,
           name: true,
           email: true,
-          userAccesses: {
-            select: { roleCode: true },
-          },
         },
       });
 
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        ...Array.from(allApproverIds),
+        ...activeHistory.map((h) => h.eventUserId).filter(Boolean),
+      ]);
+
       const approverMap = new Map(
-        approverDetails.map((u) => {
-          const isSaasAdmin = u.userAccesses.some(
-            (a) => a.roleCode === 'SAAS_ADMIN',
-          );
-          return [
+        approverDetails.map((u) => [
+          u.id,
+          HistoryUserUtil.formatAuditUser(
+            u,
             u.id,
-            {
-              name: isSaasAdmin ? 'Teams' : u.name,
-              email: isSaasAdmin ? 'Teams' : u.email,
-            },
-          ];
-        }),
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+        ]),
       );
 
       const resultList: any[] = [];
@@ -2133,14 +2160,6 @@ export class UserDbController {
 
       // 4. Add actual history entries
       const formattedHistory = activeHistory.map((h) => {
-        const initiatorMapping = h.user?.userMappings?.[0];
-        const initiatorAccesses = h.user?.userAccesses || [];
-
-        const isSaasAdmin = initiatorAccesses.some(
-          (a) => a.roleCode === 'SAAS_ADMIN',
-        );
-        const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
-
         const levels = h.reqId ? workflowMap.get(h.reqId) : null;
         let workflowStatus = null;
 
@@ -2187,12 +2206,12 @@ export class UserDbController {
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          user: isTeams
-            ? { name: 'Teams', email: 'Teams' }
-            : {
-                name: h.user?.name || 'System',
-                email: h.user?.email || 'system@internal',
-              },
+          user: HistoryUserUtil.formatAuditUser(
+            h.user,
+            h.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
         };
       });
 

@@ -87,6 +87,7 @@ model UserHistory {
   company     Company   @relation("CompanyUserHistoryRel", fields: [companyId], references: [id])
   user        User      @relation("UserHistoryRel", fields: [eventUserId], references: [id])
 
+  @@index([companyId])
   @@map("user_history")
 }
 
@@ -97,6 +98,8 @@ model CompanyHistory {
   eventUserId String    @map("event_user_id")
   createdAt   DateTime  @default(now()) @map("created_at")
   user        User      @relation("UserCompanyHistoryRel", fields: [eventUserId], references: [id])
+  
+  @@index([companyCode])
 
   @@map("company_history")
 }
@@ -147,6 +150,7 @@ model UserActivity {
   user          User      @relation(fields: [userId], references: [id])
 
   @@unique([userId, companyId])
+  @@index([companyId, userId])
   @@map("user_activity")
 }
 
@@ -163,6 +167,9 @@ model UserOnboarding {
   eligibleApprovers String[]         @default([]) @map("eligible_approvers")
   company           Company          @relation("UserOnboardingRel", fields: [companyId], references: [id])
   group             GroupCompany?    @relation("UserOnboardingRel", fields: [groupId], references: [id])
+
+  @@index([companyId])
+  @@index([companyId, status])
 
   @@map("user_onboarding")
 }
@@ -197,6 +204,8 @@ model Notification {
   createdByUser     User               @relation("NotificationCreatedBy", fields: [createdBy], references: [id])
   notificationUsers NotificationUser[]
 
+  @@index([companyId])
+
   @@map("notifications")
 }
 
@@ -208,11 +217,18 @@ model NotificationUser {
   status         String       @default("UNREAD")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
+
   company        Company      @relation(fields: [companyId], references: [id])
   notification   Notification @relation(fields: [notificationId], references: [id])
   user           User         @relation(fields: [userId], references: [id])
 
   @@unique([userId, notificationId])
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([notificationId])
+  @@index([companyId, userId])
+  @@index([companyId, userId, status])
   @@map("notification_users")
 }
 
@@ -228,7 +244,9 @@ model OrgStructureReq {
   eligibleApprovers String[]         @default([]) @map("eligible_approvers")
   orgHistories      OrgHistory[]     @relation("OrgRequestHistory")
   company           Company          @relation(fields: [companyId], references: [id])
-
+  
+  @@index([companyId])
+  @@index([companyId, status])
   @@map("org_structure_req")
 }
 
@@ -244,7 +262,8 @@ model OrgHistory {
   company     Company         @relation("CompanyOrgHistoryRel", fields: [companyId], references: [id])
   user        User            @relation("UserOrgHistoryRel", fields: [eventUserId], references: [id])
   orgReq      OrgStructureReq @relation("OrgRequestHistory", fields: [orgReqId], references: [id])
-
+  
+  @@index([orgReqId])
   @@map("org_history")
 }
 
@@ -261,6 +280,10 @@ model OrgStructure {
   children   OrgStructure[] @relation("ParentChild")
   userAccess UserAccess[]
   workflows  Workflow[]
+  
+  @@index([companyId])
+  @@index([companyId, parentId])
+
 
   @@map("org_structure")
 }
@@ -300,6 +323,11 @@ model UserAccess {
   user           User         @relation(fields: [userId], references: [id])
 
   @@unique([userId, roleCode, companyId, nodeId])
+  @@index([companyId])
+  @@index([userId])
+  @@index([companyId, userId])
+
+
   @@map("user_access")
 }
 
@@ -321,6 +349,9 @@ model Workflow {
   levels         WorkflowLevel[]
 
   @@unique([companyId, nodeId, module, subModule, levelsHash])
+  @@index([nodeId])
+  @@index([companyId])
+  @@index([roleCode])
   @@map("workflow")
 }
 
@@ -335,7 +366,7 @@ model WorkflowApprover {
   status         OnboardingStatus @default(PENDING)
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
-
+  @@index([workflowId])
   @@map("workflow_approver")
 }
 
@@ -349,6 +380,7 @@ model WorkflowLevel {
   workflow     Workflow      @relation(fields: [workflowId], references: [id])
 
   @@unique([workflowId, level])
+   @@index([workflowId])
   @@map("workflow_level")
 }
 
@@ -386,7 +418,8 @@ model WorkflowReqHistory {
   company       Company     @relation("CompanyWorkflowHistoryRel", fields: [companyId], references: [id])
   user          User        @relation("UserWorkflowHistoryRel", fields: [eventUserId], references: [id])
   workflowReq   WorkflowReq @relation("WorkflowRequestHistory", fields: [workflowReqId], references: [id])
-
+  @@index([levelsHash, companyId])
+  @@index([companyId])
   @@map("workflow_req_history")
 }
 

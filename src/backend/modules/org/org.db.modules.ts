@@ -3,6 +3,7 @@ import { prisma, ltree } from '../../lib/prisma';
 import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
+import { HistoryUserUtil } from '../../utils/history-user.util';
 
 /**
  * Controller for managing the organizational hierarchy (nodes) for companies.
@@ -582,7 +583,13 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, nodeName, nodePath } = req.body;
+      const {
+        companyCode,
+        companyId,
+        nodeName,
+        nodePath,
+        userId: viewerUserId,
+      } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -603,7 +610,22 @@ export class OrgStructureDbController {
         let parentPathForFilter = nodePath;
         let isRootSearch = false;
 
-        if (nodeName && nodePath) {
+        if (nodePath) {
+          const targetNode = await prisma.orgStructure.findFirst({
+            where: {
+              companyId: resolvedCompanyId,
+              nodePath,
+            },
+            select: { nodeType: true },
+          });
+
+          if (targetNode?.nodeType === 'ROOT') {
+            parentPathForFilter = undefined;
+            isRootSearch = true;
+          }
+        }
+
+        if (!isRootSearch && nodeName && nodePath) {
           const safeName = nodeName
             .trim()
             .replace(/[^a-zA-Z0-9_]/g, '_')
@@ -760,24 +782,22 @@ export class OrgStructureDbController {
           id: true,
           name: true,
           email: true,
-          userAccesses: {
-            select: { roleCode: true },
-          },
         },
       });
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        ...Array.from(allApproverIds),
+        ...histories.map((h) => h.eventUserId).filter(Boolean),
+      ]);
       const approverMap = new Map(
-        approverDetails.map((u) => {
-          const isSaasAdmin = u.userAccesses.some(
-            (a) => a.roleCode === 'SAAS_ADMIN',
-          );
-          return [
+        approverDetails.map((u) => [
+          u.id,
+          HistoryUserUtil.formatAuditUser(
+            u,
             u.id,
-            {
-              name: isSaasAdmin ? 'Teams' : u.name,
-              email: isSaasAdmin ? 'Teams' : u.email,
-            },
-          ];
-        }),
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+        ]),
       );
 
       const resultList: any[] = [];
@@ -799,12 +819,16 @@ export class OrgStructureDbController {
 
               const data = h.orgReq?.data as any;
               resultList.push({
+                orgReqId: h.orgReqId,
                 companyCode: h.company.companyCode,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
+                nodeId: data?.nodeId || data?.orgStructureId || null,
+                orgStructureId: data?.orgStructureId || data?.nodeId || null,
                 newNodeName: data?.newNodeName || null,
                 nodeType: data?._nodeType || data?.nodeType || null,
+                nodePath: data?.nodePath || null,
                 parentNodePath: data?.parentNode?.nodePath || 'ROOT',
                 parentNodeName: data?.parentNode?.nodeName || 'ROOT',
               });
@@ -817,12 +841,6 @@ export class OrgStructureDbController {
       // 4. Format history for easy display
       const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;
-        const initiatorAccesses = h.user?.userAccesses || [];
-
-        const isSaasAdmin = initiatorAccesses.some(
-          (a) => a.roleCode === 'SAAS_ADMIN',
-        );
-        const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
 
         const levels = h.orgReqId ? workflowMap.get(h.orgReqId) : null;
         let workflowStatus = null;
@@ -864,19 +882,23 @@ export class OrgStructureDbController {
         }
 
         return {
+          orgReqId: h.orgReqId,
           companyCode: h.company.companyCode,
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          user: isTeams
-            ? { name: 'Teams', email: 'Teams' }
-            : {
-                name: h.user?.name || 'System',
-                email: h.user?.email || 'system@internal',
-              },
+          user: HistoryUserUtil.formatAuditUser(
+            h.user,
+            h.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+          nodeId: data?.nodeId || data?.orgStructureId || null,
+          orgStructureId: data?.orgStructureId || data?.nodeId || null,
           newNodeName: data?.newNodeName || null,
           nodeType: data?._nodeType || data?.nodeType || null,
+          nodePath: data?.nodePath || null,
           parentNodePath: data?.parentNode?.nodePath || 'ROOT',
           parentNodeName: data?.parentNode?.nodeName || 'ROOT',
         };
@@ -967,6 +989,8 @@ export class OrgStructureDbController {
 
       // 4. Remove internal UUIDs and format for the tree UI
       const safeNodes = nodes.map((node) => ({
+        id: node.id,
+        nodeId: node.id,
         nodeName: node.nodeName,
         nodeType: node.nodeType,
         nodePath: node.nodePath,

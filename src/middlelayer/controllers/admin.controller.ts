@@ -23,8 +23,6 @@ import {
 import { CodeGenUtil } from '../utils/code-gen.util';
 
 export class AdminController {
-
-
   static async getGroupCompanies(
     req: AuthRequest,
     res: Response,
@@ -34,7 +32,7 @@ export class AdminController {
       // 1. Fetch raw data from Backend (5001)
       const { data, ok, status } = await internalPost<any>(
         `${config.backendCompanyUrl}/groups`,
-        {},
+        { userId: req.user?.id },
       );
 
       if (!ok) {
@@ -451,7 +449,7 @@ export class AdminController {
       // 1. Fetch history record
       const { data, ok, status } = await internalPost<any>(
         `${config.backendUrl}/internal/company/history`,
-        { companyCode },
+        { companyCode, userId: (req as any).user?.id },
       );
 
       if (!ok) {

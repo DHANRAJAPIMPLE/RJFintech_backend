@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
 import { AppError } from '../../middlewares/error.middleware';
 import { NotificationService } from '../notifications/notification.db.modules';
+import { HistoryUserUtil } from '../../utils/history-user.util';
 
 /**
  * Controller for managing company records, group associations, and the company onboarding lifecycle.
@@ -59,6 +60,9 @@ export class CompanyDbController {
     next: NextFunction,
   ) {
     try {
+      const viewerUserId =
+        typeof req.body?.userId === 'string' ? req.body.userId : null;
+
       // 1. Fetch groups and their companies (Active)
       const groups = await prisma.groupCompany.findMany({
         include: {
@@ -132,17 +136,26 @@ export class CompanyDbController {
           companyCode: { in: allCodes },
         },
         include: {
-          user: { select: { name: true, email: true } },
+          user: { select: { id: true, name: true, email: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
+
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds(
+        histories.map((h) => h.eventUserId).filter(Boolean),
+      );
 
       const historyMap = new Map();
       histories.forEach((h) => {
         const key = `${h.companyCode}_${h.event}`;
         if (!historyMap.has(key)) {
           historyMap.set(key, {
-            user: h.user,
+            user: HistoryUserUtil.formatAuditUser(
+              h.user,
+              h.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
             createdAt: h.createdAt,
           });
         }
@@ -151,7 +164,7 @@ export class CompanyDbController {
       // 5. Enhance Active data with history
       const enhancedGroups = groups.map((g: any) => {
         const initiateHistory = historyMap.get(`${g.groupCode}_INITIATE`);
-        const approveHistory = historyMap.get(`${g.groupCode}_APPROVE`);
+        const approveHistory = historyMap.get(`${g.groupCode}_APPROVED`);
 
         return {
           ...g,
@@ -164,7 +177,7 @@ export class CompanyDbController {
               `${cm.company.companyCode}_INITIATE`,
             );
             const compApprove = historyMap.get(
-              `${cm.company.companyCode}_APPROVE`,
+              `${cm.company.companyCode}_APPROVED`,
             );
             const signatories = cm.company.userAccesses.map((ua: any) => {
               const mapping = ua.user.userMappings.find(
@@ -203,7 +216,7 @@ export class CompanyDbController {
 
       const enhancedSoloCompanies = soloCompanies.map((c: any) => {
         const compInit = historyMap.get(`${c.companyCode}_INITIATE`);
-        const compApprove = historyMap.get(`${c.companyCode}_APPROVE`);
+        const compApprove = historyMap.get(`${c.companyCode}_APPROVED`);
         const signatories = c.userAccesses.map((ua: any) => {
           const mapping = ua.user.userMappings.find(
             (m: any) => m.companyId === c.id,
@@ -433,6 +446,16 @@ export class CompanyDbController {
           (onboarding.data as any)?.company?.name ||
           onboarding.companyCode ||
           notificationSubject;
+        const initiateHistory = onboarding.companyCode
+          ? await tx.companyHistory.findFirst({
+              where: {
+                companyCode: onboarding.companyCode,
+                event: 'INITIATE',
+              },
+              orderBy: { createdAt: 'desc' },
+            })
+          : null;
+        const initiatorId = initiateHistory?.eventUserId || approverId;
 
         // Authorization check
         if (
@@ -564,9 +587,9 @@ export class CompanyDbController {
             companyId: newCompany.id,
             status: 'APPROVED',
             data: {
-              newNodeName: company.name,
               nodeType: 'ROOT',
               parentNode: null,
+              newNodeName: company.name,
             },
             remarks: 'Initial root node created during company onboarding',
           },
@@ -579,6 +602,15 @@ export class CompanyDbController {
             nodeName: company.name,
             nodeType: 'ROOT',
             parentId: null,
+          },
+        });
+
+        await tx.orgHistory.create({
+          data: {
+            companyId: newCompany.id,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+            orgReqId: rootNodeReq.id,
           },
         });
 
@@ -611,6 +643,26 @@ export class CompanyDbController {
         ];
 
         for (const dwf of defaultWorkflows) {
+          const levelsHash = `DEFAULT_${dwf.subModule}_1M_1C_1`;
+          const workflowData = {
+            name: dwf.name,
+            module: 'SYSTEM_ACCESS',
+            subModule: dwf.subModule,
+            roleCode: dwf.roleCode,
+            nodeId: rootNode.id,
+            nodePath: rootNode.nodePath,
+            nodeName: rootNode.nodeName,
+            nodeType: rootNode.nodeType,
+            levelsHash,
+            alias: '1M_1C_1',
+            levels: {
+              1: {
+                approver1: 'NODE_APPROVER',
+                type: 'OR',
+              },
+            },
+          };
+
           const workflow = await tx.workflow.create({
             data: {
               name: dwf.name,
@@ -620,7 +672,7 @@ export class CompanyDbController {
               roleCode: dwf.roleCode,
               companyId: newCompany.id,
               nodeId: rootNode.id,
-              levelsHash: `DEFAULT_${dwf.subModule}_1M_1C_1`,
+              levelsHash,
               levels: {
                 create: [
                   {
@@ -631,6 +683,57 @@ export class CompanyDbController {
                 ],
               },
             },
+          });
+
+          const workflowReq = await tx.workflowReq.create({
+            data: {
+              companyId: newCompany.id,
+              nodeId: rootNode.id,
+              module: 'SYSTEM_ACCESS',
+              subModule: dwf.subModule,
+              levelsHash,
+              workflowId: workflow.id,
+              alias: '1M_1C_1',
+              status: 'APPROVED',
+              data: {
+                ...workflowData,
+                workflowId: workflow.id,
+              },
+              eligibleApprovers: [],
+            },
+          });
+
+          await tx.workflow.update({
+            where: { id: workflow.id },
+            data: { workflowReqIds: [workflowReq.id] },
+          });
+
+          await tx.workflowReq.update({
+            where: { id: workflowReq.id },
+            data: {
+              data: {
+                ...workflowData,
+                workflowId: workflow.id,
+                workflowReqId: workflowReq.id,
+              },
+            },
+          });
+
+          await tx.workflowReqHistory.createMany({
+            data: [
+              {
+                workflowReqId: workflowReq.id,
+                companyId: newCompany.id,
+                event: 'INITIATE',
+                eventUserId: initiatorId,
+              },
+              {
+                workflowReqId: workflowReq.id,
+                companyId: newCompany.id,
+                event: 'APPROVED',
+                eventUserId: approverId,
+              },
+            ],
           });
         }
 
@@ -668,7 +771,7 @@ export class CompanyDbController {
           const existingAccess = await tx.userAccess.findFirst({
             where: {
               userId: user.id,
-              roleCode: "CORP_ADMIN",
+              roleCode: 'CORP_ADMIN',
               companyId: newCompany.id,
               nodeId: rootNode.id,
             },
@@ -684,7 +787,7 @@ export class CompanyDbController {
           await tx.userAccess.create({
             data: {
               userId: user.id,
-              roleCode: "CORP_ADMIN",
+              roleCode: 'CORP_ADMIN',
               nodeId: rootNode.id,
               accessType: 'PRIMARY',
               companyId: newCompany.id,
@@ -768,21 +871,30 @@ export class CompanyDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode, userId: viewerUserId } = req.body;
 
       const histories = await prisma.companyHistory.findMany({
         where: { companyCode },
         include: {
-          user: { select: { name: true, email: true } },
+          user: { select: { id: true, name: true, email: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
+
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds(
+        histories.map((h) => h.eventUserId).filter(Boolean),
+      );
 
       const formattedHistories = histories.map((h) => ({
         companyCode: h.companyCode,
         event: h.event,
         createdAt: h.createdAt,
-        user: h.user,
+        user: HistoryUserUtil.formatAuditUser(
+          h.user,
+          h.eventUserId,
+          saasAdminUserIds,
+          viewerUserId,
+        ),
       }));
 
       res.json(formattedHistories);

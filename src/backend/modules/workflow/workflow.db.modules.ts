@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma';
 import { AppError } from '../../../shared/middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
+import { HistoryUserUtil } from '../../utils/history-user.util';
 
 /**
  * Controller for handling workflow-related database operations.
@@ -125,12 +126,21 @@ export class WorkflowDbController {
       }
 
       // Fetch all global access users for this company to ensure they are in the master eligible list
-      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'WORK_FLOW');
+      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
+        prisma as any,
+        resolvedCompanyId,
+        'WORK_FLOW',
+      );
 
       // Master eligible list includes both configured and global approvers.
       // Initiator is excluded from all active approval lists.
-      const masterEligible = new Set([...(eligibleApprovers || []), ...globalUsers]);
-      const filteredApprovers = Array.from(masterEligible).filter((id) => id !== initiatorId);
+      const masterEligible = new Set([
+        ...(eligibleApprovers || []),
+        ...globalUsers,
+      ]);
+      const filteredApprovers = Array.from(masterEligible).filter(
+        (id) => id !== initiatorId,
+      );
       let notificationRecipients = filteredApprovers;
 
       // ── Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels} ───────
@@ -284,9 +294,17 @@ export class WorkflowDbController {
         }
 
         // --- Prevent Double Approval ---
-        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'workflow_req', approverId);
+        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(
+          tx,
+          id,
+          'workflow_req',
+          approverId,
+        );
         if (alreadyApproved) {
-          throw new AppError('You have already approved this request once', 403);
+          throw new AppError(
+            'You have already approved this request once',
+            403,
+          );
         }
         // --- REJECT FLOW ---
         // Marks the request as REJECTED, rejects all levels, and logs the history.
@@ -546,7 +564,15 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, levelsHash, module, subModule, nodePath, userId } = req.body;
+      const {
+        companyCode,
+        companyId,
+        levelsHash,
+        module,
+        subModule,
+        nodePath,
+        userId,
+      } = req.body;
       let whereCondition: any = {};
 
       let resolvedCompanyId = companyId;
@@ -637,13 +663,16 @@ export class WorkflowDbController {
       // Filter out rejected workflows
       const rejectedReqIds = new Set<string>();
       histories.forEach((h) => {
-        if (h.workflowReqId && (h.event === 'REJECTED' || h.workflowReq?.status === 'REJECTED')) {
+        if (
+          h.workflowReqId &&
+          (h.event === 'REJECTED' || h.workflowReq?.status === 'REJECTED')
+        ) {
           rejectedReqIds.add(h.workflowReqId);
         }
       });
 
       histories = histories.filter(
-        (h) => !h.workflowReqId || !rejectedReqIds.has(h.workflowReqId)
+        (h) => !h.workflowReqId || !rejectedReqIds.has(h.workflowReqId),
       );
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
@@ -697,13 +726,14 @@ export class WorkflowDbController {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
             : [];
-          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
-            resolvedCompanyId,
-            storedList,
-            initiatorId,
-            subModule,
-            approvedUserIds,
-          );
+          level.approversList =
+            await WorkflowApproverUtil.getEnrichedApproverIds(
+              resolvedCompanyId,
+              storedList,
+              initiatorId,
+              subModule,
+              approvedUserIds,
+            );
         }
       }
 
@@ -722,24 +752,17 @@ export class WorkflowDbController {
           id: true,
           name: true,
           email: true,
-          userAccesses: {
-            select: { roleCode: true },
-          },
         },
       });
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        ...Array.from(allApproverIds),
+        ...histories.map((h) => h.eventUserId).filter(Boolean),
+      ]);
       const approverMap = new Map(
-        approverDetails.map((u) => {
-          const isSaasAdmin = u.userAccesses.some(
-            (a) => a.roleCode === 'SAAS_ADMIN',
-          );
-          return [
-            u.id,
-            {
-              name: isSaasAdmin ? 'Teams' : u.name,
-              email: isSaasAdmin ? 'Teams' : u.email,
-            },
-          ];
-        }),
+        approverDetails.map((u) => [
+          u.id,
+          HistoryUserUtil.formatAuditUser(u, u.id, saasAdminUserIds, userId),
+        ]),
       );
 
       const resultList: any[] = [];
@@ -760,9 +783,17 @@ export class WorkflowDbController {
                 .filter(Boolean);
 
               resultList.push({
+                workflowReqId: h.workflowReqId,
+                workflowId: h.workflowReq?.workflowId || null,
+                nodeId: h.workflowReq?.nodeId || null,
                 workflowName: (h.workflowReq?.data as any)?.name || null,
                 module: h.workflowReq?.module || null,
                 subModule: h.workflowReq?.subModule || null,
+                levelsHash: h.workflowReq?.levelsHash || null,
+                alias: h.workflowReq?.alias || null,
+                nodePath: (h.workflowReq?.data as any)?.nodePath || null,
+                nodeName: (h.workflowReq?.data as any)?.nodeName || null,
+                nodeType: (h.workflowReq?.data as any)?.nodeType || null,
                 companyCode: h.company.companyCode,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
@@ -776,16 +807,6 @@ export class WorkflowDbController {
 
       // 4. Format the output for the UI
       const formattedHistories = histories.map((h) => {
-
-        const companyId = h.company.id;
-        const initiatorAccesses =
-          h.user?.userAccesses?.filter((a) => a.companyId === companyId) || [];
-
-        const isSaasAdmin = initiatorAccesses.some(
-          (a) => a.roleCode === 'SAAS_ADMIN',
-        );
-        const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
-
         const levels = h.workflowReqId
           ? workflowMap.get(h.workflowReqId)
           : null;
@@ -828,20 +849,28 @@ export class WorkflowDbController {
         }
 
         return {
+          workflowReqId: h.workflowReqId,
+          workflowId: h.workflowReq?.workflowId || null,
+          nodeId: h.workflowReq?.nodeId || null,
           workflowName: (h.workflowReq?.data as any)?.name || null,
           module: h.workflowReq?.module || null,
           subModule: h.workflowReq?.subModule || null,
+          levelsHash: h.workflowReq?.levelsHash || null,
+          alias: h.workflowReq?.alias || null,
+          nodePath: (h.workflowReq?.data as any)?.nodePath || null,
+          nodeName: (h.workflowReq?.data as any)?.nodeName || null,
+          nodeType: (h.workflowReq?.data as any)?.nodeType || null,
           companyCode: h.company.companyCode,
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          user: isTeams
-            ? { name: 'Teams', email: 'Teams' }
-            : {
-              name: h.user?.name || 'System',
-              email: h.user?.email || 'system@internal',
-            },
+          user: HistoryUserUtil.formatAuditUser(
+            h.user,
+            h.eventUserId,
+            saasAdminUserIds,
+            userId,
+          ),
         };
       });
 
@@ -898,7 +927,7 @@ export class WorkflowDbController {
             select: { nodeId: true },
           });
           userNodeIds = accesses.map((a) => a.nodeId);
-          }
+        }
       }
 
       // Active production workflows
@@ -915,6 +944,9 @@ export class WorkflowDbController {
               }),
         },
         select: {
+          id: true,
+          nodeId: true,
+          workflowReqIds: true,
           name: true,
           alias: true,
           module: true,
@@ -973,22 +1005,28 @@ export class WorkflowDbController {
       });
 
       // 1. Resolve all unique workflow IDs and node IDs from pending requests
-      const workflowIds = Array.from(new Set(pendingRequestsRaw.map(req => req.workflowId).filter(Boolean))) as string[];
-      const nodeIds = Array.from(new Set(pendingRequestsRaw.map(req => req.nodeId))) as string[];
+      const workflowIds = Array.from(
+        new Set(
+          pendingRequestsRaw.map((req) => req.workflowId).filter(Boolean),
+        ),
+      ) as string[];
+      const nodeIds = Array.from(
+        new Set(pendingRequestsRaw.map((req) => req.nodeId)),
+      ) as string[];
 
       const [workflowDetails, nodeDetails] = await Promise.all([
         prisma.workflow.findMany({
           where: { id: { in: workflowIds } },
-          select: { id: true, name: true, alias: true }
+          select: { id: true, name: true, alias: true },
         }),
         prisma.orgStructure.findMany({
           where: { id: { in: nodeIds } },
-          select: { id: true, nodeType: true }
-        })
+          select: { id: true, nodeName: true, nodePath: true, nodeType: true },
+        }),
       ]);
 
-      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
-      const nodeMap = new Map(nodeDetails.map(n => [n.id, n]));
+      const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
+      const nodeMap = new Map(nodeDetails.map((n) => [n.id, n]));
 
       // 2. Flatten initiator, node info, and workflow info for frontend
       const pendingRequests = pendingRequestsRaw.map((req) => {
@@ -998,7 +1036,8 @@ export class WorkflowDbController {
           email: '',
         };
         const initiatorTimestamp = historyEntry?.createdAt || req.createdAt;
-        const nodeType = nodeMap.get(req.nodeId)?.nodeType || null;
+        const node = nodeMap.get(req.nodeId);
+        const nodeType = node?.nodeType || null;
 
         // Resolve workflow name and alias
         let workflowName = (req.data as any)?.name || 'New Workflow';
@@ -1018,6 +1057,8 @@ export class WorkflowDbController {
           initiator,
           initiatorTimestamp,
           nodeType,
+          nodeName: node?.nodeName || (req.data as any)?.nodeName || null,
+          nodePath: node?.nodePath || (req.data as any)?.nodePath || null,
           workflowName,
           alias,
         };
