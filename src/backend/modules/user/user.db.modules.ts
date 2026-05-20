@@ -93,6 +93,8 @@ export class UserDbController {
     newCount: number,
     direction: 'next' | 'prev',
     cursor: { id: string; createdAt: Date } | null,
+    page: number,
+    isPagePagination = false,
   ) {
     const hasExtra = rows.length > limit;
     const limitedRows = hasExtra ? rows.slice(0, limit) : rows;
@@ -101,11 +103,16 @@ export class UserDbController {
     const firstRow = pageRows[0] || null;
     const lastRow = pageRows[pageRows.length - 1] || null;
     const hasNext = direction === 'prev' ? !!cursor : hasExtra;
-    const hasPrev = direction === 'prev' ? hasExtra : !!cursor;
+    const hasPrev = isPagePagination
+      ? page > 1
+      : direction === 'prev'
+        ? hasExtra
+        : !!cursor;
 
     return {
       pageRows,
       pageInfo: {
+        page,
         nextCursor: hasNext ? UserDbController.encodeCursor(lastRow) : null,
         prevCursor: hasPrev ? UserDbController.encodeCursor(firstRow) : null,
         topCursor:
@@ -213,6 +220,8 @@ export class UserDbController {
     offset: number;
     limit: number;
     applyPagination: boolean;
+    page: number;
+    isPagePagination?: boolean;
     cursor?: { id: string; createdAt: Date } | null;
     topCursor?: { id: string; createdAt: Date } | null;
     requestedTopCursor?: string | null;
@@ -225,6 +234,8 @@ export class UserDbController {
       offset,
       limit,
       applyPagination,
+      page,
+      isPagePagination = false,
       cursor = null,
       topCursor = null,
       requestedTopCursor = null,
@@ -275,7 +286,20 @@ export class UserDbController {
         newCount,
         effectiveDirection,
         cursor,
+        page,
+        isPagePagination,
       );
+      const firstPageRow = pageRows[0];
+      if (!isPagePagination && cursor && firstPageRow) {
+        const newerCount = await prisma.userOnboarding.count({
+          where: UserDbController.appendCursorWhere(
+            where,
+            firstPageRow,
+            'newer',
+          ),
+        });
+        pageInfo.page = Math.floor(newerCount / limit) + 1;
+      }
 
       return { pendingCount, pendingOnboardings: pageRows, pageInfo };
     }
@@ -288,6 +312,7 @@ export class UserDbController {
           nextCursor: null,
           prevCursor: null,
           topCursor: requestedTopCursor,
+          page,
           hasNext: false,
           hasPrev: false,
           hasNewData: false,
@@ -349,7 +374,16 @@ export class UserDbController {
       newCount,
       effectiveDirection,
       cursor,
+      page,
+      isPagePagination,
     );
+    const firstPageRow = pageRows[0];
+    if (!isPagePagination && cursor && firstPageRow) {
+      const newerCount = visiblePendingOnboardings.filter((onb) =>
+        UserDbController.isRowInCursorDirection(onb, firstPageRow, 'newer'),
+      ).length;
+      pageInfo.page = Math.floor(newerCount / limit) + 1;
+    }
 
     return {
       pendingCount,
@@ -488,20 +522,41 @@ export class UserDbController {
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId, userId, listType } = req.body;
-      const { offset, limit } = getPagination(req.body);
+      const pagination = getPagination(req.body);
+      const rawPage = Number(req.body?.page);
+      const requestedPage =
+        req.body?.page !== null &&
+        req.body?.page !== undefined &&
+        Number.isFinite(rawPage) &&
+        rawPage > 0
+          ? Math.floor(rawPage)
+          : null;
+      const limit = pagination.limit;
+      const isPagePagination = requestedPage !== null;
+      const offset = isPagePagination
+        ? (requestedPage - 1) * limit
+        : pagination.offset;
+      const page = requestedPage ?? Math.floor(offset / limit) + 1;
       const pageDirection = UserDbController.normalizePageDirection(
         req.body?.direction,
       );
-      const requestedCursor =
-        req.body?.cursor ??
-        (pageDirection === 'prev'
-          ? req.body?.prevCursor
-          : req.body?.nextCursor) ??
-        req.body?.cursorId ??
-        null;
-      const requestedTopCursor = req.body?.topCursor || null;
-      const cursor = UserDbController.decodeCursor(requestedCursor);
-      const topCursor = UserDbController.decodeCursor(requestedTopCursor);
+      const requestedCursor = isPagePagination
+        ? null
+        : (req.body?.cursor ??
+          (pageDirection === 'prev'
+            ? req.body?.prevCursor
+            : req.body?.nextCursor) ??
+          req.body?.cursorId ??
+          null);
+      const requestedTopCursor = isPagePagination
+        ? null
+        : req.body?.topCursor || null;
+      const cursor = isPagePagination
+        ? null
+        : UserDbController.decodeCursor(requestedCursor);
+      const topCursor = isPagePagination
+        ? null
+        : UserDbController.decodeCursor(requestedTopCursor);
       const effectiveDirection = cursor ? pageDirection : 'next';
       let resolvedCompanyId = companyId;
 
@@ -686,6 +741,8 @@ export class UserDbController {
                 offset,
                 limit,
                 applyPagination: listType === 'pending',
+                page,
+                isPagePagination,
                 cursor,
                 topCursor,
                 requestedTopCursor,
@@ -705,8 +762,27 @@ export class UserDbController {
               activeNewCount,
               effectiveDirection,
               cursor,
+              page,
+              isPagePagination,
             )
           : { pageRows: activeRows, pageInfo: null };
+      const firstActivePageRow = activePage.pageRows[0];
+      if (
+        listType === 'active' &&
+        !isPagePagination &&
+        cursor &&
+        firstActivePageRow &&
+        activePage.pageInfo
+      ) {
+        const newerCount = await prisma.user.count({
+          where: UserDbController.appendCursorWhere(
+            activeWhere,
+            firstActivePageRow,
+            'newer',
+          ),
+        });
+        activePage.pageInfo.page = Math.floor(newerCount / limit) + 1;
+      }
       const activeUsers = activePage.pageRows.map(
         UserDbController.formatProductionUser,
       );
@@ -727,6 +803,8 @@ export class UserDbController {
                 offset: 0,
                 limit: 1,
                 applyPagination: true,
+                page,
+                isPagePagination,
               })
             ).pendingCount
           : pendingResult.pendingCount;
