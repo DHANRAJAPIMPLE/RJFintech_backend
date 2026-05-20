@@ -45,7 +45,7 @@ router.post(
   UserController.fetchPendingUsers,
 );
 router.post(
-  '/user-filter-option',
+  '/user/user-filter-option',
   authorize('view', 'USER_ACC'),
   UserController.fetchUserFilterOptions,
 );
