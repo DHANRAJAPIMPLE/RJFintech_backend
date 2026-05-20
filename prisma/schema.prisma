@@ -418,7 +418,6 @@ model WorkflowReqHistory {
   company       Company     @relation("CompanyWorkflowHistoryRel", fields: [companyId], references: [id])
   user          User        @relation("UserWorkflowHistoryRel", fields: [eventUserId], references: [id])
   workflowReq   WorkflowReq @relation("WorkflowRequestHistory", fields: [workflowReqId], references: [id])
-  @@index([levelsHash, companyId])
   @@index([companyId])
   @@map("workflow_req_history")
 }

@@ -5,6 +5,14 @@ import { getPagination } from '../../shared/utils/pagination.util';
 import type { AuthRequest } from '../middlewares/auth.middleware';
 import { config } from '../config';
 import { internalPost } from '../utils/internal-fetch.util';
+import type {
+  FetchNotificationsInternalResponse,
+  FetchNotificationsResponse,
+  NotificationApiErrorResponse,
+  NotificationSseEventName,
+  NotificationSseEventPayloadMap,
+  NotificationSseNotificationEvent,
+} from './notification.type';
 
 export class NotificationController {
   private static async isSaasAdmin(userId: string) {
@@ -37,7 +45,10 @@ export class NotificationController {
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders?.();
 
-      const send = (event: string, data: unknown) => {
+      const send = <EventName extends NotificationSseEventName>(
+        event: EventName,
+        data: NotificationSseEventPayloadMap[EventName],
+      ) => {
         res.write(`event: ${event}\n`);
         res.write(`data: ${JSON.stringify(data)}\n\n`);
       };
@@ -49,7 +60,10 @@ export class NotificationController {
           payload.userId === userId &&
           (includeAllCompanies || payload.companyId === companyId)
         ) {
-          send('notification', payload.notification);
+          send(
+            'notification',
+            payload.notification as NotificationSseNotificationEvent,
+          );
         }
       });
 
@@ -67,7 +81,11 @@ export class NotificationController {
     }
   }
 
-  static async fetch(req: AuthRequest, res: Response, next: NextFunction) {
+  static async fetch(
+    req: AuthRequest,
+    res: Response<FetchNotificationsResponse>,
+    next: NextFunction,
+  ) {
     try {
       const userId = req.user?.id;
       const companyId = req.user?.companyId;
@@ -77,27 +95,33 @@ export class NotificationController {
 
       const { offset, limit } = getPagination(req.body);
       const cursorId = req.body?.cursorId || req.body?.cursor || null;
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/notifications/fetch`,
-        {
-          status: req.body?.status || 'ALL',
-          userId,
-          companyId,
-          cursorId,
-          offset,
-          limit,
-          includeAllCompanies: true,
-        },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchNotificationsInternalResponse>(
+          `${config.backendUrl}/internal/notifications/fetch`,
+          {
+            status: req.body?.status || 'ALL',
+            userId,
+            companyId,
+            cursorId,
+            offset,
+            limit,
+            includeAllCompanies: true,
+          },
+        );
 
       if (!ok) {
+        const errorData = data as NotificationApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch notifications',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch notifications',
           status,
         );
       }
 
-      return res.status(200).json(data);
+      const response = data as FetchNotificationsResponse;
+
+      return res.status(200).json(response);
     } catch (error) {
       return next(error);
     }

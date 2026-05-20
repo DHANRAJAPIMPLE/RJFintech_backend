@@ -1,0 +1,58 @@
+export type NotificationActionType = 'INITIATE' | 'APPROVE' | 'REJECT';
+
+export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
+
+export type NotificationUserStatus = 'READ' | 'UNREAD' | 'ARCHIVED';
+
+export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'ALL';
+
+export type NotificationFetchItem = {
+  id: string;
+  name: string;
+  message: string;
+  type: NotificationActionType;
+  refType: NotificationReferenceType | null;
+  referenceId: string | null;
+  status: NotificationUserStatus;
+  createdByname: string | null;
+  createdByemail: string | null;
+  createat_timestamp: string;
+};
+
+export type FetchNotificationsResponse = {
+  data: NotificationFetchItem[];
+  count: number;
+  limit: number;
+  offset: number;
+  status: NotificationFetchStatus;
+  cursorId: string | null;
+  nextCursorId: string | null;
+  hasNextPage: boolean;
+};
+
+export type NotificationApiErrorResponse = {
+  message?: string;
+  error?: string;
+};
+
+export type FetchNotificationsInternalResponse =
+  | FetchNotificationsResponse
+  | NotificationApiErrorResponse;
+
+export type NotificationSseConnectedEvent = {
+  ok: true;
+};
+
+export type NotificationSseHeartbeatEvent = {
+  at: string;
+};
+
+export type NotificationSseNotificationEvent = NotificationFetchItem;
+
+export type NotificationSseEventPayloadMap = {
+  connected: NotificationSseConnectedEvent;
+  heartbeat: NotificationSseHeartbeatEvent;
+  notification: NotificationSseNotificationEvent;
+};
+
+export type NotificationSseEventName = keyof NotificationSseEventPayloadMap;

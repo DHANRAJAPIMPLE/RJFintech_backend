@@ -613,8 +613,7 @@ export class NotificationDbController {
       });
 
       return res.status(200).json({
-        message: 'Notification status updated',
-        data,
+        message: 'Notification status updated'
       });
     } catch (error) {
       return next(error);
