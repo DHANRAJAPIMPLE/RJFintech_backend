@@ -61,9 +61,48 @@ export type FetchAdminGroupsResponse = {
   companies: AdminGroupsCompanies;
 };
 
+export type InitiateCompanyOnboardingResponse = {
+  message: 'Onboarding initiated successfully';
+  companyCode: string;
+  groupCode: string | null;
+};
+
+export type ActionCompanyOnboardingStatus = 'APPROVED' | 'REJECTED';
+
+export type ActionCompanyOnboardingResult = {
+  message: string;
+  status: ActionCompanyOnboardingStatus;
+};
+
+export type ActionCompanyOnboardingResponse = {
+  message: string;
+  data: ActionCompanyOnboardingResult;
+};
+
 export type AdminAuditUser = {
   name: string;
   email: string;
+};
+
+export type AdminCompanyHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED';
+
+export type AdminCompanyHistoryItem = {
+  companyCode: string;
+  event: AdminCompanyHistoryEvent;
+  createdAt: string;
+  user: AdminAuditUser;
+};
+
+export type FetchCompanyHistoryInternalSuccess = {
+  message: string;
+  code: number;
+  data: AdminCompanyHistoryItem[];
+};
+
+export type FetchCompanyHistoryResponse = {
+  message: string;
+  code: number;
+  data: AdminCompanyHistoryItem[];
 };
 
 export type AdminBackendCompany = {
@@ -128,4 +167,13 @@ export type AdminApiErrorResponse = {
 
 export type FetchAdminGroupsInternalResponse =
   | FetchAdminGroupsInternalSuccess
+  | AdminApiErrorResponse;
+
+export type ActionCompanyOnboardingInternalResponse =
+  | ActionCompanyOnboardingResult
+  | AdminApiErrorResponse;
+
+export type FetchCompanyHistoryInternalResponse =
+  | FetchCompanyHistoryInternalSuccess
+  | AdminCompanyHistoryItem[]
   | AdminApiErrorResponse;

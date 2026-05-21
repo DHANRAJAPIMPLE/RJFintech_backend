@@ -10,31 +10,40 @@
  * - Retrieving history of organizational changes.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
-import { zodParse } from '../utils/zod-parse.util';
-import { companyCodeOnly } from '../validations/company.validation';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
+import { zodParse } from '../../utils/zod-parse.util';
+import { companyCodeOnly } from '../../validations/company.validation';
 import {
   orgOnboardingSchema,
   orgOnboardingAction,
   orgHistory,
-} from '../validations/org.validation';
+} from '../../validations/org.validation';
 import type {
+  InitiateOrgRequestResponse,
+  OrgActionInternalResponse,
+  FetchOrgHistoryInternalResponse,
+  FetchOrgHistoryInternalSuccess,
+  FetchOrgHistoryResponse,
   FetchOrgStructureInternalResponse,
   FetchOrgStructureInternalSuccess,
   FetchOrgStructureResponse,
   OrgApiErrorResponse,
+  OrgCompanyLookupInternalResponse,
+  OrgInitiateInternalResponse,
+  OrgNodeInternal,
   OrgPendingInternalItem,
   OrgPendingItem,
+  OrgRequestActionResponse,
+  OrgStructureRequestInternal,
+  OrgValidateInitiationInternalResponse,
 } from './org.type';
 
 export class OrgController {
-
-
   static async initiateOrgRequest(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<InitiateOrgRequestResponse>,
     next: NextFunction,
   ) {
     try {
@@ -47,12 +56,13 @@ export class OrgController {
       }
 
       // 1. Get Company ID from Backend
-      const { data: company, ok: companyOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/company/get-by-code`,
-        { companyCode },
-      );
+      const { data: company, ok: companyOk } =
+        await internalPost<OrgCompanyLookupInternalResponse>(
+          `${config.backendUrl}/internal/company/get-by-code`,
+          { companyCode },
+        );
 
-      if (!companyOk || !company) {
+      if (!companyOk || !company?.id) {
         throw new AppError(
           company?.message || company?.error || 'Company not found',
           404,
@@ -71,20 +81,21 @@ export class OrgController {
         ),
       ]);
 
-      let eligibleApprovers = [
+      const eligibleApprovers = [
         ...new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
       ];
 
       // 3. Validate Node Initiation (Check for duplicates and parent existence)
-      const { data: validationRes, ok: validationOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/org/validate-initiation`,
-        {
-          companyId: company?.id,
-          newNodeName,
-          nodeType,
-          parentNode,
-        },
-      );
+      const { data: validationRes, ok: validationOk } =
+        await internalPost<OrgValidateInitiationInternalResponse>(
+          `${config.backendUrl}/internal/org/validate-initiation`,
+          {
+            companyId: company.id,
+            newNodeName,
+            nodeType,
+            parentNode,
+          },
+        );
 
       if (!validationOk || !validationRes.success) {
         throw new AppError(
@@ -95,21 +106,22 @@ export class OrgController {
 
       // 4. Create request in Backend
 
-      const { data, ok, status } = await internalPost(
-        `${config.backendUrl}/internal/org/initiate`,
-        {
-          initiatorId,
-          companyId: company?.id,
-          levelsHash: levelsHash || null,
-          data: {
-            newNodeName,
-            nodeType,
-            parentNode,
+      const { data, ok, status } =
+        await internalPost<OrgInitiateInternalResponse>(
+          `${config.backendUrl}/internal/org/initiate`,
+          {
+            initiatorId,
+            companyId: company.id,
+            levelsHash: levelsHash || null,
+            data: {
+              newNodeName,
+              nodeType,
+              parentNode,
+            },
+            status: 'PENDING',
+            eligibleApprovers: eligibleApprovers,
           },
-          status: 'PENDING',
-          eligibleApprovers: eligibleApprovers,
-        },
-      );
+        );
 
       if (!ok) {
         throw new AppError(
@@ -123,7 +135,6 @@ export class OrgController {
       res.status(201).json({
         success: true,
         message: 'Org structure request initiated',
-        requestId: data.id,
       });
     } catch (error) {
       next(error);
@@ -132,7 +143,7 @@ export class OrgController {
 
   static async approveOrgRequest(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<OrgRequestActionResponse>,
     next: NextFunction,
   ) {
     try {
@@ -144,12 +155,11 @@ export class OrgController {
       }
 
       // 1. Fetch request from Backend
-      const { data: request, ok: fetchOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/org/get-request`,
-        { id },
-      );
+      const { data: request, ok: fetchOk } = await internalPost<
+        OrgStructureRequestInternal | OrgApiErrorResponse | null
+      >(`${config.backendUrl}/internal/org/get-request`, { id });
 
-      if (!fetchOk || !request) {
+      if (!fetchOk || !request || !('status' in request)) {
         throw new AppError(
           request?.message ||
             request?.error ||
@@ -174,20 +184,36 @@ export class OrgController {
 
       // 3. Handle Rejection
       if (action === 'reject') {
-        await internalPost(`${config.backendUrl}/internal/org/action`, {
-          id,
-          status: 'REJECTED',
-          approverId,
-          remarks: remark,
-        });
+        const {
+          data: rejectRes,
+          ok: rejectOk,
+          status: rejectStatus,
+        } = await internalPost<OrgActionInternalResponse>(
+          `${config.backendUrl}/internal/org/action`,
+          {
+            id,
+            status: 'REJECTED',
+            approverId,
+            remarks: remark,
+          },
+        );
+
+        if (!rejectOk) {
+          throw new AppError(
+            rejectRes?.message ||
+              rejectRes?.error ||
+              'Failed to reject org structure request',
+            rejectStatus,
+          );
+        }
+
         return res
           .status(200)
           .json({ success: true, message: 'Org structure request rejected' });
       }
 
       // 4. Logic: Path Generation
-      const reqData = request.data as any;
-      const { newNodeName, nodeType, parentNode } = reqData;
+      const { newNodeName, nodeType, parentNode } = request.data;
 
       let newNodePath = '';
       let parentId: string | null = null;
@@ -203,10 +229,13 @@ export class OrgController {
         newNodePath = `${parentPath}.${safeName}`;
 
         // Verify parent node in Backend
-        const { data: parentNodeRecord } = await internalPost<any>(
-          `${config.backendUrl}/internal/org/get-node`,
-          { nodePath: parentPath },
-        );
+        const { data: parentNodeRecord } =
+          await internalPost<OrgNodeInternal | null>(
+            `${config.backendUrl}/internal/org/get-node`,
+            {
+              nodePath: parentPath,
+            },
+          );
 
         if (!parentNodeRecord) {
           throw new AppError('Parent node not found', 400);
@@ -215,7 +244,7 @@ export class OrgController {
       }
 
       // Check if path exists in Backend
-      const { data: existingNode } = await internalPost<any>(
+      const { data: existingNode } = await internalPost<OrgNodeInternal | null>(
         `${config.backendUrl}/internal/org/get-node`,
         { nodePath: newNodePath },
       );
@@ -228,16 +257,19 @@ export class OrgController {
         data: commitRes,
         ok: commitOk,
         status: commitStatus,
-      } = await internalPost(`${config.backendUrl}/internal/org/action`, {
-        id,
-        status: 'APPROVED',
-        approverId,
-        remarks: remark,
-        newNodePath,
-        newNodeName,
-        nodeType,
-        parentId,
-      });
+      } = await internalPost<OrgActionInternalResponse>(
+        `${config.backendUrl}/internal/org/action`,
+        {
+          id,
+          status: 'APPROVED',
+          approverId,
+          remarks: remark,
+          newNodePath,
+          newNodeName,
+          nodeType,
+          parentId,
+        },
+      );
 
       if (!commitOk) {
         throw new AppError(
@@ -327,29 +359,47 @@ export class OrgController {
 
   static async fetchOrgHistory(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<FetchOrgHistoryResponse>,
     next: NextFunction,
   ) {
     try {
-      const { companyCode, nodeName, nodePath } = zodParse(orgHistory, req.body);
+      const { companyCode, nodeName, nodePath } = zodParse(
+        orgHistory,
+        req.body,
+      );
       const userId = req.user?.id;
 
-      // Forward to Backend (5001)
-      const { data, ok, status } = await internalPost(
-        `${config.backendUrl}/internal/org/fetch-history`,
-        { companyCode, nodeName, nodePath, userId },
-      );
+      if (!userId) {
+        throw new AppError('Unauthorized', 401);
+      }
 
+      // Forward to Backend (5001)
+      const { data, ok, status } =
+        await internalPost<FetchOrgHistoryInternalResponse>(
+          `${config.backendUrl}/internal/org/fetch-history`,
+          { companyCode, nodeName, nodePath, userId },
+        );
 
       if (!ok) {
+        const errorData = data as OrgApiErrorResponse;
         throw new AppError(
-          data?.message ||
-            data?.error ||
+          errorData?.message ||
+            errorData?.error ||
             'Failed to fetch org structure history',
           status,
         );
       }
-      res.status(200).json(data);
+
+      const historyData = data as FetchOrgHistoryInternalSuccess;
+      const response: FetchOrgHistoryResponse = {
+        message:
+          historyData.message ||
+          'Organization structure history fetched successfully!',
+        code: historyData.code || 200,
+        data: historyData.data || [],
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

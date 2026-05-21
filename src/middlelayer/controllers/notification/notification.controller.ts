@@ -1,13 +1,16 @@
 import type { NextFunction, Response } from 'express';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { onNotificationEvent } from '../../shared/utils/notification-events.util';
-import { getPagination } from '../../shared/utils/pagination.util';
-import type { AuthRequest } from '../middlewares/auth.middleware';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { onNotificationEvent } from '../../../shared/utils/notification-events.util';
+import { getPagination } from '../../../shared/utils/pagination.util';
+import type { AuthRequest } from '../../middlewares/auth.middleware';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
 import type {
   FetchNotificationsInternalResponse,
   FetchNotificationsResponse,
+  MarkNotificationReadInternalResponse,
+  MarkNotificationReadRequest,
+  MarkNotificationReadResponse,
   NotificationApiErrorResponse,
   NotificationSseEventName,
   NotificationSseEventPayloadMap,
@@ -127,7 +130,11 @@ export class NotificationController {
     }
   }
 
-  static async markRead(req: AuthRequest, res: Response, next: NextFunction) {
+  static async markRead(
+    req: AuthRequest,
+    res: Response<MarkNotificationReadResponse>,
+    next: NextFunction,
+  ) {
     try {
       const userId = req.user?.id;
       const companyId = req.user?.companyId;
@@ -135,24 +142,29 @@ export class NotificationController {
         throw new AppError('Unauthorized', 401);
       }
 
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/notifications/read`,
-        {
-          ...req.body,
-          userId,
-          companyId,
-          includeAllCompanies: true,
-        },
-      );
+      const body = req.body as MarkNotificationReadRequest;
+      const { data, ok, status } =
+        await internalPost<MarkNotificationReadInternalResponse>(
+          `${config.backendUrl}/internal/notifications/read`,
+          {
+            ...body,
+            userId,
+            companyId,
+            includeAllCompanies: true,
+          },
+        );
 
       if (!ok) {
+        const errorData = data as NotificationApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to update notification',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to update notification',
           status,
         );
       }
 
-      return res.status(200).json(data);
+      return res.status(200).json(data as MarkNotificationReadResponse);
     } catch (error) {
       return next(error);
     }

@@ -755,8 +755,9 @@ export class WorkflowDbController {
         },
       });
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        userId,
         ...Array.from(allApproverIds),
-        ...histories.map((h) => h.eventUserId).filter(Boolean),
+        ...histories.map((h) => h.eventUserId),
       ]);
       const approverMap = new Map(
         approverDetails.map((u) => [

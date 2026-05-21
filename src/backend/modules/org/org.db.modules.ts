@@ -785,8 +785,9 @@ export class OrgStructureDbController {
         },
       });
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
         ...Array.from(allApproverIds),
-        ...histories.map((h) => h.eventUserId).filter(Boolean),
+        ...histories.map((h) => h.eventUserId),
       ]);
       const approverMap = new Map(
         approverDetails.map((u) => [

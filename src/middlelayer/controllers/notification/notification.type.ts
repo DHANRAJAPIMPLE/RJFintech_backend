@@ -39,6 +39,21 @@ export type FetchNotificationsInternalResponse =
   | FetchNotificationsResponse
   | NotificationApiErrorResponse;
 
+export type MarkNotificationReadRequest = {
+  notificationUserId?: string;
+  notificationId?: string;
+  id?: string;
+  status?: NotificationUserStatus;
+};
+
+export type MarkNotificationReadResponse = {
+  message: 'Notification status updated';
+};
+
+export type MarkNotificationReadInternalResponse =
+  | MarkNotificationReadResponse
+  | NotificationApiErrorResponse;
+
 export type NotificationSseConnectedEvent = {
   ok: true;
 };

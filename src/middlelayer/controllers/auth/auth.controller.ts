@@ -11,22 +11,26 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import requestIp from 'request-ip';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { HashUtil } from '../../shared/utils/hash.util';
-import { formatUserGroups } from '../utils/user-group.util';
-import { bumpVersion, getExpiryDate } from '../utils/auth.helper';
-import { TokenUtil } from '../utils/token.util';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
-import { setAuthCookies, clearAuthCookies } from '../utils/cookie.util';
-import { zodParse } from '../utils/zod-parse.util';
-import { registerSchema, loginSchema } from '../validations/auth.validation';
-import console from 'console';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { HashUtil } from '../../../shared/utils/hash.util';
+import { formatUserGroups } from '../../utils/user-group.util';
+import { bumpVersion, getExpiryDate } from '../../utils/auth.helper';
+import { TokenUtil } from '../../utils/token.util';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
+import { setAuthCookies, clearAuthCookies } from '../../utils/cookie.util';
+import { zodParse } from '../../utils/zod-parse.util';
+import { registerSchema, loginSchema } from '../../validations/auth.validation';
+
 import type {
+  AuthAccessRightsRequest,
+  AuthAccessRightsResponse,
+  AuthApiErrorResponse,
   AuthBackendLoginUser,
   AuthBackendUser,
   AuthLoginApiResponse,
   AuthLoginResponse,
+  AuthLogoutResponse,
   AuthMeResponse,
   AuthUserGroup,
 } from './auth.type';
@@ -107,7 +111,7 @@ export class AuthController {
       if (!userRes.ok || !user) {
         throw new AppError('Invalid credentials', 401);
       }
-  
+
       const firstMapping = user.userMappings[0];
       if (!firstMapping) {
         throw new AppError('Company mapping not found', 400);
@@ -323,7 +327,7 @@ export class AuthController {
   ) {
     try {
       const userId = req.user?.id;
- 
+
       if (!userId) {
         throw new AppError('Unauthorized', 401);
       }
@@ -365,16 +369,23 @@ export class AuthController {
     }
   }
 
-  static async logout(req: Request, res: Response, next: NextFunction) {
+  static async logout(
+    req: Request,
+    res: Response<AuthLogoutResponse>,
+    next: NextFunction,
+  ) {
     try {
       const refreshToken = req.cookies?.refreshToken;
 
       if (refreshToken) {
         // 1. Invalidate Activity in Backend DB
         const refreshTokenHash = HashUtil.hashToken(refreshToken);
-        const backendRes = await internalPost<any>(`${config.backendAuthUrl}/activity/delete`, {
-          refreshTokenHash,
-        });
+        const backendRes = await internalPost<any>(
+          `${config.backendAuthUrl}/activity/delete`,
+          {
+            refreshTokenHash,
+          },
+        );
 
         if (backendRes.ok && backendRes.data) {
           res.locals.userId = backendRes.data.userId;
@@ -385,13 +396,25 @@ export class AuthController {
       // 2. Clear Cookies in Middle Layer
       clearAuthCookies(res);
 
-      res.status(200).json({ message: 'Logged out successfully' });
+      const response: AuthLogoutResponse = {
+        message: 'Logged out successfully',
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
   }
 
-  static async getAccessRights(req: Request, res: Response, next: NextFunction) {
+  static async getAccessRights(
+    req: Request<
+      Record<string, never>,
+      AuthAccessRightsResponse,
+      AuthAccessRightsRequest
+    >,
+    res: Response<AuthAccessRightsResponse>,
+    next: NextFunction,
+  ) {
     try {
       const { email, companyCode } = req.body;
 
@@ -399,19 +422,24 @@ export class AuthController {
         throw new AppError('email and companyCode are required', 400);
       }
 
-      const backendRes = await internalPost<any>(`${config.backendAuthUrl}/access-rights`, {
+      const backendRes = await internalPost<
+        AuthAccessRightsResponse | AuthApiErrorResponse
+      >(`${config.backendAuthUrl}/access-rights`, {
         email,
         companyCode,
       });
 
       if (!backendRes.ok) {
+        const errorData = backendRes.data as AuthApiErrorResponse;
         throw new AppError(
-          backendRes.data?.error || 'Failed to fetch access rights',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch access rights',
           backendRes.status || 500,
         );
       }
 
-      res.status(200).json(backendRes.data);
+      res.status(200).json(backendRes.data as AuthAccessRightsResponse);
     } catch (error) {
       next(error);
     }

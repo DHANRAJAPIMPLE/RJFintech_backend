@@ -12,8 +12,10 @@ type AuditUser = {
  * whose history is being viewed.
  */
 export class HistoryUserUtil {
-  static async getSaasAdminUserIds(userIds: string[]) {
-    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+  static async getSaasAdminUserIds(userIds: (string | null | undefined)[]) {
+    const uniqueUserIds = Array.from(
+      new Set(userIds.filter((userId): userId is string => Boolean(userId))),
+    );
     if (uniqueUserIds.length === 0) return new Set<string>();
 
     const saasAdminAccesses = await prisma.userAccess.findMany({
@@ -33,9 +35,14 @@ export class HistoryUserUtil {
     saasAdminUserIds: Set<string>,
     viewerUserId?: string | null,
   ) {
+    const viewerIsSaasAdmin = Boolean(
+      viewerUserId && saasAdminUserIds.has(viewerUserId),
+    );
+
     if (
       eventUserId &&
       eventUserId !== viewerUserId &&
+      !viewerIsSaasAdmin &&
       saasAdminUserIds.has(eventUserId)
     ) {
       return { name: 'Teams', email: 'Teams' };

@@ -8,18 +8,21 @@
  * - Retrieving history of actions performed on a specific company.
  * It interacts with the backend service through internal API calls.
  */
-import type { AuthRequest } from '../middlewares/auth.middleware';
+import type { AuthRequest } from '../../middlewares/auth.middleware';
 import type { Request, Response, NextFunction } from 'express';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
-import { zodParse } from '../utils/zod-parse.util';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
+import { zodParse } from '../../utils/zod-parse.util';
 import {
   companyOnboardingSchema,
   companyActionSchema,
   companyHistory,
-} from '../validations/company.validation';
+} from '../../validations/company.validation';
 import type {
+  ActionCompanyOnboardingInternalResponse,
+  ActionCompanyOnboardingResponse,
+  ActionCompanyOnboardingResult,
   AdminApiErrorResponse,
   AdminBackendCompany,
   AdminBackendPendingOnboarding,
@@ -29,9 +32,13 @@ import type {
   FetchAdminGroupsInternalResponse,
   FetchAdminGroupsInternalSuccess,
   FetchAdminGroupsResponse,
+  FetchCompanyHistoryInternalResponse,
+  FetchCompanyHistoryInternalSuccess,
+  FetchCompanyHistoryResponse,
+  InitiateCompanyOnboardingResponse,
 } from './admin.type';
 
-import { CodeGenUtil } from '../utils/code-gen.util';
+import { CodeGenUtil } from '../../utils/code-gen.util';
 
 export class AdminController {
   static async getGroupCompanies(
@@ -222,7 +229,7 @@ export class AdminController {
 
   static async initiateCompanyOnboarding(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<InitiateCompanyOnboardingResponse>,
     next: NextFunction,
   ) {
     try {
@@ -379,11 +386,13 @@ export class AdminController {
         );
       }
 
-      res.status(201).json({
+      const response: InitiateCompanyOnboardingResponse = {
         message: 'Onboarding initiated successfully',
         companyCode: finalCompanyCode,
         groupCode: finalGroupCode,
-      });
+      };
+
+      res.status(201).json(response);
     } catch (error) {
       next(error);
     }
@@ -391,7 +400,7 @@ export class AdminController {
 
   static async actionCompanyOnboarding(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<ActionCompanyOnboardingResponse>,
     next: NextFunction,
   ) {
     try {
@@ -430,29 +439,36 @@ export class AdminController {
         data: updateStatusRes,
         ok: updateStatusOk,
         status: updateStatusStatus,
-      } = await internalPost(`${config.backendUrl}/internal/company/action`, {
-        id,
-        action,
-        approverId,
-        remark,
-        notificationCompanyId: (req.user as any)?.companyId,
-      });
+      } = await internalPost<ActionCompanyOnboardingInternalResponse>(
+        `${config.backendUrl}/internal/company/action`,
+        {
+          id,
+          action,
+          approverId,
+          remark,
+          notificationCompanyId: (req.user as any)?.companyId,
+        },
+      );
 
       if (!updateStatusOk) {
+        const errorData = updateStatusRes as AdminApiErrorResponse;
         throw new AppError(
-          updateStatusRes?.message ||
-            updateStatusRes?.error ||
+          errorData?.message ||
+            errorData?.error ||
             'Failed to process onboarding approval',
           updateStatusStatus,
         );
       }
 
-      res.status(200).json({
+      const actionResult = updateStatusRes as ActionCompanyOnboardingResult;
+      const response: ActionCompanyOnboardingResponse = {
         message:
-          updateStatusRes?.message ||
+          actionResult.message ||
           `Onboarding request ${action === 'reject' ? 'rejected' : 'approved'}`,
-        data: updateStatusRes,
-      });
+        data: actionResult,
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
@@ -460,33 +476,49 @@ export class AdminController {
 
   static async fetchCompanyHistory(
     req: Request,
-    res: Response,
+    res: Response<FetchCompanyHistoryResponse>,
     next: NextFunction,
   ) {
     try {
       const { companyCode } = zodParse(companyHistory, req.body);
 
       // 1. Fetch history record
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/company/history`,
-        { companyCode, userId: (req as any).user?.id },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchCompanyHistoryInternalResponse>(
+          `${config.backendUrl}/internal/company/history`,
+          { companyCode, userId: (req as any).user?.id },
+        );
 
       if (!ok) {
+        const errorData = data as AdminApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch company history',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch company history',
           status || 404,
         );
       }
 
-      res.status(200).json({
-        message:
-          data && data.length > 0
-            ? 'Company history fetched successfully!'
-            : 'Company history not found',
-        code: 200,
-        data,
-      });
+      const historyData = Array.isArray(data)
+        ? data
+        : (data as FetchCompanyHistoryInternalSuccess)?.data || [];
+      const historyMessage = Array.isArray(data)
+        ? historyData.length > 0
+          ? 'Company history fetched successfully!'
+          : 'Company history not found'
+        : (data as FetchCompanyHistoryInternalSuccess)?.message ||
+          'Company history fetched successfully!';
+      const historyCode = Array.isArray(data)
+        ? 200
+        : (data as FetchCompanyHistoryInternalSuccess)?.code || 200;
+
+      const response: FetchCompanyHistoryResponse = {
+        message: historyMessage,
+        code: historyCode,
+        data: historyData,
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

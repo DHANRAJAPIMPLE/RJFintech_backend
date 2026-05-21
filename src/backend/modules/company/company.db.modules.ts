@@ -141,9 +141,10 @@ export class CompanyDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds(
-        histories.map((h) => h.eventUserId).filter(Boolean),
-      );
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        ...histories.map((h) => h.eventUserId),
+      ]);
 
       const historyMap = new Map();
       histories.forEach((h) => {
@@ -829,8 +830,7 @@ export class CompanyDbController {
 
         return {
           message: 'Onboarding approved and company created successfully',
-          status: 'APPROVED',
-          companyId: newCompany.id,
+          status: 'APPROVED'
         };
       });
 
@@ -881,9 +881,10 @@ export class CompanyDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds(
-        histories.map((h) => h.eventUserId).filter(Boolean),
-      );
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        ...histories.map((h) => h.eventUserId),
+      ]);
 
       const formattedHistories = histories.map((h) => ({
         companyCode: h.companyCode,

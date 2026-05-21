@@ -10,26 +10,35 @@
  * - Retrieving the history of actions taken on workflows.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
-import { zodParse } from '../utils/zod-parse.util';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
+import { zodParse } from '../../utils/zod-parse.util';
 import {
   workflowOnboardingSchema,
   workflowActionSchema,
   workflowHistorySchema,
-} from '../validations/workflow.validation';
+} from '../../validations/workflow.validation';
 import type {
+  FetchWorkflowHistoryInternalResponse,
+  FetchWorkflowHistoryResponse,
   FetchWorkflowsData,
   FetchWorkflowsInternalResponse,
   FetchWorkflowsResponse,
+  InitiateWorkflowResponse,
+  WorkflowActionInternalResponse,
+  WorkflowActionResponse,
   WorkflowApiErrorResponse,
+  WorkflowCompanyLookupInternalResponse,
+  WorkflowInitiateInternalResponse,
+  WorkflowNodeLookupInternalResponse,
+  WorkflowRequestInternal,
 } from './workflow.type';
 
 export class WorkflowController {
   static async initiateWorkflow(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<InitiateWorkflowResponse>,
     next: NextFunction,
   ) {
     try {
@@ -42,25 +51,24 @@ export class WorkflowController {
       }
 
       // 1. Get Company ID from Backend
-      const { data: company, ok: companyOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/company/get-by-code`,
-        { companyCode },
-      );
+      const { data: company, ok: companyOk } = await internalPost<
+        WorkflowCompanyLookupInternalResponse | WorkflowApiErrorResponse | null
+      >(`${config.backendUrl}/internal/company/get-by-code`, { companyCode });
 
-      if (!companyOk || !company) {
+      if (!companyOk || !company || !('id' in company)) {
+        const errorData = company as WorkflowApiErrorResponse | null;
         throw new AppError(
-          company?.message || company?.error || 'Company not found',
+          errorData?.message || errorData?.error || 'Company not found',
           404,
         );
       }
 
       // 2. Check if Node Path exists
-      const { data: node, ok: nodeOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/workflow/get-node`,
-        { nodePath },
-      );
+      const { data: node, ok: nodeOk } = await internalPost<
+        WorkflowNodeLookupInternalResponse | WorkflowApiErrorResponse | null
+      >(`${config.backendUrl}/internal/workflow/get-node`, { nodePath });
 
-      if (!nodeOk || !node) {
+      if (!nodeOk || !node || !('id' in node)) {
         throw new AppError(`Node path '${nodePath}' not found`, 400);
       }
 
@@ -86,7 +94,7 @@ export class WorkflowController {
         data: createRes,
         ok: createOk,
         status: createStatus,
-      } = await internalPost(
+      } = await internalPost<WorkflowInitiateInternalResponse>(
         `${config.backendUrl}/internal/workflow/initiate`,
         {
           initiatorId,
@@ -106,10 +114,11 @@ export class WorkflowController {
         );
       }
 
-      res.status(201).json({
+      const response: InitiateWorkflowResponse = {
         message: 'Workflow initiation request created successfully',
-        data: createRes,
-      });
+      };
+
+      res.status(201).json(response);
     } catch (error) {
       next(error);
     }
@@ -117,7 +126,7 @@ export class WorkflowController {
 
   static async actionWorkflow(
     req: Request & { user?: { id: string; companyId: string } },
-    res: Response,
+    res: Response<WorkflowActionResponse>,
     next: NextFunction,
   ) {
     try {
@@ -130,15 +139,18 @@ export class WorkflowController {
       }
 
       // 1. Fetch onboarding record
-      const { data: onboarding, ok: fetchOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/workflow/get-request`,
-        { levelsHash, companyId: req.user?.companyId },
-      );
+      const { data: onboarding, ok: fetchOk } = await internalPost<
+        WorkflowRequestInternal | WorkflowApiErrorResponse | null
+      >(`${config.backendUrl}/internal/workflow/get-request`, {
+        levelsHash,
+        companyId: req.user?.companyId,
+      });
 
-      if (!fetchOk || !onboarding) {
+      if (!fetchOk || !onboarding || !('status' in onboarding)) {
+        const errorData = onboarding as WorkflowApiErrorResponse | null;
         throw new AppError(
-          onboarding?.message ||
-            onboarding?.error ||
+          errorData?.message ||
+            errorData?.error ||
             'Workflow request not found',
           404,
         );
@@ -164,13 +176,16 @@ export class WorkflowController {
         data: commitRes,
         ok: commitOk,
         status: commitStatus,
-      } = await internalPost(`${config.backendUrl}/internal/workflow/action`, {
-        levelsHash,
-        companyId: req.user?.companyId,
-        approverId,
-        remark,
-        status: action,
-      });
+      } = await internalPost<WorkflowActionInternalResponse>(
+        `${config.backendUrl}/internal/workflow/action`,
+        {
+          levelsHash,
+          companyId: req.user?.companyId,
+          approverId,
+          remark,
+          status: action,
+        },
+      );
 
       if (!commitOk) {
         throw new AppError(
@@ -181,12 +196,12 @@ export class WorkflowController {
         );
       }
 
-      res
-        .status(200)
-        .json({
-          message:
-            commitRes?.message || `Workflow request ${action}ed successfully`,
-        });
+      const response: WorkflowActionResponse = {
+        message:
+          commitRes?.message || `Workflow request ${action}ed successfully`,
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
@@ -234,30 +249,52 @@ export class WorkflowController {
   }
   static async fetchWorkflowHistory(
     req: Request & { user?: { id: string; companyId: string } },
-    res: Response,
+    res: Response<FetchWorkflowHistoryResponse>,
     next: NextFunction,
   ) {
     try {
-      const { levelsHash, module, subModule, nodePath } = zodParse(workflowHistorySchema, req.body);
+      const { levelsHash, module, subModule, nodePath } = zodParse(
+        workflowHistorySchema,
+        req.body,
+      );
       const companyId = req.user?.companyId;
 
       if (!companyId) {
         throw new AppError('Unauthorized: Company information missing', 401);
       }
 
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/workflow/history`,
-        { companyId, levelsHash, module, subModule, nodePath, userId: req.user?.id },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchWorkflowHistoryInternalResponse>(
+          `${config.backendUrl}/internal/workflow/history`,
+          {
+            companyId,
+            levelsHash,
+            module,
+            subModule,
+            nodePath,
+            userId: req.user?.id,
+          },
+        );
 
       if (!ok) {
+        const errorData = data as WorkflowApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch history',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch history',
           status,
         );
       }
 
-      res.status(200).json(data);
+      const historyData = data as FetchWorkflowHistoryResponse;
+      const response: FetchWorkflowHistoryResponse = {
+        message:
+          historyData.message || 'Workflow history fetched successfully!',
+        code: historyData.code || 200,
+        data: historyData.data || [],
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

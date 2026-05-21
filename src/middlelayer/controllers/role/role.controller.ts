@@ -7,11 +7,11 @@
  * - Format role data for consistent presentation in the frontend.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
-import { zodParse } from '../utils/zod-parse.util';
-import { roleUpsertSchema } from '../validations/onboarding.validator';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
+import { zodParse } from '../../utils/zod-parse.util';
+import { roleUpsertSchema } from '../../validations/onboarding.validator';
 import type {
   FetchAllRolesInternalResponse,
   FetchAllRolesItem,

@@ -11,12 +11,12 @@
  * It coordinates between multiple backend endpoints to ensure data integrity and permission consistency.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { getPagination } from '../../shared/utils/pagination.util';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
-import { zodParse } from '../utils/zod-parse.util';
-import { companyCodeOnly } from '../validations/company.validation';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { getPagination } from '../../../shared/utils/pagination.util';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
+import { zodParse } from '../../utils/zod-parse.util';
+import { companyCodeOnly } from '../../validations/company.validation';
 import {
   userOnboardingSchema,
   userActionSchema,
@@ -24,8 +24,11 @@ import {
   userHistory,
   userCompanyNodesSchema,
   userFetchByNodePathCountSchema,
-} from '../validations/user.validation';
+} from '../../validations/user.validation';
 import type {
+  ActionUserOnboardingInternalResponse,
+  ActionUserOnboardingResponse,
+  CreateUserOnboardingInternalResponse,
   FetchCompanyNodesInternalResponse,
   FetchCompanyNodesResponse,
   UserCompanyNode,
@@ -34,7 +37,11 @@ import type {
   FetchPendingUsersResponse,
   FetchUsersByNodePathCountInternalResponse,
   FetchUsersByNodePathCountResponse,
+  FetchUserHistoryInternalResponse,
+  FetchUserHistoryResponse,
   InitiateUserOnboardingResponse,
+  UserApiErrorResponse,
+  UserOnboardingInternalResponse,
 } from './user.type';
 
 export class UserController {
@@ -203,7 +210,7 @@ export class UserController {
 
   static async initiateUserOnboarding(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<InitiateUserOnboardingResponse>,
     next: NextFunction,
   ) {
     try {
@@ -367,18 +374,21 @@ export class UserController {
         data: createRes,
         ok: createOk,
         status: createStatus,
-      } = await internalPost(`${config.backendUrl}/internal/user/create`, {
-        initiatorId,
-        companyCode,
-        groupCode,
-        levelsHash: levelsHash || null,
-        data: {
-          basicDetails,
-          permissions,
+      } = await internalPost<CreateUserOnboardingInternalResponse>(
+        `${config.backendUrl}/internal/user/create`,
+        {
+          initiatorId,
+          companyCode,
+          groupCode,
+          levelsHash: levelsHash || null,
+          data: {
+            basicDetails,
+            permissions,
+          },
+          status: 'PENDING',
+          eligibleApprovers: eligibleApprovers,
         },
-        status: 'PENDING',
-        eligibleApprovers: eligibleApprovers,
-      });
+      );
 
       if (!createOk) {
         throw new AppError(
@@ -401,7 +411,7 @@ export class UserController {
 
   static async actionUserOnboarding(
     req: Request & { user?: { id: string } },
-    res: Response,
+    res: Response<ActionUserOnboardingResponse>,
     next: NextFunction,
   ) {
     try {
@@ -414,15 +424,15 @@ export class UserController {
       }
 
       // 1. Fetch onboarding record
-      const { data: onboarding, ok: fetchOk } = await internalPost<any>(
-        `${config.backendUrl}/internal/user/get`,
-        { id },
-      );
+      const { data: onboarding, ok: fetchOk } = await internalPost<
+        UserOnboardingInternalResponse | UserApiErrorResponse | null
+      >(`${config.backendUrl}/internal/user/get`, { id });
 
-      if (!fetchOk || !onboarding) {
+      if (!fetchOk || !onboarding || !('status' in onboarding)) {
+        const errorData = onboarding as UserApiErrorResponse | null;
         throw new AppError(
-          onboarding?.message ||
-            onboarding?.error ||
+          errorData?.message ||
+            errorData?.error ||
             'User onboarding request not found',
           404,
         );
@@ -448,12 +458,15 @@ export class UserController {
         data: commitRes,
         ok: commitOk,
         status: commitStatus,
-      } = await internalPost(`${config.backendUrl}/internal/user/action`, {
-        id,
-        approverId,
-        remark,
-        status: action,
-      });
+      } = await internalPost<ActionUserOnboardingInternalResponse>(
+        `${config.backendUrl}/internal/user/action`,
+        {
+          id,
+          approverId,
+          remark,
+          status: action,
+        },
+      );
 
       if (!commitOk) {
         throw new AppError(
@@ -464,9 +477,11 @@ export class UserController {
         );
       }
 
-      res
-        .status(200)
-        .json({ message: commitRes?.message || 'User approved and onboarded' });
+      const response: ActionUserOnboardingResponse = {
+        message: commitRes?.message || 'User approved and onboarded',
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
@@ -530,23 +545,36 @@ export class UserController {
     }
   }
 
-  static async getUserHistory(req: Request, res: Response, next: NextFunction) {
+  static async getUserHistory(
+    req: Request,
+    res: Response<FetchUserHistoryResponse>,
+    next: NextFunction,
+  ) {
     try {
       const { email, companyCode } = zodParse(userHistory, req.body);
 
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/user/history`,
-        { email, companyCode, userId: (req as any).user?.id },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchUserHistoryInternalResponse>(
+          `${config.backendUrl}/internal/user/history`,
+          { email, companyCode, userId: (req as any).user?.id },
+        );
 
-      if (!ok || !data) {
+      if (!ok) {
+        const errorData = data as UserApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'User not found',
+          errorData?.message || errorData?.error || 'User not found',
           status || 404,
         );
       }
 
-      res.status(200).json(data);
+      const historyData = data as FetchUserHistoryResponse;
+      const response: FetchUserHistoryResponse = {
+        message: historyData.message || 'User history fetched successfully!',
+        code: historyData.code || 200,
+        data: historyData.data || [],
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }

@@ -163,4 +163,95 @@ export type FetchPendingUsersResponse = {
 
 export type InitiateUserOnboardingResponse = {
   message: 'User onboarding initiated successfully';
+} | UserApiErrorResponse;
+
+export type UserOnboardingStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export type UserOnboardingActionResultStatus =
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'PARTIAL_APPROVED';
+
+export type ActionUserOnboardingResponse =
+  | {
+      message: string;
+    }
+  | UserApiErrorResponse;
+
+export type UserHistoryAuditUser = {
+  name: string;
+  email: string;
 };
+
+export type UserHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
+
+export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
+
+export type UserHistoryBaseItem = {
+  email: string;
+  companyCode: string;
+};
+
+export type UserHistoryActionItem = UserHistoryBaseItem & {
+  event: UserHistoryEvent;
+  level: number | null;
+  createdAt: string;
+  remarks: string | null;
+  user: UserHistoryAuditUser;
+};
+
+export type UserHistoryPendingApprovalItem = UserHistoryBaseItem & {
+  event: UserHistoryPendingApprovalEvent;
+  createdAt: null;
+  eligibleapprovers: UserHistoryAuditUser[];
+};
+
+export type UserHistoryItem =
+  | UserHistoryActionItem
+  | UserHistoryPendingApprovalItem;
+
+export type FetchUserHistoryResponse = {
+  message: 'User history fetched successfully!';
+  code: 200;
+  data: UserHistoryItem[];
+};
+
+export type FetchUserHistoryInternalSuccess = FetchUserHistoryResponse;
+
+export type UserApiErrorResponse = {
+  status?: 'error' | string;
+  statusCode?: number;
+  message?: string;
+  error?: string;
+};
+
+export type UserOnboardingInternalResponse = {
+  id: string;
+  status: UserOnboardingStatus;
+  eligibleApprovers?: string[];
+  message?: string;
+  error?: string;
+  [key: string]: unknown;
+};
+
+export type CreateUserOnboardingInternalResponse =
+  | UserOnboardingInternalResponse
+  | UserApiErrorResponse;
+
+export type ActionUserOnboardingInternalResult = {
+  status?: UserOnboardingActionResultStatus;
+  level?: number | null;
+  [key: string]: unknown;
+};
+
+export type ActionUserOnboardingInternalResponse =
+  | {
+      message?: string;
+      data?: ActionUserOnboardingInternalResult;
+      error?: string;
+    }
+  | UserApiErrorResponse;
+
+export type FetchUserHistoryInternalResponse =
+  | FetchUserHistoryInternalSuccess
+  | UserApiErrorResponse;

@@ -34,6 +34,64 @@ export type AuthForceLoginResponse = {
 
 export type AuthLoginApiResponse = AuthLoginResponse | AuthForceLoginResponse;
 
+export type AuthLogoutResponse = {
+  message: 'Logged out successfully';
+};
+
+export type AuthAccessRightsRequest = {
+  email: string;
+  companyCode: string;
+};
+
+export type AuthAccessRoleCategory =
+  | 'ALL'
+  | 'TRANSACTIONAL'
+  | 'OPERATIONAL'
+  | 'SYSTEM_ACCESS'
+  | 'SAAS_ADMIN';
+
+export type AuthAccessRoleSubCategory =
+  | 'ALL'
+  | 'ACCOUNTS'
+  | 'PAYMENTS'
+  | 'PURCHASE'
+  | 'FIN_OPS'
+  | 'MASTER'
+  | 'ORG_STR'
+  | 'USER_ACC'
+  | 'WORK_FLOW'
+  | 'SAAS_ADMIN';
+
+export type AuthAccessNodeType =
+  | 'ROOT'
+  | 'DIVISION'
+  | 'DEPARTMENT'
+  | 'TEAM'
+  | 'PLANT'
+  | 'LOCATION';
+
+export type AuthAccessCategory = 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE';
+
+export type AuthAccessRight = {
+  roleCategory: AuthAccessRoleCategory;
+  roleSubCategory: AuthAccessRoleSubCategory;
+  roleName: string;
+  nodeName: string;
+  nodePath: string;
+  nodeType: AuthAccessNodeType;
+  accessCategory: AuthAccessCategory;
+};
+
+export type AuthAccessRightsResponse = {
+  primary: AuthAccessRight[];
+  secondary: AuthAccessRight[];
+};
+
+export type AuthApiErrorResponse = {
+  message?: string;
+  error?: string;
+};
+
 export type AuthBackendGroup = {
   name: string;
   groupCode: string;

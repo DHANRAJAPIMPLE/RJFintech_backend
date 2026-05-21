@@ -1,8 +1,11 @@
 import type { NextFunction, Request, Response } from 'express';
-import { AppError } from '../../shared/middlewares/error.middleware';
-import { config } from '../config';
-import { internalPost } from '../utils/internal-fetch.util';
+import { AppError } from '../../../shared/middlewares/error.middleware';
+import { config } from '../../config';
+import { internalPost } from '../../utils/internal-fetch.util';
 import type {
+  FetchMonitoringDetailsInternalResponse,
+  FetchMonitoringDetailsRequest,
+  FetchMonitoringDetailsResponse,
   FetchMonitoringSpansInternalResponse,
   FetchMonitoringSpansResponse,
   MonitoringApiErrorResponse,
@@ -41,29 +44,38 @@ export class MonitoringController {
     }
   }
 
-  static async details(req: Request, res: Response, next: NextFunction) {
+  static async details(
+    req: Request,
+    res: Response<FetchMonitoringDetailsResponse>,
+    next: NextFunction,
+  ) {
     try {
+      const body = (req.body ?? {}) as FetchMonitoringDetailsRequest;
       const trackingId =
-        req.body?.trackingId ||
-        req.body?.trackId ||
-        req.body?.tracking_id ||
+        body.trackingId ||
+        body.trackId ||
+        body.tracking_id ||
         req.get('x-tracking-id');
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/monitoring/detaisls`,
-        {
-          ...(req.body ?? {}),
-          trackingId,
-        },
-      );
+      const { data, ok, status } =
+        await internalPost<FetchMonitoringDetailsInternalResponse>(
+          `${config.backendUrl}/monitoring/detaisls`,
+          {
+            ...body,
+            trackingId,
+          },
+        );
 
       if (!ok) {
+        const errorData = data as MonitoringApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch monitoring details',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch monitoring details',
           status,
         );
       }
 
-      return res.status(200).json(data);
+      return res.status(200).json(data as FetchMonitoringDetailsResponse);
     } catch (error) {
       return next(error);
     }

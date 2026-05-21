@@ -12,10 +12,10 @@
  */
 import { Router } from 'express';
 import { authMiddleware } from '../middlewares/auth.middleware';
-import { OrgController } from '../controllers/org.controller';
-import { RoleController } from '../controllers/role.controller';
-import { UserController } from '../controllers/user.controller';
-import { WorkflowController } from '../controllers/workflow.controller';
+import { OrgController } from '../controllers/org/org.controller';
+import { RoleController } from '../controllers/role/role.controller';
+import { UserController } from '../controllers/user/user.controller';
+import { WorkflowController } from '../controllers/workflow/workflow.controller';
 
 import { authorize, checkGlobalUser } from '../middlewares/access.middleware';
 
@@ -38,12 +38,12 @@ router.post(
   '/user/fetch-all-active-user',
   authorize('view', 'USER_ACC'),
   UserController.fetchActiveUsers,
-);
+);  //done
 router.post(
   '/user/fetch-all-pending-user',
   authorize('view', 'USER_ACC'),
   UserController.fetchPendingUsers,
-);
+);  //done
 router.post(
   '/user/user-filter-option',
   authorize('view', 'USER_ACC'),
@@ -54,16 +54,16 @@ router.post(
   '/user/fetch-history',
   authorize('view', 'USER_ACC'),
   UserController.getUserHistory,
-);
+);  //done
 router.post(
   '/user/fetch-company-nodes',
   authorize('initiate'),
   UserController.fetchCompanyNodes,
-);
+);  //done
 router.post(
   '/user/fetch-users-by-nodepath-count',
   UserController.fetchUsersByNodePathCount,
-);
+);  //done
 
 // ----------------------------------------------------------
 
@@ -82,12 +82,12 @@ router.post(
   '/org/fetch',
   authorize('view', 'ORG_STR'),
   OrgController.fetchOrgStructure,
-);
+);  //done
 router.post(
   '/org/fetch-history',
   authorize('view', 'ORG_STR'),
   OrgController.fetchOrgHistory,
-);
+);  //done
 // ----------------------------------------------------------
 
 // --------------workflow routes------------------------------
@@ -105,18 +105,18 @@ router.post(
   '/workflow/fetch',
   authorize('view', 'WORK_FLOW'),
   WorkflowController.fetchAllWorkflows,
-);
+);  //done
 router.post(
   '/workflow/fetch-history',
   authorize('view', 'WORK_FLOW'),
   WorkflowController.fetchWorkflowHistory,
-);
+);  //done
 
 // ----------------------------------------------------------
 
 // --------------roles routes--------------------------------
 // router.post('/role/create', RoleController.createRoles);
-router.post('/role/fetch-all', RoleController.fetchAllRoles);
+router.post('/role/fetch-all', RoleController.fetchAllRoles);  //done
 // ----------------------------------------------------------
 
 export default router;

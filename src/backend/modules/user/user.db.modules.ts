@@ -2156,8 +2156,9 @@ export class UserDbController {
       });
 
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
         ...Array.from(allApproverIds),
-        ...activeHistory.map((h) => h.eventUserId).filter(Boolean),
+        ...activeHistory.map((h) => h.eventUserId),
       ]);
 
       const approverMap = new Map(
