@@ -356,7 +356,12 @@ export class OrgStructureDbController {
 
         await NotificationService.createRequestNotification({
           companyId: notificationCompanyId,
-          type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
+          type:
+            result?.status === 'REJECTED'
+              ? 'REJECT'
+              : result?.status === 'APPROVED'
+                ? 'ONBOARDED'
+                : 'APPROVE',
           referenceType: 'ORG',
           referenceId: id,
           referenceName: notificationSubject,

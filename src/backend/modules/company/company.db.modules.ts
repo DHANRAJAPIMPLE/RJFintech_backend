@@ -847,7 +847,7 @@ export class CompanyDbController {
 
         await NotificationService.createRequestNotification({
           companyId: resolvedNotificationCompanyId,
-          type: result.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
+          type: result.status === 'REJECTED' ? 'REJECT' : 'ONBOARDED',
           referenceType: 'COMPANY',
           referenceId: id,
           referenceName: notificationSubject,

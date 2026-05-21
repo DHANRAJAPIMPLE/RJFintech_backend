@@ -8,11 +8,15 @@
  * - To enforce correct formatting for company-wide organizational history lookups.
  */
 import { z } from 'zod';
+import { nameSchema } from './common.validation';
 
 export const orgOnboardingSchema = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
-    newNodeName: z.string().trim().min(1, 'New node name is required'),
+    newNodeName: nameSchema('New node name').min(
+      1,
+      'New node name is required',
+    ),
     nodeType: z.enum([
       'ROOT',
       'DIVISION',
@@ -22,7 +26,7 @@ export const orgOnboardingSchema = z
       'LOCATION',
     ]),
     parentNode: z.object({
-      nodeName: z.string().trim().min(1, 'Node name is required'),
+      nodeName: nameSchema('Node name').min(1, 'Node name is required'),
       nodePath: z.string().trim().min(1, 'Node path is required'),
     }),
     levelsHash: z.string().nullable().optional(),
@@ -44,7 +48,7 @@ export const orgOnboardingAction = z
 export const orgHistory = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
-    nodeName: z.string().trim().optional(),
+    nodeName: nameSchema('Node name').optional(),
     nodePath: z.string().trim().optional(),
   })
   .strict();

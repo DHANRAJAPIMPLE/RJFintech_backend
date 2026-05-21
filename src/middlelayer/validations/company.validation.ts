@@ -8,6 +8,7 @@
  * - To provide strict typing for company actions (approve/reject) and history lookups.
  */
 import { z } from 'zod';
+import { emailSchema, nameSchema } from './common.validation';
 
 const phoneSchema = z
   .string()
@@ -25,9 +26,7 @@ const groupCodeSchema = z
 export const companyOnboardingSchema = z.object({
   group: z
     .object({
-      name: z
-        .string()
-        .trim()
+      name: nameSchema('Group name')
         .min(2, 'Group name must be at least 2 characters')
         .max(100, 'Group name too long')
         .toUpperCase()
@@ -45,9 +44,7 @@ export const companyOnboardingSchema = z.object({
     .nullable(),
   company: z
     .object({
-      name: z
-        .string()
-        .trim()
+      name: nameSchema('Company name')
         .min(2, 'Company name must be at least 2 characters')
         .toUpperCase()
         .max(150, 'Company name too long'),
@@ -58,9 +55,7 @@ export const companyOnboardingSchema = z.object({
         .max(15, 'Gst too long')
         .optional()
         .nullable(),
-      brand: z
-        .string()
-        .trim()
+      brand: nameSchema('Brand name')
         .min(2, 'Brand name must be at least 2 characters')
         .max(100, 'Brand name too long')
         .optional()
@@ -89,12 +84,10 @@ export const companyOnboardingSchema = z.object({
     .array(
       z
         .object({
-          name: z
-            .string()
-            .trim()
+          name: nameSchema()
             .min(2, 'Name must be at least 2 characters')
             .max(100, 'Name too long'),
-          email: z.string().trim().toLowerCase().email('Invalid email format'),
+          email: emailSchema,
           phone: phoneSchema,
           designation: z
             .string()
@@ -136,6 +129,6 @@ export const companyHistory = z
 
 export const companyCodeOnly = z
   .object({
-    companyCode: z.string().trim().min(1, 'Company code is required')
+    companyCode: z.string().trim().min(1, 'Company code is required'),
   })
   .strict();

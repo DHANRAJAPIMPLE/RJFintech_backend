@@ -4,7 +4,7 @@ import { emitNotificationEvent } from '../../../shared/utils/notification-events
 import { getPagination } from '../../../shared/utils/pagination.util';
 import { prisma } from '../../lib/prisma';
 
-type NotificationType = 'INITIATE' | 'APPROVE' | 'REJECT';
+type NotificationType = 'INITIATE' | 'APPROVE' | 'REJECT' | 'ONBOARDED';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 
 type CreateNotificationInput = {
@@ -23,6 +23,7 @@ const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
   'INITIATE',
   'APPROVE',
   'REJECT',
+  'ONBOARDED',
 ];
 const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'USER',
@@ -142,6 +143,11 @@ export class NotificationService {
           name: 'User onboarding rejected',
           message: `${actorName} rejected user onboarding for ${userName}`,
         };
+      case 'USER:ONBOARDED':
+        return {
+          name: 'User onboarded',
+          message: `${actorName} onboarded ${userName}`,
+        };
       case 'ORG:INITIATE':
         return {
           name: 'Organization request initiated',
@@ -156,6 +162,11 @@ export class NotificationService {
         return {
           name: 'Organization request rejected',
           message: `${actorName} rejected organization request for ${orgName}`,
+        };
+      case 'ORG:ONBOARDED':
+        return {
+          name: 'Organization structure onboarded',
+          message: `${actorName} onboarded organization structure for ${orgName}`,
         };
       case 'WORKFLOW:INITIATE':
         return {
@@ -172,6 +183,11 @@ export class NotificationService {
           name: 'Workflow request rejected',
           message: `${actorName} rejected workflow request for ${workflowName}`,
         };
+      case 'WORKFLOW:ONBOARDED':
+        return {
+          name: 'Workflow onboarded',
+          message: `${actorName} onboarded workflow ${workflowName}`,
+        };
       case 'COMPANY:INITIATE':
         return {
           name: 'Company onboarding initiated',
@@ -186,6 +202,11 @@ export class NotificationService {
         return {
           name: 'Company onboarding rejected',
           message: `${actorName} rejected company onboarding for ${companyName}`,
+        };
+      case 'COMPANY:ONBOARDED':
+        return {
+          name: 'Company onboarded',
+          message: `${actorName} onboarded ${companyName}`,
         };
       default:
         return {

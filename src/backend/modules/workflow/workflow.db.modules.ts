@@ -535,7 +535,12 @@ export class WorkflowDbController {
 
       await NotificationService.createRequestNotification({
         companyId: request.companyId,
-        type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
+        type:
+          result?.status === 'REJECTED'
+            ? 'REJECT'
+            : result?.status === 'APPROVED'
+              ? 'ONBOARDED'
+              : 'APPROVE',
         referenceType: 'WORKFLOW',
         referenceId: request.id,
         referenceName: (request.data as any)?.name,

@@ -2,9 +2,14 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError } from '../../../shared/middlewares/error.middleware';
 import { config } from '../../config';
 import { internalPost } from '../../utils/internal-fetch.util';
+import { zodParse } from '../../utils/zod-parse.util';
+import {
+  monitoringDetailsBodySchema,
+  monitoringFetchAllSchema,
+  monitoringTrackingIdSchema,
+} from '../../validations/monitoring.validation';
 import type {
   FetchMonitoringDetailsInternalResponse,
-  FetchMonitoringDetailsRequest,
   FetchMonitoringDetailsResponse,
   FetchMonitoringSpansInternalResponse,
   FetchMonitoringSpansResponse,
@@ -18,10 +23,7 @@ export class MonitoringController {
     next: NextFunction,
   ) {
     try {
-      const body =
-        req.body && typeof req.body === 'object' && Object.keys(req.body).length
-          ? req.body
-          : undefined;
+      const body = zodParse(monitoringFetchAllSchema, req.body ?? {});
       const { data, ok, status } =
         await internalPost<FetchMonitoringSpansInternalResponse>(
           `${config.backendUrl}/monitoring/fetch-all`,
@@ -50,12 +52,14 @@ export class MonitoringController {
     next: NextFunction,
   ) {
     try {
-      const body = (req.body ?? {}) as FetchMonitoringDetailsRequest;
-      const trackingId =
-        body.trackingId ||
-        body.trackId ||
-        body.tracking_id ||
-        req.get('x-tracking-id');
+      const body = zodParse(monitoringDetailsBodySchema, req.body ?? {});
+      const { trackingId } = zodParse(monitoringTrackingIdSchema, {
+        trackingId:
+          body.trackingId ||
+          body.trackId ||
+          body.tracking_id ||
+          req.get('x-tracking-id'),
+      });
       const { data, ok, status } =
         await internalPost<FetchMonitoringDetailsInternalResponse>(
           `${config.backendUrl}/monitoring/detaisls`,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { emailSchema, nameSchema, passwordSchema } from './common.validation';
 
 /**
  * Auth Validation:
@@ -14,25 +15,11 @@ import { z } from 'zod';
 // Logic: Schema for user registration — ensures all required profile fields are present and valid
 export const registerSchema = z.object({
   body: z.object({
-    name: z
-      .string()
-      .trim()
+    name: nameSchema()
       .min(2, 'Name must be at least 2 characters')
       .max(100, 'Name cannot exceed 100 characters'),
-    email: z
-      .string()
-      .trim()
-      .toLowerCase()
-      .email('Invalid email format')
-      .max(150, 'Email is too long'),
-    password: z
-      .string()
-      .min(8, 'Password must be at least 8 characters')
-      .max(64, 'Password cannot exceed 64 characters')
-      .regex(/[A-Z]/, 'Must contain at least one uppercase letter')
-      .regex(/[a-z]/, 'Must contain at least one lowercase letter')
-      .regex(/[0-9]/, 'Must contain at least one number')
-      .regex(/[^A-Za-z0-9]/, 'Must contain at least one special character'),
+    email: emailSchema,
+    password: passwordSchema,
     phone: z
       .string()
       .trim()
@@ -44,9 +31,9 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   body: z
     .object({
-      email: z.string().trim().toLowerCase().email('Invalid email format'),
+      email: emailSchema,
 
-      password: z.string().min(8, 'Password is required'),
+      password: passwordSchema,
 
       companyCode: z.string().trim().optional(),
 
@@ -76,3 +63,10 @@ export const loginSchema = z.object({
     )
     .strict(),
 });
+
+export const accessRightsSchema = z
+  .object({
+    email: emailSchema,
+    companyCode: z.string().trim().min(1, 'Company code is required'),
+  })
+  .strict();

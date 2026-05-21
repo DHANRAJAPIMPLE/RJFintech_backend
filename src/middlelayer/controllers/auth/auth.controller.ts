@@ -20,7 +20,11 @@ import { config } from '../../config';
 import { internalPost } from '../../utils/internal-fetch.util';
 import { setAuthCookies, clearAuthCookies } from '../../utils/cookie.util';
 import { zodParse } from '../../utils/zod-parse.util';
-import { registerSchema, loginSchema } from '../../validations/auth.validation';
+import {
+  accessRightsSchema,
+  registerSchema,
+  loginSchema,
+} from '../../validations/auth.validation';
 
 import type {
   AuthAccessRightsRequest,
@@ -416,11 +420,7 @@ export class AuthController {
     next: NextFunction,
   ) {
     try {
-      const { email, companyCode } = req.body;
-
-      if (!email || !companyCode) {
-        throw new AppError('email and companyCode are required', 400);
-      }
+      const { email, companyCode } = zodParse(accessRightsSchema, req.body);
 
       const backendRes = await internalPost<
         AuthAccessRightsResponse | AuthApiErrorResponse

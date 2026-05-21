@@ -2005,10 +2005,15 @@ export class UserDbController {
 
       await NotificationService.createRequestNotification({
         companyId: onboarding.companyId,
-        type: result?.status === 'REJECTED' ? 'REJECT' : 'APPROVE',
+        type:
+          result?.status === 'REJECTED'
+            ? 'REJECT'
+            : result?.status === 'APPROVED'
+              ? 'ONBOARDED'
+              : 'APPROVE',
         referenceType: 'USER',
         referenceId: id,
-        referenceName: email,
+        referenceName: name || email,
         createdBy: approverId,
         recipientUserIds: notificationRecipientUserIds,
       });

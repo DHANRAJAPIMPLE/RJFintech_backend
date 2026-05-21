@@ -1,4 +1,8 @@
-export type NotificationActionType = 'INITIATE' | 'APPROVE' | 'REJECT';
+export type NotificationActionType =
+  | 'INITIATE'
+  | 'APPROVE'
+  | 'REJECT'
+  | 'ONBOARDED';
 
 export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 

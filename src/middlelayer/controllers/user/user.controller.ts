@@ -12,11 +12,9 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../../shared/middlewares/error.middleware';
-import { getPagination } from '../../../shared/utils/pagination.util';
 import { config } from '../../config';
 import { internalPost } from '../../utils/internal-fetch.util';
 import { zodParse } from '../../utils/zod-parse.util';
-import { companyCodeOnly } from '../../validations/company.validation';
 import {
   userOnboardingSchema,
   userActionSchema,
@@ -24,6 +22,8 @@ import {
   userHistory,
   userCompanyNodesSchema,
   userFetchByNodePathCountSchema,
+  userFilterOptionsSchema,
+  userListSchema,
 } from '../../validations/user.validation';
 import type {
   ActionUserOnboardingInternalResponse,
@@ -49,24 +49,23 @@ export class UserController {
     req: Request,
     listType?: 'active' | 'pending',
   ): Promise<FetchAndProcessUsersResult> {
-    const { companyCode } = zodParse(companyCodeOnly, {
-      companyCode: req.body?.companyCode,
-    });
-    const { offset, limit } = getPagination(req.body);
-    const rawPage = Number(req.body?.page);
-    const page =
-      Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
-    const direction =
-      typeof req.body?.direction === 'string' &&
-      ['prev', 'previous'].includes(req.body.direction.trim().toLowerCase())
-        ? 'prev'
-        : 'next';
+    const {
+      companyCode,
+      direction,
+      cursor: bodyCursor,
+      prevCursor,
+      nextCursor,
+      cursorId,
+      topCursor,
+      offset,
+      limit,
+      page,
+    } = zodParse(userListSchema, req.body ?? {});
     const cursor =
-      req.body?.cursor ??
-      (direction === 'prev' ? req.body?.prevCursor : req.body?.nextCursor) ??
-      req.body?.cursorId ??
+      bodyCursor ??
+      (direction === 'prev' ? prevCursor : nextCursor) ??
+      cursorId ??
       null;
-    const topCursor = req.body?.topCursor || null;
     const { data, ok, status } = await internalPost<any>(
       `${config.backendUrl}/internal/user/fetch-all`,
       {
@@ -78,7 +77,7 @@ export class UserController {
         topCursor,
         offset,
         limit,
-        page: req.body?.page,
+        page,
       },
     );
     if (!ok) {
@@ -178,10 +177,7 @@ export class UserController {
   ) {
     try {
       const companyId = req.user?.companyId;
-      const companyCode =
-        typeof req.body?.companyCode === 'string'
-          ? req.body.companyCode.trim()
-          : undefined;
+      const { companyCode } = zodParse(userFilterOptionsSchema, req.body ?? {});
 
       if (!companyId && !companyCode) {
         throw new AppError('Company context is required', 400);
@@ -216,7 +212,8 @@ export class UserController {
     try {
       const validatedData = zodParse(userOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { basicDetails, permissions, levelsHash } = validatedData;
+      const { basicDetails, companyId, permissions, levelsHash } =
+        validatedData;
       const { email, reportingManager } = basicDetails;
 
       if (!initiatorId) {
@@ -330,7 +327,7 @@ export class UserController {
         }
       } else {
         // Resolve from body companyId or initiator's session companyId
-        const resolveId = req.body.companyId || (req as any).user?.companyId;
+        const resolveId = companyId || (req as any).user?.companyId;
 
         if (resolveId) {
           const { data: initiatorCompany, ok: initOk } =

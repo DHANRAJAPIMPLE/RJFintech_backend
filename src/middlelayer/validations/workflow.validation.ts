@@ -9,6 +9,7 @@
  * - To strictly type workflow initiation, actions, and history lookups.
  */
 import { z } from 'zod';
+import { nameSchema } from './common.validation';
 
 const approverTypeEnum = z.enum([
   'REPORTING_MANAGER',
@@ -29,10 +30,9 @@ const levelSchema = z
 export const workflowOnboardingSchema = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
-    name: z
-      .string()
-      .trim()
-      .min(2, 'Workflow name must be at least 2 characters'),
+    name: nameSchema('Workflow name')
+      .min(2, 'Workflow name must be at least 2 characters')
+      .max(100, 'Workflow name too long'),
     module: z.string().trim().min(1, 'Module is required'),
     nodePath: z.string().trim().min(1, 'Node path is required'),
     subModule: z.string().trim().min(1, 'Sub-module is required'),

@@ -1,15 +1,18 @@
 import type { NextFunction, Response } from 'express';
 import { AppError } from '../../../shared/middlewares/error.middleware';
 import { onNotificationEvent } from '../../../shared/utils/notification-events.util';
-import { getPagination } from '../../../shared/utils/pagination.util';
 import type { AuthRequest } from '../../middlewares/auth.middleware';
 import { config } from '../../config';
 import { internalPost } from '../../utils/internal-fetch.util';
+import { zodParse } from '../../utils/zod-parse.util';
+import {
+  notificationFetchSchema,
+  notificationReadSchema,
+} from '../../validations/notification.validation';
 import type {
   FetchNotificationsInternalResponse,
   FetchNotificationsResponse,
   MarkNotificationReadInternalResponse,
-  MarkNotificationReadRequest,
   MarkNotificationReadResponse,
   NotificationApiErrorResponse,
   NotificationSseEventName,
@@ -96,13 +99,19 @@ export class NotificationController {
         throw new AppError('Unauthorized', 401);
       }
 
-      const { offset, limit } = getPagination(req.body);
-      const cursorId = req.body?.cursorId || req.body?.cursor || null;
+      const {
+        status: notificationStatus,
+        cursorId: parsedCursorId,
+        cursor,
+        offset,
+        limit,
+      } = zodParse(notificationFetchSchema, req.body ?? {});
+      const cursorId = parsedCursorId || cursor || null;
       const { data, ok, status } =
         await internalPost<FetchNotificationsInternalResponse>(
           `${config.backendUrl}/internal/notifications/fetch`,
           {
-            status: req.body?.status || 'ALL',
+            status: notificationStatus,
             userId,
             companyId,
             cursorId,
@@ -142,7 +151,7 @@ export class NotificationController {
         throw new AppError('Unauthorized', 401);
       }
 
-      const body = req.body as MarkNotificationReadRequest;
+      const body = zodParse(notificationReadSchema, req.body ?? {});
       const { data, ok, status } =
         await internalPost<MarkNotificationReadInternalResponse>(
           `${config.backendUrl}/internal/notifications/read`,
