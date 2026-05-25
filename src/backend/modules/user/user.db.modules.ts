@@ -717,22 +717,23 @@ export class UserDbController {
           ? Math.floor(rawPage)
           : null;
       const limit = pagination.limit;
-      const isPagePagination = requestedPage !== null;
+      const pageDirection = UserDbController.normalizePageDirection(
+        req.body?.direction,
+      );
+      const rawCursor =
+        req.body?.cursor ??
+        (pageDirection === 'prev'
+          ? req.body?.prevCursor
+          : req.body?.nextCursor) ??
+        req.body?.cursorId ??
+        null;
+      const hasCursor = UserDbController.decodeCursor(rawCursor) !== null;
+      const isPagePagination = requestedPage !== null && !hasCursor;
       const offset = isPagePagination
         ? (requestedPage - 1) * limit
         : pagination.offset;
       const page = requestedPage ?? Math.floor(offset / limit) + 1;
-      const pageDirection = UserDbController.normalizePageDirection(
-        req.body?.direction,
-      );
-      const requestedCursor = isPagePagination
-        ? null
-        : (req.body?.cursor ??
-          (pageDirection === 'prev'
-            ? req.body?.prevCursor
-            : req.body?.nextCursor) ??
-          req.body?.cursorId ??
-          null);
+      const requestedCursor = isPagePagination ? null : rawCursor;
       const requestedTopCursor = isPagePagination
         ? null
         : req.body?.topCursor || null;

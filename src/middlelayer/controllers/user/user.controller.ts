@@ -198,6 +198,7 @@ export class UserController {
       (direction === 'prev' ? prevCursor : nextCursor) ??
       cursorId ??
       null;
+    const currentPage = page ?? Math.floor(offset / limit) + 1;
     const { data, ok, status } = await internalPost<any>(
       `${config.backendUrl}/internal/user/fetch-all`,
       {
@@ -234,7 +235,7 @@ export class UserController {
       limit: data?.limit ?? limit,
       offset: data?.offset ?? offset,
       pageInfo: data?.pageInfo || {
-        page,
+        page: currentPage,
         nextCursor: null,
         prevCursor: null,
         topCursor: null,

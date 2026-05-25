@@ -11,7 +11,6 @@ import { z } from 'zod';
 import {
   emailSchema,
   nameSchema,
-  numberWithDefaultSchema,
   optionalCursorTokenSchema,
   optionalTrimmedStringSchema,
   optionalUuidSchema,
@@ -84,11 +83,17 @@ export const userOnboardingSchema = z.object({
 export const userListSchema = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
-    page: numberWithDefaultSchema({
-      fieldName: 'Page',
-      defaultValue: 1,
-      min: 1,
-    }),
+    page: z.preprocess(
+      (value) =>
+        value === undefined || value === null || value === ''
+          ? undefined
+          : value,
+      z.coerce
+        .number()
+        .int('Page must be an integer')
+        .min(1, 'Page must be greater than or equal to 1')
+        .optional(),
+    ),
     direction: z.preprocess(
       (value) => {
         if (value === undefined || value === null || value === '') {
