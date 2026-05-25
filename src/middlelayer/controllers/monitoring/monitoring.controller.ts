@@ -11,12 +11,30 @@ import {
 import type {
   FetchMonitoringDetailsInternalResponse,
   FetchMonitoringDetailsResponse,
+  FetchMonitoringSpanInternalItem,
   FetchMonitoringSpansInternalResponse,
   FetchMonitoringSpansResponse,
   MonitoringApiErrorResponse,
 } from './monitoring.type';
 
 export class MonitoringController {
+  private static formatFetchAllSpan(
+    span: FetchMonitoringSpanInternalItem,
+  ): FetchMonitoringSpansResponse[number] {
+    return {
+      trackingId: span.trackingId,
+      apiUrl: span.apiUrl,
+      statusCode: span.statusCode,
+      ip: span.ip,
+      spanCount: span.spanCount,
+      companyName: span.companyName,
+      companyCode: span.companyCode,
+      userName: span.userName,
+      userEmail: span.userEmail,
+      createdAt: span.createdAt,
+    };
+  }
+
   static async fetchAll(
     req: Request,
     res: Response<FetchMonitoringSpansResponse>,
@@ -40,7 +58,10 @@ export class MonitoringController {
         );
       }
 
-      return res.status(200).json(data as FetchMonitoringSpansResponse);
+      const spans = data as FetchMonitoringSpanInternalItem[];
+      return res
+        .status(200)
+        .json(spans.map(MonitoringController.formatFetchAllSpan));
     } catch (error) {
       return next(error);
     }
@@ -62,7 +83,7 @@ export class MonitoringController {
       });
       const { data, ok, status } =
         await internalPost<FetchMonitoringDetailsInternalResponse>(
-          `${config.backendUrl}/monitoring/detaisls`,
+          `${config.backendUrl}/monitoring/details`,
           {
             ...body,
             trackingId,

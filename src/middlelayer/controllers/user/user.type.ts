@@ -70,6 +70,50 @@ export type FetchUsersByNodePathCountResponse = {
   data: FetchUsersByNodePathCountData;
 };
 
+export type UserFilterTextOption = {
+  label: string;
+  value: string;
+};
+
+export type UserFilterNodeOption = UserFilterTextOption & {
+  nodeName: string;
+  nodePath: string;
+  nodeType: string | null;
+};
+
+export type UserFilterManagerOption = UserFilterTextOption & {
+  name: string | null;
+  email: string;
+};
+
+export type UserFilterManagerInternalOption = UserFilterManagerOption & {
+  id: string | null;
+};
+
+export type FetchUserFilterOptionsResponse = {
+  message: 'User filter options fetched successfully!';
+  code: 200;
+  companyCode: string;
+  data: {
+    designation: UserFilterTextOption[];
+    department: UserFilterNodeOption[];
+    category: UserFilterTextOption[];
+    subCategory: UserFilterTextOption[];
+    primaryNode: UserFilterNodeOption[];
+    secondaryNode: UserFilterNodeOption[];
+    reportingManager: UserFilterManagerOption[];
+  };
+};
+
+export type FetchUserFilterOptionsInternalResponse = Omit<
+  FetchUserFilterOptionsResponse,
+  'data'
+> & {
+  data: Omit<FetchUserFilterOptionsResponse['data'], 'reportingManager'> & {
+    reportingManager: UserFilterManagerInternalOption[];
+  };
+};
+
 export type UserListBasicDetails = {
   name: string;
   email: string;
@@ -116,7 +160,6 @@ export type PendingUserAccess = Omit<UserListAccess, 'nodeType'> & {
 
 export type PendingUserListItem = {
   id: string;
-  approver: PendingUserApprover | null;
   basicDetails: PendingUserBasicDetails;
   primary: PendingUserAccess[];
   secondary: PendingUserAccess[];
@@ -161,9 +204,11 @@ export type FetchPendingUsersResponse = {
   pageInfo: UserListPageInfo;
 };
 
-export type InitiateUserOnboardingResponse = {
-  message: 'User onboarding initiated successfully';
-} | UserApiErrorResponse;
+export type InitiateUserOnboardingResponse =
+  | {
+      message: 'User onboarding initiated successfully';
+    }
+  | UserApiErrorResponse;
 
 export type UserOnboardingStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -189,7 +234,6 @@ export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
 export type UserHistoryBaseItem = {
   email: string;
-  companyCode: string;
 };
 
 export type UserHistoryActionItem = UserHistoryBaseItem & {
@@ -216,7 +260,15 @@ export type FetchUserHistoryResponse = {
   data: UserHistoryItem[];
 };
 
-export type FetchUserHistoryInternalSuccess = FetchUserHistoryResponse;
+export type UserHistoryInternalItem = UserHistoryItem & {
+  companyCode: string;
+};
+
+export type FetchUserHistoryInternalSuccess = {
+  message: 'User history fetched successfully!';
+  code: 200;
+  data: UserHistoryInternalItem[];
+};
 
 export type UserApiErrorResponse = {
   status?: 'error' | string;

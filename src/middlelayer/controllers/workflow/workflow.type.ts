@@ -1,7 +1,4 @@
-export type WorkflowModule =
-  | 'TRANSACTIONAL'
-  | 'OPERATIONAL'
-  | 'SYSTEM_ACCESS';
+export type WorkflowModule = 'TRANSACTIONAL' | 'OPERATIONAL' | 'SYSTEM_ACCESS';
 
 export type WorkflowSubModule =
   | 'ACCOUNTS'
@@ -57,9 +54,6 @@ export type WorkflowActiveLevel = {
 };
 
 export type WorkflowActiveItem = {
-  id: string;
-  nodeId: string;
-  workflowReqIds: string[];
   name: string;
   alias: string;
   module: WorkflowModule;
@@ -90,8 +84,6 @@ export type WorkflowPendingRequestData = {
   nodePath: string;
   subModule: WorkflowSubModule;
   levelsHash: string | null;
-  companyCode: string;
-  [key: string]: unknown;
 };
 
 export type WorkflowInitiator = {
@@ -100,9 +92,6 @@ export type WorkflowInitiator = {
 };
 
 export type WorkflowPendingItem = {
-  id: string;
-  nodeId: string;
-  workflowId: string | null;
   data: WorkflowPendingRequestData;
   status: 'PENDING';
   alias: string;
@@ -122,6 +111,23 @@ export type FetchWorkflowsData = {
   pending: WorkflowPendingItem[];
 };
 
+export type WorkflowPendingInternalRequestData = WorkflowPendingRequestData & {
+  companyCode: string;
+  [key: string]: unknown;
+};
+
+export type WorkflowPendingInternalItem = Omit<WorkflowPendingItem, 'data'> & {
+  id: string;
+  nodeId: string;
+  workflowId: string | null;
+  data: WorkflowPendingInternalRequestData;
+};
+
+export type FetchWorkflowsInternalData = {
+  active: WorkflowActiveItem[];
+  pending: WorkflowPendingInternalItem[];
+};
+
 export type FetchWorkflowsResponse = {
   message: 'Workflows fetched successfully!';
   code: 200;
@@ -139,22 +145,10 @@ export type WorkflowHistoryEvent =
   | 'REJECTED'
   | 'MODIFY';
 
-export type WorkflowHistoryPendingApprovalEvent =
-  `L${number} Pending Approval`;
+export type WorkflowHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
 export type WorkflowHistoryBaseItem = {
-  workflowReqId: string;
-  workflowId: string | null;
-  nodeId: string | null;
   workflowName: string | null;
-  module: WorkflowModule | null;
-  subModule: WorkflowSubModule | null;
-  levelsHash: string | null;
-  alias: string | null;
-  nodePath: string | null;
-  nodeName: string | null;
-  nodeType: WorkflowNodeType | null;
-  companyCode: string;
 };
 
 export type WorkflowHistoryActionItem = WorkflowHistoryBaseItem & {
@@ -181,8 +175,25 @@ export type FetchWorkflowHistoryResponse = {
   data: WorkflowHistoryItem[];
 };
 
-export type FetchWorkflowHistoryInternalSuccess =
-  FetchWorkflowHistoryResponse;
+export type WorkflowHistoryInternalItem = WorkflowHistoryItem & {
+  workflowReqId: string;
+  workflowId: string | null;
+  nodeId: string | null;
+  module: WorkflowModule | null;
+  subModule: WorkflowSubModule | null;
+  levelsHash: string | null;
+  alias: string | null;
+  nodePath: string | null;
+  nodeName: string | null;
+  nodeType: WorkflowNodeType | null;
+  companyCode: string;
+};
+
+export type FetchWorkflowHistoryInternalSuccess = {
+  message: 'Workflow history fetched successfully!';
+  code: 200;
+  data: WorkflowHistoryInternalItem[];
+};
 
 export type WorkflowApiErrorResponse = {
   message?: string;
@@ -234,7 +245,7 @@ export type WorkflowActionInternalResponse = {
 };
 
 export type FetchWorkflowsInternalResponse =
-  | FetchWorkflowsData
+  | FetchWorkflowsInternalData
   | WorkflowApiErrorResponse;
 
 export type FetchWorkflowHistoryInternalResponse =

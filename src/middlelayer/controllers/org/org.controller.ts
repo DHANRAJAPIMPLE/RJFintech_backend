@@ -22,6 +22,7 @@ import {
 } from '../../validations/org.validation';
 import type {
   InitiateOrgRequestResponse,
+  OrgActiveNode,
   OrgActionInternalResponse,
   FetchOrgHistoryInternalResponse,
   FetchOrgHistoryInternalSuccess,
@@ -31,6 +32,8 @@ import type {
   FetchOrgStructureResponse,
   OrgApiErrorResponse,
   OrgCompanyLookupInternalResponse,
+  OrgHistoryInternalItem,
+  OrgHistoryItem,
   OrgInitiateInternalResponse,
   OrgNodeInternal,
   OrgPendingInternalItem,
@@ -41,6 +44,48 @@ import type {
 } from './org.type';
 
 export class OrgController {
+  private static formatActiveNode(node: OrgActiveNode): OrgActiveNode {
+    return {
+      nodeName: node.nodeName,
+      nodeType: node.nodeType,
+      nodePath: node.nodePath,
+    };
+  }
+
+  private static formatHistoryItem(
+    item: OrgHistoryInternalItem,
+  ): OrgHistoryItem {
+    const common = {
+      newNodeName: item.newNodeName,
+      nodeType: item.nodeType,
+      parentNodeName: item.parentNodeName,
+    };
+
+    if ('eligibleapprovers' in item) {
+      return {
+        ...common,
+        event: item.event,
+        createdAt: null,
+        eligibleapprovers: item.eligibleapprovers.map((approver) => ({
+          name: approver.name,
+          email: approver.email,
+        })),
+      };
+    }
+
+    return {
+      ...common,
+      event: item.event,
+      level: item.level,
+      createdAt: item.createdAt,
+      remarks: item.remarks,
+      user: {
+        name: item.user.name,
+        email: item.user.email,
+      },
+    };
+  }
+
   static async initiateOrgRequest(
     req: Request & { user?: { id: string } },
     res: Response<InitiateOrgRequestResponse>,
@@ -332,7 +377,10 @@ export class OrgController {
             id: req.id,
             newNodeName: reqData.newNodeName,
             nodeType: reqData.nodeType,
-            parentNode: reqData.parentNode,
+            parentNode: {
+              nodeName: reqData.parentNode.nodeName,
+              nodePath: reqData.parentNode.nodePath,
+            },
             initiatorName: req.initiator?.name || null,
             initiatorEmail: req.initiator?.email || null,
             initiatedDate: req.createdAt,
@@ -346,7 +394,7 @@ export class OrgController {
         message: 'Organization structure fetched successfully!',
         code: 200,
         data: {
-          active: orgData.data.nodes,
+          active: orgData.data.nodes.map(OrgController.formatActiveNode),
           pending: formattedPending,
         },
       };
@@ -396,7 +444,7 @@ export class OrgController {
           historyData.message ||
           'Organization structure history fetched successfully!',
         code: historyData.code || 200,
-        data: historyData.data || [],
+        data: (historyData.data || []).map(OrgController.formatHistoryItem),
       };
 
       res.status(200).json(response);

@@ -5,6 +5,6 @@ const router = Router();
 
 router.post('/api-span', MonitoringController.createMiddlelayerApiSpan);
 router.post('/fetch-all', MonitoringController.fetchAll);
-router.post('/detaisls', MonitoringController.details);
+router.post('/details', MonitoringController.details);
 
 export default router;

@@ -7,11 +7,14 @@ export type OrgNodeType =
   | 'LOCATION';
 
 export type OrgActiveNode = {
-  id: string;
-  nodeId: string;
   nodeName: string;
   nodeType: OrgNodeType;
   nodePath: string;
+};
+
+export type OrgActiveNodeInternal = OrgActiveNode & {
+  id: string;
+  nodeId: string;
 };
 
 export type OrgParentNode = {
@@ -129,7 +132,7 @@ export type FetchOrgStructureInternalSuccess = {
   message: 'Organization structure fetched successfully!';
   code: 200;
   data: {
-    nodes: OrgActiveNode[];
+    nodes: OrgActiveNodeInternal[];
     pending: OrgPendingInternalItem[];
   };
 };
@@ -155,14 +158,8 @@ export type OrgHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
 export type OrgHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
 export type OrgHistoryBaseItem = {
-  orgReqId: string;
-  companyCode: string;
-  nodeId: string | null;
-  orgStructureId: string | null;
   newNodeName: string | null;
   nodeType: OrgNodeType | null;
-  nodePath: string | null;
-  parentNodePath: string;
   parentNodeName: string;
 };
 
@@ -190,7 +187,20 @@ export type FetchOrgHistoryResponse = {
   data: OrgHistoryItem[];
 };
 
-export type FetchOrgHistoryInternalSuccess = FetchOrgHistoryResponse;
+export type OrgHistoryInternalItem = OrgHistoryItem & {
+  orgReqId: string;
+  companyCode: string;
+  nodeId: string | null;
+  orgStructureId: string | null;
+  nodePath: string | null;
+  parentNodePath: string;
+};
+
+export type FetchOrgHistoryInternalSuccess = {
+  message: 'Organization structure history fetched successfully!';
+  code: 200;
+  data: OrgHistoryInternalItem[];
+};
 
 export type OrgApiErrorResponse = {
   message?: string;

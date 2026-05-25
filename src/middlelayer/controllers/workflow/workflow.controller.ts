@@ -21,21 +21,112 @@ import {
 } from '../../validations/workflow.validation';
 import type {
   FetchWorkflowHistoryInternalResponse,
+  FetchWorkflowHistoryInternalSuccess,
   FetchWorkflowHistoryResponse,
   FetchWorkflowsData,
+  FetchWorkflowsInternalData,
   FetchWorkflowsInternalResponse,
   FetchWorkflowsResponse,
   InitiateWorkflowResponse,
+  WorkflowActiveItem,
   WorkflowActionInternalResponse,
   WorkflowActionResponse,
   WorkflowApiErrorResponse,
   WorkflowCompanyLookupInternalResponse,
   WorkflowInitiateInternalResponse,
+  WorkflowHistoryInternalItem,
+  WorkflowHistoryItem,
   WorkflowNodeLookupInternalResponse,
+  WorkflowPendingInternalItem,
+  WorkflowPendingItem,
   WorkflowRequestInternal,
 } from './workflow.type';
 
 export class WorkflowController {
+  private static formatActiveWorkflow(
+    workflow: WorkflowActiveItem,
+  ): WorkflowActiveItem {
+    return {
+      name: workflow.name,
+      alias: workflow.alias,
+      module: workflow.module,
+      subModule: workflow.subModule,
+      orgStructure: {
+        nodePath: workflow.orgStructure.nodePath,
+        nodeName: workflow.orgStructure.nodeName,
+        nodeType: workflow.orgStructure.nodeType,
+      },
+      levelsHash: workflow.levelsHash,
+      levels: workflow.levels.map((level) => ({
+        level: level.level,
+        approver1: level.approver1,
+        approver2: level.approver2,
+        approverType: level.approverType,
+      })),
+    };
+  }
+
+  private static formatPendingWorkflow(
+    workflow: WorkflowPendingInternalItem,
+  ): WorkflowPendingItem {
+    return {
+      data: {
+        name: workflow.data.name,
+        levels: workflow.data.levels,
+        module: workflow.data.module,
+        nodePath: workflow.data.nodePath,
+        subModule: workflow.data.subModule,
+        levelsHash: workflow.data.levelsHash,
+      },
+      status: workflow.status,
+      alias: workflow.alias,
+      approvalRemark: workflow.approvalRemark,
+      levelsHash: workflow.levelsHash,
+      createdAt: workflow.createdAt,
+      initiator: {
+        name: workflow.initiator.name,
+        email: workflow.initiator.email,
+      },
+      initiatorTimestamp: workflow.initiatorTimestamp,
+      nodeType: workflow.nodeType,
+      nodeName: workflow.nodeName,
+      nodePath: workflow.nodePath,
+      workflowName: workflow.workflowName,
+    };
+  }
+
+  private static formatHistoryItem(
+    item: WorkflowHistoryInternalItem,
+  ): WorkflowHistoryItem {
+    const common = {
+      workflowName: item.workflowName,
+    };
+
+    if ('eligibleapprovers' in item) {
+      return {
+        ...common,
+        event: item.event,
+        createdAt: null,
+        eligibleapprovers: item.eligibleapprovers.map((approver) => ({
+          name: approver.name,
+          email: approver.email,
+        })),
+      };
+    }
+
+    return {
+      ...common,
+      event: item.event,
+      level: item.level,
+      createdAt: item.createdAt,
+      remarks: item.remarks,
+      user: {
+        name: item.user.name,
+        email: item.user.email,
+      },
+    };
+  }
+
   static async initiateWorkflow(
     req: Request & { user?: { id: string } },
     res: Response<InitiateWorkflowResponse>,
@@ -85,7 +176,7 @@ export class WorkflowController {
       ]);
 
       // Combine and deduplicate
-      let eligibleApprovers = Array.from(
+      const eligibleApprovers = Array.from(
         new Set([...(globalRes.data || []), ...(mgrRes.data || [])]),
       );
 
@@ -228,18 +319,24 @@ export class WorkflowController {
       if (!ok) {
         const errorData = data as WorkflowApiErrorResponse;
         throw new AppError(
-          errorData?.message ||
-            errorData?.error ||
-            'Failed to fetch workflows',
+          errorData?.message || errorData?.error || 'Failed to fetch workflows',
           status,
         );
       }
 
-      const workflowData = data as FetchWorkflowsData;
+      const workflowData = data as FetchWorkflowsInternalData;
+      const publicData: FetchWorkflowsData = {
+        active: workflowData.active.map(
+          WorkflowController.formatActiveWorkflow,
+        ),
+        pending: workflowData.pending.map(
+          WorkflowController.formatPendingWorkflow,
+        ),
+      };
       const response: FetchWorkflowsResponse = {
         message: 'Workflows fetched successfully!',
         code: 200,
-        data: workflowData,
+        data: publicData,
       };
 
       res.status(200).json(response);
@@ -279,19 +376,19 @@ export class WorkflowController {
       if (!ok) {
         const errorData = data as WorkflowApiErrorResponse;
         throw new AppError(
-          errorData?.message ||
-            errorData?.error ||
-            'Failed to fetch history',
+          errorData?.message || errorData?.error || 'Failed to fetch history',
           status,
         );
       }
 
-      const historyData = data as FetchWorkflowHistoryResponse;
+      const historyData = data as FetchWorkflowHistoryInternalSuccess;
       const response: FetchWorkflowHistoryResponse = {
         message:
           historyData.message || 'Workflow history fetched successfully!',
         code: historyData.code || 200,
-        data: historyData.data || [],
+        data: (historyData.data || []).map(
+          WorkflowController.formatHistoryItem,
+        ),
       };
 
       res.status(200).json(response);

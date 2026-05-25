@@ -34,17 +34,149 @@ import type {
   UserCompanyNode,
   FetchActiveUsersResponse,
   FetchAndProcessUsersResult,
+  FetchUserFilterOptionsInternalResponse,
+  FetchUserFilterOptionsResponse,
   FetchPendingUsersResponse,
   FetchUsersByNodePathCountInternalResponse,
   FetchUsersByNodePathCountResponse,
   FetchUserHistoryInternalResponse,
+  FetchUserHistoryInternalSuccess,
   FetchUserHistoryResponse,
   InitiateUserOnboardingResponse,
+  PendingUserAccess,
+  PendingUserListItem,
   UserApiErrorResponse,
+  UserFilterNodeOption,
+  UserFilterTextOption,
+  UserHistoryInternalItem,
+  UserHistoryItem,
+  UserListAccess,
+  UserListItem,
   UserOnboardingInternalResponse,
 } from './user.type';
 
 export class UserController {
+  private static formatListAccess(access: UserListAccess): UserListAccess {
+    return {
+      roleCategory: access.roleCategory,
+      roleSubCategory: access.roleSubCategory,
+      roleName: access.roleName,
+      nodeName: access.nodeName,
+      nodePath: access.nodePath,
+      nodeType: access.nodeType,
+      accessCategory: access.accessCategory,
+    };
+  }
+
+  private static formatPendingAccess(
+    access: PendingUserAccess,
+  ): PendingUserAccess {
+    return {
+      roleCategory: access.roleCategory,
+      roleSubCategory: access.roleSubCategory,
+      roleName: access.roleName,
+      nodeName: access.nodeName,
+      nodePath: access.nodePath,
+      nodeType: access.nodeType,
+      accessCategory: access.accessCategory,
+    };
+  }
+
+  private static formatUserListItem(user: UserListItem): UserListItem {
+    return {
+      basicDetails: {
+        name: user.basicDetails.name,
+        email: user.basicDetails.email,
+        phone: user.basicDetails.phone,
+        createdAt: user.basicDetails.createdAt,
+        designation: user.basicDetails.designation,
+        employeeId: user.basicDetails.employeeId,
+        reportingManagerName: user.basicDetails.reportingManagerName,
+        reportingManagerEmail: user.basicDetails.reportingManagerEmail,
+      },
+      primary: user.primary.map(UserController.formatListAccess),
+      secondary: user.secondary.map(UserController.formatListAccess),
+    };
+  }
+
+  private static formatPendingUserListItem(
+    user: PendingUserListItem,
+  ): PendingUserListItem {
+    return {
+      id: user.id,
+      basicDetails: {
+        name: user.basicDetails.name,
+        email: user.basicDetails.email,
+        phone: user.basicDetails.phone,
+        createdAt: user.basicDetails.createdAt,
+        designation: user.basicDetails.designation,
+        employeeId: user.basicDetails.employeeId,
+        reportingManagerName: user.basicDetails.reportingManagerName,
+        reportingManagerEmail: user.basicDetails.reportingManagerEmail,
+        initiatorName: user.basicDetails.initiatorName,
+        initiatorEmail: user.basicDetails.initiatorEmail,
+        initiatedDate: user.basicDetails.initiatedDate,
+        workflowName: user.basicDetails.workflowName,
+        alias: user.basicDetails.alias,
+      },
+      primary: user.primary.map(UserController.formatPendingAccess),
+      secondary: user.secondary.map(UserController.formatPendingAccess),
+    };
+  }
+
+  private static formatTextOptions(
+    options: UserFilterTextOption[],
+  ): UserFilterTextOption[] {
+    return options.map((option) => ({
+      label: option.label,
+      value: option.value,
+    }));
+  }
+
+  private static formatNodeOptions(
+    options: UserFilterNodeOption[],
+  ): UserFilterNodeOption[] {
+    return options.map((option) => ({
+      label: option.label,
+      value: option.value,
+      nodeName: option.nodeName,
+      nodePath: option.nodePath,
+      nodeType: option.nodeType,
+    }));
+  }
+
+  private static formatHistoryItem(
+    item: UserHistoryInternalItem,
+  ): UserHistoryItem {
+    const common = {
+      email: item.email,
+    };
+
+    if ('eligibleapprovers' in item) {
+      return {
+        ...common,
+        event: item.event,
+        createdAt: null,
+        eligibleapprovers: item.eligibleapprovers.map((approver) => ({
+          name: approver.name,
+          email: approver.email,
+        })),
+      };
+    }
+
+    return {
+      ...common,
+      event: item.event,
+      level: item.level,
+      createdAt: item.createdAt,
+      remarks: item.remarks,
+      user: {
+        name: item.user.name,
+        email: item.user.email,
+      },
+    };
+  }
+
   private static async fetchAndProcessUsers(
     req: Request,
     listType?: 'active' | 'pending',
@@ -93,9 +225,9 @@ export class UserController {
       pendingUsers = [],
     } = data?.data || data || {};
     return {
-      activeUsers,
-      pendingUsers,
-      inactiveUsers,
+      activeUsers: activeUsers.map(UserController.formatUserListItem),
+      pendingUsers: pendingUsers.map(UserController.formatPendingUserListItem),
+      inactiveUsers: inactiveUsers.map(UserController.formatUserListItem),
       activeCount: data?.activeCount ?? activeUsers.length,
       inactiveCount: data?.inactiveCount ?? inactiveUsers.length,
       pendingCount: data?.pendingCount ?? pendingUsers.length,
@@ -172,7 +304,7 @@ export class UserController {
 
   static async fetchUserFilterOptions(
     req: Request & { user?: { companyId?: string } },
-    res: Response,
+    res: Response<FetchUserFilterOptionsResponse>,
     next: NextFunction,
   ) {
     try {
@@ -183,22 +315,59 @@ export class UserController {
         throw new AppError('Company context is required', 400);
       }
 
-      const { data, ok, status } = await internalPost<any>(
-        `${config.backendUrl}/internal/user/filter-option`,
-        {
-          companyId,
-          companyCode,
-        },
-      );
+      const { data, ok, status } = await internalPost<
+        FetchUserFilterOptionsInternalResponse | UserApiErrorResponse
+      >(`${config.backendUrl}/internal/user/filter-option`, {
+        companyId,
+        companyCode,
+      });
 
       if (!ok) {
+        const errorData = data as UserApiErrorResponse;
         throw new AppError(
-          data?.message || data?.error || 'Failed to fetch user filter options',
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch user filter options',
           status,
         );
       }
 
-      res.status(200).json(data);
+      const internalData = data as FetchUserFilterOptionsInternalResponse;
+      const response: FetchUserFilterOptionsResponse = {
+        message: 'User filter options fetched successfully!',
+        code: 200,
+        companyCode: internalData.companyCode,
+        data: {
+          designation: UserController.formatTextOptions(
+            internalData.data.designation,
+          ),
+          department: UserController.formatNodeOptions(
+            internalData.data.department,
+          ),
+          category: UserController.formatTextOptions(
+            internalData.data.category,
+          ),
+          subCategory: UserController.formatTextOptions(
+            internalData.data.subCategory,
+          ),
+          primaryNode: UserController.formatNodeOptions(
+            internalData.data.primaryNode,
+          ),
+          secondaryNode: UserController.formatNodeOptions(
+            internalData.data.secondaryNode,
+          ),
+          reportingManager: internalData.data.reportingManager.map(
+            (manager) => ({
+              label: manager.label,
+              value: manager.value,
+              name: manager.name,
+              email: manager.email,
+            }),
+          ),
+        },
+      };
+
+      res.status(200).json(response);
     } catch (error) {
       next(error);
     }
@@ -564,11 +733,11 @@ export class UserController {
         );
       }
 
-      const historyData = data as FetchUserHistoryResponse;
+      const historyData = data as FetchUserHistoryInternalSuccess;
       const response: FetchUserHistoryResponse = {
         message: historyData.message || 'User history fetched successfully!',
         code: historyData.code || 200,
-        data: historyData.data || [],
+        data: (historyData.data || []).map(UserController.formatHistoryItem),
       };
 
       res.status(200).json(response);
@@ -611,12 +780,17 @@ export class UserController {
       }
 
       const rawNodes = Array.isArray(data) ? data : data?.nodes || [];
-      const nodes: UserCompanyNode[] = rawNodes.map(
-        ({ roleCode, roleName, ...node }) => ({
-          ...node,
-          roleName: roleName || roleCode || '',
-        }),
-      );
+      const nodes: UserCompanyNode[] = rawNodes.map((node) => ({
+        nodeName: node.nodeName,
+        nodePath: node.nodePath,
+        nodeType: node.nodeType,
+        workflows: node.workflows.map((workflow) => ({
+          levelsHash: workflow.levelsHash,
+          name: workflow.name,
+          alias: workflow.alias,
+        })),
+        roleName: node.roleName || node.roleCode || '',
+      }));
 
       const response: FetchCompanyNodesResponse = {
         message:

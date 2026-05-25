@@ -1,6 +1,5 @@
 export type FetchMonitoringSpanItem = {
   trackingId: string;
-  subCount: string | null;
   apiUrl: string;
   statusCode: number | null;
   ip: string | null;
@@ -13,6 +12,10 @@ export type FetchMonitoringSpanItem = {
 };
 
 export type FetchMonitoringSpansResponse = FetchMonitoringSpanItem[];
+
+export type FetchMonitoringSpanInternalItem = FetchMonitoringSpanItem & {
+  subCount: string | null;
+};
 
 export type MonitoringJsonValue =
   | string
@@ -55,6 +58,7 @@ export type MonitoringDetailsChildSpan = MonitoringDetailsSpan;
 export type FetchMonitoringDetailsRequest = {
   trackingId?: string | null;
   trackId?: string | null;
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- External request alias.
   tracking_id?: string | null;
   [key: string]: MonitoringJsonValue | undefined;
 };
@@ -70,7 +74,7 @@ export type MonitoringApiErrorResponse = {
 };
 
 export type FetchMonitoringSpansInternalResponse =
-  | FetchMonitoringSpansResponse
+  | FetchMonitoringSpanInternalItem[]
   | MonitoringApiErrorResponse;
 
 export type FetchMonitoringDetailsInternalResponse =

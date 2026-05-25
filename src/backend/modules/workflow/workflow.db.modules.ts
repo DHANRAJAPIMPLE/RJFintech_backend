@@ -950,9 +950,6 @@ export class WorkflowDbController {
               }),
         },
         select: {
-          id: true,
-          nodeId: true,
-          workflowReqIds: true,
           name: true,
           alias: true,
           module: true,
