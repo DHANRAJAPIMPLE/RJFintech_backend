@@ -392,7 +392,7 @@ export class UserDbController {
 
     return permissions.some(
       (p: any) =>
-        p.accessType === 'PRIMARY' &&
+        (p.accessType === 'PRIMARY' || p.accessType === 'SECONDARY') &&
         typeof p.nodePath === 'string' &&
         visibleNodePaths.has(p.nodePath),
     );
@@ -774,13 +774,16 @@ export class UserDbController {
 
         if (!globalAccess) {
           isGlobal = false;
-          // Get all node-specific accesses to determine the visibility scope
+          // Get all view-capable USER_ACC assignments to determine visibility scope.
+          // A secondary assignment grants the same scoped view permission as a primary one.
           const requesterAccesses = await prisma.userAccess.findMany({
             where: {
               userId,
               companyId: resolvedCompanyId,
-              accessType: 'PRIMARY',
-              roleCode: { startsWith: 'USER_ACC' },
+              role: {
+                subCategory: 'USER_ACC',
+                view: true,
+              },
             },
             include: { orgStructure: { select: { nodePath: true } } },
           });
@@ -846,8 +849,8 @@ export class UserDbController {
                 {
                   userAccesses: {
                     some: {
+                      companyId: resolvedCompanyId,
                       nodeId: { in: allVisibleNodeIds },
-                      accessType: 'PRIMARY' as const,
                     },
                   },
                 },
