@@ -308,7 +308,6 @@ export class CompanyDbController {
    * Performs an atomic transaction to:
    * 1. Create a CompanyOnboarding record.
    * 2. Log 'INITIATE' events in CompanyHistory.
-   * 3. Log 'INITIATE' events in UserHistory for all proposed signatories.
    */
 
   static async createCompanyOnboarding(req: Request, res: Response) {
@@ -337,26 +336,6 @@ export class CompanyDbController {
             eventUserId: initiatorId,
           },
         });
-
-        const signatories = (onboardingData.data as any)?.signatories || [];
-        for (const sig of signatories) {
-          if (sig.email) {
-            // Only log user history if company already exists (e.g. for re-onboarding or existing company)
-            const company = await tx.company.findUnique({
-              where: { companyCode },
-            });
-            if (company) {
-              await tx.userHistory.create({
-                data: {
-                  email: sig.email,
-                  event: 'INITIATE',
-                  eventUserId: initiatorId,
-                  companyId: company.id,
-                },
-              });
-            }
-          }
-        }
       }
       return onb;
     });
@@ -609,15 +588,6 @@ export class CompanyDbController {
         await tx.orgHistory.create({
           data: {
             companyId: newCompany.id,
-            event: 'INITIATE',
-            eventUserId: initiatorId,
-            orgReqId: rootNodeReq.id,
-          },
-        });
-
-        await tx.orgHistory.create({
-          data: {
-            companyId: newCompany.id,
             event: 'APPROVED',
             eventUserId: approverId,
             orgReqId: rootNodeReq.id,
@@ -720,21 +690,13 @@ export class CompanyDbController {
             },
           });
 
-          await tx.workflowReqHistory.createMany({
-            data: [
-              {
-                workflowReqId: workflowReq.id,
-                companyId: newCompany.id,
-                event: 'INITIATE',
-                eventUserId: initiatorId,
-              },
-              {
-                workflowReqId: workflowReq.id,
-                companyId: newCompany.id,
-                event: 'APPROVED',
-                eventUserId: approverId,
-              },
-            ],
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: workflowReq.id,
+              companyId: newCompany.id,
+              event: 'APPROVED',
+              eventUserId: approverId,
+            },
           });
         }
 

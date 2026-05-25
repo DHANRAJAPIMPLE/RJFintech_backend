@@ -50,5 +50,21 @@ export const orgHistory = z
     companyCode: z.string().trim().min(1, 'Company code is required'),
     nodeName: nameSchema('Node name').optional(),
     nodePath: z.string().trim().optional(),
+    pending: z.boolean().optional(),
+    parentNodePath: z
+      .string()
+      .trim()
+      .min(1, 'Parent node path is required')
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine(({ pending, parentNodePath }, ctx) => {
+    if (pending && !parentNodePath) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['parentNodePath'],
+        message:
+          'Parent node path is required for a pending organization request',
+      });
+    }
+  });
