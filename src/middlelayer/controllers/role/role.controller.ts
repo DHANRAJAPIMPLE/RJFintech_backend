@@ -82,7 +82,7 @@ export class RoleController {
       const { data, ok, status } =
         await internalPost<FetchAllRolesInternalResponse>(
           `${config.backendUrl}/internal/roles/fetch-all`,
-          { userId, companyId: req.user?.companyId },
+          {},
         );
 
       if (!ok) {
