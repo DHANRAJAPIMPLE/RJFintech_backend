@@ -5,6 +5,21 @@ import { AppError } from '../../../shared/middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
+import {
+  appendCursorWhere,
+  buildPage,
+  getInMemoryPageRows,
+  getPageOrder,
+  isRowInCursorDirection,
+  resolveCursorPagination,
+} from '../../../shared/utils/cursor-pagination.util';
+
+type WorkflowTarget = {
+  module: string;
+  subModule: string;
+  nodePath: string;
+  levelsHash: string;
+};
 
 /**
  * Controller for handling workflow-related database operations.
@@ -13,7 +28,8 @@ import { HistoryUserUtil } from '../../utils/history-user.util';
  */
 export class WorkflowDbController {
   private static buildLevelsHash(levels: any): string {
-    const normalized = Object.keys(levels)
+    const normalized = Object.keys(levels || {})
+      .filter((key) => Boolean(levels[key]))
       .sort()
       .map((key) => ({
         approvers: [levels[key].approver1, levels[key].approver2 ?? null]
@@ -22,7 +38,560 @@ export class WorkflowDbController {
         type: levels[key].type ?? 'OR',
       }));
 
+    if (normalized.length === 0) {
+      throw new AppError(
+        'At least one workflow approval level is required',
+        400,
+      );
+    }
+
     return createHash('md5').update(JSON.stringify(normalized)).digest('hex');
+  }
+
+  private static buildAlias(levels: any): string {
+    let totalApprovers = 0;
+    let totalLevels = 0;
+
+    for (const level of Object.values(levels || {})) {
+      if (!level) continue;
+      totalLevels++;
+      const current = level as any;
+      totalApprovers += current.approver2 && current.type === 'AND' ? 2 : 1;
+    }
+
+    return `1M_${totalApprovers}C_${totalLevels}`;
+  }
+
+  private static toLevelsPayload(levels: any[]) {
+    return levels.reduce(
+      (payload, level) => {
+        payload[`l${level.level}`] = {
+          approver1: level.approver1,
+          approver2: level.approver2 || null,
+          type: level.approverType || 'OR',
+        };
+        return payload;
+      },
+      {} as Record<string, any>,
+    );
+  }
+
+  private static async assertWorkflowNotUsedInPendingApproval(
+    client: any,
+    workflowId: string,
+    excludeWorkflowReqId?: string,
+  ) {
+    const [userRequest, orgRequest, workflowRequest] = await Promise.all([
+      client.userOnboarding.findFirst({
+        where: { workflowId, status: 'PENDING' },
+        select: { id: true },
+      }),
+      client.orgStructureReq.findFirst({
+        where: { workflowId, status: 'PENDING' },
+        select: { id: true },
+      }),
+      client.workflowReq.findFirst({
+        where: {
+          workflowId,
+          status: 'PENDING',
+          ...(excludeWorkflowReqId
+            ? { id: { not: excludeWorkflowReqId } }
+            : {}),
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    if (userRequest || orgRequest || workflowRequest) {
+      throw new AppError(
+        'Workflow is currently used by a pending approval request',
+        409,
+      );
+    }
+  }
+
+  private static async assertSelectedWorkflowNotPendingModification(
+    client: any,
+    companyId: string,
+    parentLevelsHash?: string | null,
+  ) {
+    const selectedWorkflow = await client.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'WORK_FLOW',
+        status: 'ACTIVE',
+        ...(parentLevelsHash
+          ? { levelsHash: parentLevelsHash }
+          : { name: { contains: 'DEFAULT' } }),
+      },
+      orderBy: parentLevelsHash ? undefined : { createdAt: 'desc' },
+      select: {
+        module: true,
+        subModule: true,
+        levelsHash: true,
+        orgStructure: { select: { nodePath: true } },
+      },
+    });
+
+    if (!selectedWorkflow && parentLevelsHash) {
+      throw new AppError(
+        `Workflow with hash '${parentLevelsHash}' not found for this company`,
+        404,
+      );
+    }
+    if (!selectedWorkflow) return;
+
+    await WorkflowDbController.assertTargetNotPendingModification(
+      client,
+      companyId,
+      {
+        module: selectedWorkflow.module,
+        subModule: selectedWorkflow.subModule,
+        nodePath: selectedWorkflow.orgStructure.nodePath,
+        levelsHash: selectedWorkflow.levelsHash,
+      },
+      'Selected approval workflow has a pending modification',
+    );
+  }
+
+  private static async assertTargetNotPendingModification(
+    client: any,
+    companyId: string,
+    target: WorkflowTarget,
+    message = 'Workflow already has a pending modification',
+  ) {
+    const pendingRequests = await client.workflowReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: ['UPDATE', 'INACTIVE'] },
+      },
+      select: { data: true },
+    });
+    const hasPendingTarget = pendingRequests.some((request: any) => {
+      const pendingTarget = (request.data as any)?.target;
+      return (
+        pendingTarget?.module === target.module &&
+        pendingTarget?.subModule === target.subModule &&
+        pendingTarget?.nodePath === target.nodePath &&
+        pendingTarget?.levelsHash === target.levelsHash
+      );
+    });
+
+    if (hasPendingTarget) {
+      throw new AppError(message, 409);
+    }
+  }
+
+  private static async createModificationRequest(input: {
+    initiatorId: string;
+    companyId: string;
+    type: 'UPDATE' | 'INACTIVE';
+    target: WorkflowTarget;
+    data: any;
+    parentLevelsHash?: string | null;
+    remarks?: string | null;
+  }) {
+    const {
+      initiatorId,
+      companyId,
+      type,
+      target: requestedTarget,
+      data,
+      parentLevelsHash,
+      remarks,
+    } = input;
+    const targetNode = await prisma.orgStructure.findFirst({
+      where: {
+        companyId,
+        nodePath: requestedTarget.nodePath,
+      },
+      select: { id: true },
+    });
+    const target = targetNode
+      ? await prisma.workflow.findFirst({
+          where: {
+            companyId,
+            nodeId: targetNode.id,
+            module: requestedTarget.module,
+            subModule: requestedTarget.subModule,
+            levelsHash: requestedTarget.levelsHash,
+            status: 'ACTIVE',
+          },
+          include: {
+            orgStructure: true,
+            levels: { orderBy: { level: 'asc' } },
+          },
+        })
+      : null;
+
+    if (!target) {
+      throw new AppError('Active workflow not found', 404);
+    }
+
+    await WorkflowDbController.assertTargetNotPendingModification(
+      prisma,
+      companyId,
+      requestedTarget,
+    );
+
+    await Promise.all([
+      WorkflowDbController.assertWorkflowNotUsedInPendingApproval(
+        prisma,
+        target.id,
+      ),
+      WorkflowDbController.assertSelectedWorkflowNotPendingModification(
+        prisma,
+        companyId,
+        parentLevelsHash,
+      ),
+    ]);
+
+    const currentLevels = WorkflowDbController.toLevelsPayload(target.levels);
+    const proposedLevels = data?.levels || currentLevels;
+    const proposedNodePath = data?.nodePath || target.orgStructure.nodePath;
+    const proposedNode = await prisma.orgStructure.findFirst({
+      where: {
+        companyId,
+        nodePath: proposedNodePath,
+        status: 'ACTIVE',
+      },
+    });
+    if (!proposedNode) {
+      throw new AppError(
+        `Active node path '${proposedNodePath}' not found for this company`,
+        400,
+      );
+    }
+
+    const proposedLevelsHash =
+      WorkflowDbController.buildLevelsHash(proposedLevels);
+    const oldData = {
+      name: target.name,
+      module: target.module,
+      subModule: target.subModule,
+      nodePath: target.orgStructure.nodePath,
+      levels: currentLevels,
+      levelsHash: target.levelsHash,
+      alias: target.alias,
+      status: target.status,
+    };
+    const newData = {
+      ...oldData,
+      name: data?.name || oldData.name,
+      module: data?.module || oldData.module,
+      subModule: data?.subModule || oldData.subModule,
+      nodePath: proposedNodePath,
+      levels: proposedLevels,
+      levelsHash: proposedLevelsHash,
+      alias: WorkflowDbController.buildAlias(proposedLevels),
+      status: type === 'INACTIVE' ? 'INACTIVE' : oldData.status,
+    };
+
+    if (
+      type === 'UPDATE' &&
+      JSON.stringify(oldData) === JSON.stringify(newData)
+    ) {
+      throw new AppError('Workflow update does not change any values', 400);
+    }
+
+    const duplicateActive = await prisma.workflow.findUnique({
+      where: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
+        companyId_nodeId_module_subModule_levelsHash: {
+          companyId,
+          nodeId: proposedNode.id,
+          module: newData.module,
+          subModule: newData.subModule,
+          levelsHash: newData.levelsHash,
+        },
+      },
+      select: { id: true, name: true },
+    });
+    if (duplicateActive && duplicateActive.id !== target.id) {
+      throw new AppError(`Already active: "${duplicateActive.name}"`, 409);
+    }
+
+    const duplicatePending = await prisma.workflowReq.findFirst({
+      where: {
+        companyId,
+        nodeId: proposedNode.id,
+        module: newData.module,
+        subModule: newData.subModule,
+        levelsHash: newData.levelsHash,
+        status: 'PENDING',
+      },
+      select: { id: true },
+    });
+    if (duplicatePending) {
+      throw new AppError('A matching workflow request is already pending', 409);
+    }
+
+    const requestData = {
+      ...newData,
+      levelsHash: parentLevelsHash || null,
+      target: requestedTarget,
+      oldData,
+      newData,
+      workflowSnapshot: { selectedLevelsHash: parentLevelsHash || null },
+    };
+    let notificationRecipients: string[] = [];
+    const request = await prisma.$transaction(async (tx) => {
+      const created = await tx.workflowReq.create({
+        data: {
+          companyId,
+          nodeId: proposedNode.id,
+          module: newData.module,
+          subModule: newData.subModule,
+          levelsHash: newData.levelsHash,
+          type,
+          impact: type === 'INACTIVE' ? 'INACTIVE' : 'WORKFLOW_UPDATE',
+          initiatorId,
+          data: requestData,
+          alias: newData.alias,
+          approvalRemark: remarks || null,
+          eligibleApprovers: [],
+        },
+      });
+      const approval = await WorkflowApproverUtil.resolveAndCreateApprovers(
+        tx,
+        {
+          levelsHash: parentLevelsHash || null,
+          module: 'SYSTEM_ACCESS',
+          subModule: 'WORK_FLOW',
+          companyId,
+          nodeId: proposedNode.id,
+          initiatorId,
+          reqId: created.id,
+          reqTable: 'workflow_req',
+        },
+      );
+      notificationRecipients = approval.eligibleApprovers;
+      await tx.workflowReq.update({
+        where: { id: created.id },
+        data: {
+          workflowId: approval.workflowId,
+        },
+      });
+      await tx.workflowReqHistory.create({
+        data: {
+          workflowReqId: created.id,
+          companyId,
+          event: 'INITIATE',
+          eventUserId: initiatorId,
+          remarks: remarks || null,
+        },
+      });
+      return created;
+    });
+
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'INITIATE',
+      referenceType: 'WORKFLOW',
+      referenceId: request.id,
+      referenceName: newData.name,
+      createdBy: initiatorId,
+      recipientUserIds: notificationRecipients,
+    });
+
+    return request;
+  }
+
+  private static async assertFinalApproversRemainEligible(
+    client: any,
+    requestId: string,
+    companyId: string,
+  ) {
+    const rows = await client.workflowApprover.findMany({
+      where: { reqId: requestId, reqTable: 'workflow_req' },
+      select: { approversList: true },
+    });
+    const approverIds = Array.from(
+      new Set(
+        rows.flatMap((row: any) =>
+          Array.isArray(row.approversList) ? row.approversList : [],
+        ),
+      ),
+    ) as string[];
+
+    if (approverIds.length === 0) return;
+
+    const [approverUsers, pendingAccessRemovalRequests] = await Promise.all([
+      client.user.findMany({
+        where: { id: { in: approverIds } },
+        select: { email: true },
+      }),
+      client.userOnboarding.findMany({
+        where: {
+          companyId,
+          status: 'PENDING',
+          OR: [
+            { type: { in: ['INACTIVE', 'ARCHIVE'] } },
+            { impact: 'DOWNGRADE' },
+          ],
+        },
+        select: { data: true },
+      }),
+    ]);
+    const approverEmails = new Set(
+      approverUsers.map((user: any) => user.email),
+    );
+    const pendingAccessRemoval = pendingAccessRemovalRequests.some(
+      (request: any) =>
+        approverEmails.has((request.data as any)?.targetUserEmail),
+    );
+
+    if (pendingAccessRemoval) {
+      throw new AppError(
+        'An eligible workflow approver has a pending downgrade or deactivation request',
+        409,
+      );
+    }
+  }
+
+  private static async applyApprovedModification(
+    tx: any,
+    request: any,
+    remark?: string | null,
+  ) {
+    const requestData = request.data as any;
+    const oldData = requestData.oldData as any;
+    if (!oldData) {
+      throw new AppError(
+        'Target workflow is missing from modification request',
+        400,
+      );
+    }
+
+    const originalNode = await tx.orgStructure.findFirst({
+      where: {
+        companyId: request.companyId,
+        nodePath: oldData.nodePath,
+      },
+      select: { id: true },
+    });
+    const target = originalNode
+      ? await tx.workflow.findFirst({
+          where: {
+            companyId: request.companyId,
+            nodeId: originalNode.id,
+            module: oldData.module,
+            subModule: oldData.subModule,
+            levelsHash: oldData.levelsHash,
+            status: 'ACTIVE',
+          },
+        })
+      : null;
+    if (!target) {
+      throw new AppError('Active target workflow no longer exists', 409);
+    }
+
+    await Promise.all([
+      WorkflowDbController.assertFinalApproversRemainEligible(
+        tx,
+        request.id,
+        request.companyId,
+      ),
+      WorkflowDbController.assertWorkflowNotUsedInPendingApproval(
+        tx,
+        target.id,
+        request.id,
+      ),
+    ]);
+
+    if (request.type === 'INACTIVE') {
+      await tx.workflow.update({
+        where: { id: target.id },
+        data: {
+          status: 'INACTIVE',
+          workflowReqIds: { push: request.id },
+        },
+      });
+    } else {
+      const nextData = (requestData.newData || requestData) as any;
+      const node = await tx.orgStructure.findFirst({
+        where: {
+          companyId: request.companyId,
+          nodePath: nextData.nodePath,
+          status: 'ACTIVE',
+        },
+      });
+      if (!node) {
+        throw new AppError('Workflow node is no longer active', 409);
+      }
+
+      const calculatedHash = WorkflowDbController.buildLevelsHash(
+        nextData.levels,
+      );
+      if (
+        calculatedHash !== nextData.levelsHash ||
+        calculatedHash !== request.levelsHash
+      ) {
+        throw new AppError('Workflow level hash is invalid', 409);
+      }
+
+      const duplicateActive = await tx.workflow.findUnique({
+        where: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
+          companyId_nodeId_module_subModule_levelsHash: {
+            companyId: request.companyId,
+            nodeId: node.id,
+            module: nextData.module,
+            subModule: nextData.subModule,
+            levelsHash: calculatedHash,
+          },
+        },
+        select: { id: true, name: true },
+      });
+      if (duplicateActive && duplicateActive.id !== target.id) {
+        throw new AppError(`Already active: "${duplicateActive.name}"`, 409);
+      }
+
+      const roleRecord = await tx.roles.findFirst({
+        where: {
+          category: nextData.module,
+          subCategory: nextData.subModule,
+          permissionLevel: 'MANAGER',
+        },
+      });
+      await tx.workflow.update({
+        where: { id: target.id },
+        data: {
+          name: nextData.name,
+          alias: nextData.alias,
+          module: nextData.module,
+          subModule: nextData.subModule,
+          roleCode: roleRecord?.roleCode || null,
+          nodeId: node.id,
+          levelsHash: calculatedHash,
+          workflowReqIds: { push: request.id },
+        },
+      });
+      await tx.workflowLevel.deleteMany({ where: { workflowId: target.id } });
+
+      const levelData = Object.entries(nextData.levels || {})
+        .filter(([, level]) => Boolean(level))
+        .map(([key, level]) => {
+          const configured = level as any;
+          return {
+            workflowId: target.id,
+            level: parseInt(key.replace('l', ''), 10),
+            approver1: configured.approver1,
+            approver2: configured.approver2 || null,
+            approverType: configured.type || 'OR',
+          };
+        });
+      if (levelData.length > 0) {
+        await tx.workflowLevel.createMany({ data: levelData });
+      }
+    }
+
+    return tx.workflowReq.update({
+      where: { id: request.id },
+      data: { status: 'APPROVED', approvalRemark: remark },
+    });
   }
 
   // --- Internal Atomic Operations ---
@@ -32,9 +601,13 @@ export class WorkflowDbController {
    * Includes the associated company details for context.
    */
   static async getWorkflowRequestByHash(req: Request, res: Response) {
-    const { levelsHash, companyId } = req.body;
+    const { id, levelsHash, companyId } = req.body;
     const request = await prisma.workflowReq.findFirst({
-      where: { levelsHash, companyId, status: 'PENDING' },
+      where: {
+        ...(id ? { id } : { levelsHash }),
+        companyId,
+        status: 'PENDING',
+      },
       include: { company: true },
     });
     res.json(request);
@@ -63,8 +636,10 @@ export class WorkflowDbController {
         data,
         eligibleApprovers,
         levelsHash: parentLevelsHash,
+        type = 'INITIATE',
+        target,
+        remarks,
       } = req.body;
-      const { module, subModule, nodePath, levels } = data;
 
       if (!initiatorId) {
         throw new AppError('initiatorId is required', 400);
@@ -84,12 +659,47 @@ export class WorkflowDbController {
         resolvedCompanyId = company.id;
       }
 
+      if (type === 'UPDATE' || type === 'INACTIVE') {
+        if (!target) {
+          throw new AppError('Workflow target details are required', 400);
+        }
+
+        try {
+          const request = await WorkflowDbController.createModificationRequest({
+            initiatorId,
+            companyId: resolvedCompanyId,
+            type,
+            target,
+            data,
+            parentLevelsHash,
+            remarks,
+          });
+          return res.status(201).json(request);
+        } catch (error) {
+          await NotificationService.createRequestNotification({
+            companyId: resolvedCompanyId,
+            type: 'REJECT',
+            referenceType: 'WORKFLOW',
+            referenceId: target.levelsHash,
+            referenceName: data?.name || 'workflow modification',
+            createdBy: initiatorId,
+            recipientUserIds: [initiatorId],
+          }).catch(() => undefined);
+          throw error;
+        }
+      }
+
+      const { module, subModule, nodePath, levels } = data;
+
       // 1. Resolve Node ID
       const node = await prisma.orgStructure.findFirst({
-        where: { nodePath, companyId: resolvedCompanyId },
+        where: { nodePath, companyId: resolvedCompanyId, status: 'ACTIVE' },
       });
       if (!node)
-        throw new Error(`Node path '${nodePath}' not found for this company`);
+        throw new AppError(
+          `Active node path '${nodePath}' not found for this company`,
+          400,
+        );
 
       const nodeId = node.id;
       const levelsHash = WorkflowDbController.buildLevelsHash(levels);
@@ -97,6 +707,7 @@ export class WorkflowDbController {
       // 2. Block if ACTIVE duplicate exists
       const alreadyActive = await prisma.workflow.findUnique({
         where: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
           companyId_nodeId_module_subModule_levelsHash: {
             companyId: resolvedCompanyId,
             nodeId,
@@ -125,6 +736,12 @@ export class WorkflowDbController {
         throw new AppError(`Already pending: ${alreadyPending.id}`, 409);
       }
 
+      await WorkflowDbController.assertSelectedWorkflowNotPendingModification(
+        prisma,
+        resolvedCompanyId,
+        parentLevelsHash,
+      );
+
       // Fetch all global access users for this company to ensure they are in the master eligible list
       const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
         prisma as any,
@@ -143,23 +760,7 @@ export class WorkflowDbController {
       );
       let notificationRecipients = filteredApprovers;
 
-      // ── Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels} ───────
-      let totalApprovers = 0;
-      let totalLevels = 0;
-      if (levels) {
-        for (const level of Object.values(levels)) {
-          if (level) {
-            totalLevels++;
-            const l = level as any;
-            if (l.approver2 && l.type === 'AND') {
-              totalApprovers += 2;
-            } else {
-              totalApprovers += 1;
-            }
-          }
-        }
-      }
-      const generatedAlias = `1M_${totalApprovers}C_${totalLevels}`;
+      const generatedAlias = WorkflowDbController.buildAlias(levels);
 
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.workflowReq.create({
@@ -169,6 +770,8 @@ export class WorkflowDbController {
             module,
             subModule,
             levelsHash,
+            type: 'INITIATE',
+            initiatorId,
             data,
             alias: generatedAlias,
             status: 'PENDING',
@@ -245,11 +848,22 @@ export class WorkflowDbController {
     next: NextFunction,
   ) {
     try {
-      const { levelsHash, companyId, status, approverId, remark } = req.body;
+      const {
+        id: requestId,
+        levelsHash,
+        companyId,
+        status,
+        approverId,
+        remark,
+      } = req.body;
 
       // ── Find the pending request by levelsHash ──────────────────────────
       const request = await prisma.workflowReq.findFirst({
-        where: { levelsHash, companyId, status: 'PENDING' },
+        where: {
+          ...(requestId ? { id: requestId } : { levelsHash }),
+          companyId,
+          status: 'PENDING',
+        },
         include: { company: true },
       });
 
@@ -378,12 +992,23 @@ export class WorkflowDbController {
             };
           }
 
+          if (request.type === 'UPDATE' || request.type === 'INACTIVE') {
+            const updated =
+              await WorkflowDbController.applyApprovedModification(
+                tx,
+                request,
+                remark,
+              );
+            return { ...updated, status: 'APPROVED' };
+          }
+
           // ── DUPLICATE CHECKS (only for full approval) ──────────────────
           const { companyId, nodeId, module, subModule, levelsHash } = request;
 
           // Block if ACTIVE duplicate exists
           const alreadyActive = await tx.workflow.findUnique({
             where: {
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
               companyId_nodeId_module_subModule_levelsHash: {
                 companyId,
                 nodeId,
@@ -813,47 +1438,6 @@ export class WorkflowDbController {
 
       // 4. Format the output for the UI
       const formattedHistories = histories.map((h) => {
-        const levels = h.workflowReqId
-          ? workflowMap.get(h.workflowReqId)
-          : null;
-        let workflowStatus = null;
-
-        if (levels && levels.length > 0) {
-          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
-          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
-          const currentPending = levels.find(
-            (l: any) => l.status === 'PENDING',
-          );
-
-          workflowStatus = {
-            overallStatus: isRejected
-              ? 'REJECTED'
-              : allApproved
-                ? 'APPROVED'
-                : 'PENDING',
-            currentLevel: currentPending
-              ? currentPending.level
-              : allApproved
-                ? levels.length
-                : null,
-            totalLevels: levels.length,
-            levels: levels
-              .filter(
-                (l: any) => l.level <= (currentPending?.level || levels.length),
-              )
-              .map((l: any) => ({
-                level: l.level,
-                status: l.status,
-                eligibleapprovers: (l.approversList as string[])
-                  .map((id: string) => {
-                    const u = approverMap.get(id);
-                    return u ? { name: u.name, email: u.email } : null;
-                  })
-                  .filter(Boolean),
-              })),
-          };
-        }
-
         return {
           workflowReqId: h.workflowReqId,
           workflowId: h.workflowReq?.workflowId || null,
@@ -892,14 +1476,17 @@ export class WorkflowDbController {
     }
   }
   /**
-   * Fetches all workflow-related data for a company.
-   * Returns:
-   * 1. 'active': Fully approved workflows currently in use.
-   * 2. 'pending': Onboarding requests awaiting approval.
+   * Fetches one cursor-paginated active or pending workflow list.
    */
   static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId, userId } = req.body;
+      const type = req.body?.type === 'pending' ? 'pending' : 'active';
+      const query =
+        typeof req.body?.query === 'string' && req.body.query.trim()
+          ? req.body.query.trim()
+          : null;
+      const pagination = resolveCursorPagination(req.body ?? {});
 
       let resolvedCompanyId = companyId;
 
@@ -936,78 +1523,173 @@ export class WorkflowDbController {
         }
       }
 
-      // Active production workflows
-      const activeWorkflows = await prisma.workflow.findMany({
-        where: {
-          companyId: resolvedCompanyId,
+      const activeWhere: any = {
+        companyId: resolvedCompanyId,
+        status: 'ACTIVE',
+        AND: [
           ...(isGlobal
-            ? {}
-            : {
-                OR: [
-                  { nodeId: { in: userNodeIds } },
-                  { name: { contains: 'DEFAULT' } },
-                ],
-              }),
-        },
-        select: {
-          name: true,
-          alias: true,
-          module: true,
-          subModule: true,
-          orgStructure: {
-            select: {
-              nodePath: true,
-              nodeName: true,
-              nodeType: true,
-            },
-          },
-          levelsHash: true,
-          levels: {
-            select: {
-              level: true,
-              approver1: true,
-              approver2: true,
-              approverType: true,
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      // Pending onboarding requests
-      const pendingRequestsRaw = await prisma.workflowReq.findMany({
-        where: {
-          companyId: resolvedCompanyId,
-          status: 'PENDING',
-          ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
-        },
-        select: {
-          id: true,
-          nodeId: true,
-          workflowId: true,
-          data: true,
-          status: true,
-          alias: true,
-          approvalRemark: true,
-          levelsHash: true,
-          createdAt: true,
-          workflowHistories: {
-            where: { event: 'INITIATE' },
-            select: {
-              createdAt: true,
-              user: {
-                select: {
-                  name: true,
-                  email: true,
+            ? []
+            : [
+                {
+                  OR: [
+                    { nodeId: { in: userNodeIds } },
+                    { name: { contains: 'DEFAULT' } },
+                  ],
                 },
-              },
-            },
+              ]),
+          ...(query
+            ? [
+                {
+                  OR: [
+                    { name: { contains: query, mode: 'insensitive' } },
+                    { alias: { contains: query, mode: 'insensitive' } },
+                    { module: { contains: query, mode: 'insensitive' } },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      };
+      const pendingWhere: any = {
+        companyId: resolvedCompanyId,
+        status: 'PENDING',
+        ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
+      };
+      const listWhere = type === 'active' ? activeWhere : pendingWhere;
+      const pageWhere = pagination.cursor
+        ? appendCursorWhere(
+            listWhere,
+            pagination.cursor,
+            pagination.direction === 'prev' ? 'newer' : 'older',
+          )
+        : listWhere;
+      const newWhere = pagination.topCursor
+        ? appendCursorWhere(listWhere, pagination.topCursor, 'newer')
+        : null;
+      const activeSelect = {
+        id: true,
+        createdAt: true,
+        name: true,
+        alias: true,
+        module: true,
+        subModule: true,
+        orgStructure: {
+          select: {
+            nodePath: true,
+            nodeName: true,
+            nodeType: true,
           },
         },
-        orderBy: { createdAt: 'desc' },
-      });
+        levelsHash: true,
+        levels: {
+          select: {
+            level: true,
+            approver1: true,
+            approver2: true,
+            approverType: true,
+          },
+        },
+      } as const;
+      const pendingSelect = {
+        id: true,
+        nodeId: true,
+        workflowId: true,
+        data: true,
+        status: true,
+        alias: true,
+        approvalRemark: true,
+        levelsHash: true,
+        createdAt: true,
+        workflowHistories: {
+          where: { event: 'INITIATE' as const },
+          select: {
+            createdAt: true,
+            user: { select: { name: true, email: true } },
+          },
+        },
+      } as const;
+      const normalizedQuery = query?.toLowerCase() || null;
+      const filteredPendingRows = normalizedQuery
+        ? (
+            await prisma.workflowReq.findMany({
+              where: pendingWhere,
+              select: pendingSelect,
+            })
+          ).filter((request) => {
+            const data = request.data as any;
+            return [data?.name, request.alias, data?.module].some(
+              (value) =>
+                typeof value === 'string' &&
+                value.toLowerCase().includes(normalizedQuery),
+            );
+          })
+        : null;
+      const [activeCount, pendingCount, selectedRows, newCount] =
+        await Promise.all([
+          prisma.workflow.count({ where: activeWhere }),
+          filteredPendingRows
+            ? Promise.resolve(filteredPendingRows.length)
+            : prisma.workflowReq.count({ where: pendingWhere }),
+          type === 'active'
+            ? prisma.workflow.findMany({
+                where: pageWhere,
+                select: activeSelect,
+                orderBy: getPageOrder(pagination.direction) as any,
+                skip: pagination.cursor ? 0 : pagination.offset,
+                take: pagination.limit + 1,
+              })
+            : filteredPendingRows
+              ? Promise.resolve(
+                  getInMemoryPageRows(filteredPendingRows, pagination),
+                )
+              : prisma.workflowReq.findMany({
+                  where: pageWhere,
+                  select: pendingSelect,
+                  orderBy: getPageOrder(pagination.direction) as any,
+                  skip: pagination.cursor ? 0 : pagination.offset,
+                  take: pagination.limit + 1,
+                }),
+          newWhere
+            ? type === 'active'
+              ? prisma.workflow.count({ where: newWhere })
+              : filteredPendingRows && pagination.topCursor
+                ? Promise.resolve(
+                    filteredPendingRows.filter((request) =>
+                      isRowInCursorDirection(
+                        request,
+                        pagination.topCursor!,
+                        'newer',
+                      ),
+                    ).length,
+                  )
+                : prisma.workflowReq.count({ where: newWhere })
+            : Promise.resolve(0),
+        ]);
+      const pageData = buildPage(selectedRows as any[], pagination, newCount);
+      const firstPageRow = pageData.pageRows[0];
+      if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
+        const newerWhere = appendCursorWhere(listWhere, firstPageRow, 'newer');
+        const newerCount =
+          type === 'active'
+            ? await prisma.workflow.count({ where: newerWhere })
+            : filteredPendingRows
+              ? filteredPendingRows.filter((request) =>
+                  isRowInCursorDirection(request, firstPageRow, 'newer'),
+                ).length
+              : await prisma.workflowReq.count({ where: newerWhere });
+        pageData.pageInfo.page = Math.floor(newerCount / pagination.limit) + 1;
+      }
 
-      // 1. Resolve all unique workflow IDs and node IDs from pending requests
+      if (type === 'active') {
+        return res.status(200).json({
+          data: pageData.pageRows,
+          activeCount,
+          pendingCount,
+          pageInfo: pageData.pageInfo,
+        });
+      }
+
+      const pendingRequestsRaw = pageData.pageRows as any[];
       const workflowIds = Array.from(
         new Set(
           pendingRequestsRaw.map((req) => req.workflowId).filter(Boolean),
@@ -1054,7 +1736,8 @@ export class WorkflowDbController {
           }
         }
 
-        const { workflowHistories, ...rest } = req;
+        const rest = { ...req };
+        delete rest.workflowHistories;
         return {
           ...rest,
           initiator,
@@ -1067,12 +1750,14 @@ export class WorkflowDbController {
         };
       });
 
-      res.status(200).json({
-        active: activeWorkflows,
-        pending: pendingRequests,
+      return res.status(200).json({
+        data: pendingRequests,
+        activeCount,
+        pendingCount,
+        pageInfo: pageData.pageInfo,
       });
     } catch (error) {
-      next(error);
+      return next(error);
     }
   }
 }

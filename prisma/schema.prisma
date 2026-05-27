@@ -13,6 +13,9 @@ model User {
   email                String               @unique
   password             String
   phone                String
+  editLockedBy         String?              @map("edit_locked_by")
+  editLockedAt         DateTime?            @map("edit_locked_at")
+  editLockExpiresAt    DateTime?            @map("edit_lock_expires_at")
   apiSpans             ApiSpan[]            @relation("UserApiSpanRel")
   createdAt            DateTime             @default(now()) @map("created_at")
   updatedAt            DateTime             @updatedAt @map("updated_at")
@@ -98,9 +101,8 @@ model CompanyHistory {
   eventUserId String    @map("event_user_id")
   createdAt   DateTime  @default(now()) @map("created_at")
   user        User      @relation("UserCompanyHistoryRel", fields: [eventUserId], references: [id])
-  
-  @@index([companyCode])
 
+  @@index([companyCode])
   @@map("company_history")
 }
 
@@ -159,7 +161,11 @@ model UserOnboarding {
   groupId           String?          @map("group_id")
   companyId         String           @map("company_id")
   workflowId        String?          @map("workflow_id")
+  type              String           @default("INITIATE")
+  impact            String           @default("NO_ISSUES")
   data              Json
+  initiatorId       String?          @map("initiator_id")
+  remarks           String?
   status            OnboardingStatus @default(PENDING)
   createdAt         DateTime         @default(now()) @map("created_at")
   updatedAt         DateTime         @updatedAt @map("updated_at")
@@ -170,7 +176,6 @@ model UserOnboarding {
 
   @@index([companyId])
   @@index([companyId, status])
-
   @@map("user_onboarding")
 }
 
@@ -205,25 +210,23 @@ model Notification {
   notificationUsers NotificationUser[]
 
   @@index([companyId])
-
   @@map("notifications")
 }
 
 model NotificationUser {
-  id             String       @id @default(uuid())
-  companyId      String       @map("company_id")
-  userId         String       @map("user_id")
-  notificationId String       @map("notification_id")
-  status         String       @default("UNREAD")
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @updatedAt @map("updated_at")
+  id             String   @id @default(uuid())
+  companyId      String   @map("company_id")
+  userId         String   @map("user_id")
+  notificationId String   @map("notification_id")
+  status         String   @default("UNREAD")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
-  company        Company      @relation(fields: [companyId], references: [id])
-  notification   Notification @relation(fields: [notificationId], references: [id])
-  user           User         @relation(fields: [userId], references: [id])
+  company      Company      @relation(fields: [companyId], references: [id])
+  notification Notification @relation(fields: [notificationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
 
   @@unique([userId, notificationId])
-
   @@index([companyId])
   @@index([userId])
   @@index([notificationId])
@@ -237,6 +240,9 @@ model OrgStructureReq {
   data              Json
   companyId         String           @map("company_id")
   workflowId        String?          @map("workflow_id")
+  type              RequestType      @default(INITIATE)
+  impact            String           @default("NO_ISSUES")
+  initiatorId       String?          @map("initiator_id")
   status            OnboardingStatus @default(PENDING)
   createdAt         DateTime         @default(now()) @map("created_at")
   remarks           String?
@@ -244,7 +250,7 @@ model OrgStructureReq {
   eligibleApprovers String[]         @default([]) @map("eligible_approvers")
   orgHistories      OrgHistory[]     @relation("OrgRequestHistory")
   company           Company          @relation(fields: [companyId], references: [id])
-  
+
   @@index([companyId])
   @@index([companyId, status])
   @@map("org_structure_req")
@@ -262,29 +268,31 @@ model OrgHistory {
   company     Company         @relation("CompanyOrgHistoryRel", fields: [companyId], references: [id])
   user        User            @relation("UserOrgHistoryRel", fields: [eventUserId], references: [id])
   orgReq      OrgStructureReq @relation("OrgRequestHistory", fields: [orgReqId], references: [id])
-  
+
   @@index([orgReqId])
   @@map("org_history")
 }
 
 model OrgStructure {
-  id         String         @id @default(uuid())
-  companyId  String         @map("company_id")
-  nodePath   String         @unique @map("node_path")
-  nodeName   String         @map("node_name")
-  nodeType   NodeType       @map("node_type")
-  parentId   String?        @map("parent_id")
-  createdAt  DateTime       @default(now()) @map("created_at")
-  company    Company        @relation(fields: [companyId], references: [id])
-  parent     OrgStructure?  @relation("ParentChild", fields: [parentId], references: [id])
-  children   OrgStructure[] @relation("ParentChild")
-  userAccess UserAccess[]
-  workflows  Workflow[]
-  
+  id                String         @id @default(uuid())
+  companyId         String         @map("company_id")
+  nodePath          String         @unique @map("node_path")
+  nodeName          String         @map("node_name")
+  nodeType          NodeType       @map("node_type")
+  parentId          String?        @map("parent_id")
+  status            Status         @default(ACTIVE)
+  editLockedBy      String?        @map("edit_locked_by")
+  editLockedAt      DateTime?      @map("edit_locked_at")
+  editLockExpiresAt DateTime?      @map("edit_lock_expires_at")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  company           Company        @relation(fields: [companyId], references: [id])
+  parent            OrgStructure?  @relation("ParentChild", fields: [parentId], references: [id])
+  children          OrgStructure[] @relation("ParentChild")
+  userAccess        UserAccess[]
+  workflows         Workflow[]
+
   @@index([companyId])
   @@index([companyId, parentId])
-
-
   @@map("org_structure")
 }
 
@@ -326,27 +334,29 @@ model UserAccess {
   @@index([companyId])
   @@index([userId])
   @@index([companyId, userId])
-
-
   @@map("user_access")
 }
 
 model Workflow {
-  id             String          @id @default(uuid())
-  name           String
-  alias          String
-  nodeId         String          @map("node_id")
-  module         String
-  subModule      String          @map("sub_module")
-  roleCode       String?         @map("role_code")
-  companyId      String          @map("company_id")
-  levelsHash     String          @map("levels_hash")
-  workflowReqIds String[]        @default([]) @map("workflow_req_ids")
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @updatedAt @map("updated_at")
-  company        Company         @relation(fields: [companyId], references: [id])
-  orgStructure   OrgStructure    @relation(fields: [nodeId], references: [id])
-  levels         WorkflowLevel[]
+  id                String          @id @default(uuid())
+  name              String
+  alias             String
+  nodeId            String          @map("node_id")
+  module            String
+  subModule         String          @map("sub_module")
+  roleCode          String?         @map("role_code")
+  companyId         String          @map("company_id")
+  levelsHash        String          @map("levels_hash")
+  workflowReqIds    String[]        @default([]) @map("workflow_req_ids")
+  status            Status          @default(ACTIVE)
+  editLockedBy      String?         @map("edit_locked_by")
+  editLockedAt      DateTime?       @map("edit_locked_at")
+  editLockExpiresAt DateTime?       @map("edit_lock_expires_at")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  company           Company         @relation(fields: [companyId], references: [id])
+  orgStructure      OrgStructure    @relation(fields: [nodeId], references: [id])
+  levels            WorkflowLevel[]
 
   @@unique([companyId, nodeId, module, subModule, levelsHash])
   @@index([nodeId])
@@ -366,6 +376,7 @@ model WorkflowApprover {
   status         OnboardingStatus @default(PENDING)
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
+
   @@index([workflowId])
   @@map("workflow_approver")
 }
@@ -380,7 +391,7 @@ model WorkflowLevel {
   workflow     Workflow      @relation(fields: [workflowId], references: [id])
 
   @@unique([workflowId, level])
-   @@index([workflowId])
+  @@index([workflowId])
   @@map("workflow_level")
 }
 
@@ -389,11 +400,16 @@ model WorkflowReq {
   companyId         String               @map("company_id")
   nodeId            String               @map("node_id")
   module            String
+  workflowReq       String?              @map("workflow_req")
+  targetWorkflowReq String?              @map("target_workflow_req")
+  type              RequestType          @default(INITIATE)
+  impact            String               @default("NO_ISSUES")
   subModule         String               @map("sub_module")
   levelsHash        String               @map("levels_hash")
   workflowId        String?              @map("workflow_id")
   alias             String?              @map("alias")
   data              Json
+  initiatorId       String?              @map("initiator_id")
   status            OnboardingStatus     @default(PENDING)
   approvalRemark    String?              @map("approval_remark")
   eligibleApprovers String[]             @default([]) @map("eligible_approvers")
@@ -418,6 +434,7 @@ model WorkflowReqHistory {
   company       Company     @relation("CompanyWorkflowHistoryRel", fields: [companyId], references: [id])
   user          User        @relation("UserWorkflowHistoryRel", fields: [eventUserId], references: [id])
   workflowReq   WorkflowReq @relation("WorkflowRequestHistory", fields: [workflowReqId], references: [id])
+
   @@index([companyId])
   @@map("workflow_req_history")
 }
@@ -478,6 +495,7 @@ enum EventType {
 
 enum Status {
   ACTIVE
+  ARCHIVE
   INACTIVE
 }
 
@@ -485,6 +503,12 @@ enum OnboardingStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum RequestType {
+  INITIATE
+  UPDATE
+  INACTIVE
 }
 
 enum OnboardedType {

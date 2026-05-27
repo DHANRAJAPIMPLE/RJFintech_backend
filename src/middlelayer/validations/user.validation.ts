@@ -12,8 +12,6 @@ import {
   emailSchema,
   nameSchema,
   optionalCursorTokenSchema,
-  optionalTrimmedStringSchema,
-  optionalUuidSchema,
   paginationSchema,
 } from './common.validation';
 
@@ -22,67 +20,155 @@ const phoneSchema = z
   .trim()
   .regex(/^\d{10,15}$/, 'Phone number must be between 10 and 15 digits');
 
-export const userOnboardingSchema = z.object({
-  companyId: optionalUuidSchema('company ID'),
-  basicDetails: z
-    .object({
-      name: nameSchema()
-        .min(2, 'Name must be at least 2 characters')
-        .max(20, 'Name too long'),
-      email: emailSchema,
-      phone: phoneSchema,
-      designation: z
-        .string()
-        .trim()
-        .min(2, 'Designation must be at least 2 characters')
-        .max(100, 'Designation too long')
-        .optional()
-        .nullable(),
-      employeeId: z
-        .string()
-        .trim()
-        .min(2, 'Employee ID must be at least 2 characters')
-        .max(50, 'Employee ID too long')
-        .optional()
-        .nullable(),
-      reportingManager: emailSchema.optional().nullable(),
-    })
-    .strict(),
-  permissions: z
-    .array(
-      z
-        .object({
-          accessType: z.enum(['PRIMARY', 'SECONDARY']),
-          roleName: nameSchema('Role name').min(1, 'Role name is required'),
-          roleCategory: z.string().trim().min(1, 'Role category is required'),
-          roleSubCategory: z
-            .string()
-            .trim()
-            .min(1, 'Role sub-category is required'),
-          nodeName: nameSchema('Node name').min(1, 'Node name is required'),
-          nodePath: z.string().trim().min(1, 'Node path is required'),
-          accessCategory: z
-            .enum(['ALL_CHILD', 'IMMEDIATE_CHILD', 'NODE'])
-            .nullable()
-            .optional(),
-        })
-        .strict(),
-    )
-    .min(1, 'At least one permission is required')
-    .refine(
-      (permissions) =>
-        permissions.filter((p) => p.accessType === 'PRIMARY').length === 1,
-      {
-        message: 'Exactly one PRIMARY permission is required',
-        path: ['permissions'],
-      },
-    ),
-  levelsHash: z.string().nullable().optional(),
+const permissionSchema = z
+  .object({
+    accessType: z.enum(['PRIMARY', 'SECONDARY']),
+    roleName: nameSchema('Role name').min(1, 'Role name is required'),
+    roleCategory: z.string().trim().min(1, 'Role category is required'),
+    roleSubCategory: z.string().trim().min(1, 'Role sub-category is required'),
+    nodeName: nameSchema('Node name').min(1, 'Node name is required'),
+    nodePath: z.string().trim().min(1, 'Node path is required'),
+    accessCategory: z
+      .enum(['ALL_CHILD', 'IMMEDIATE_CHILD', 'NODE'])
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+const normalizeUserListType = (value: unknown) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value;
+
+const requiredUserListTypeSchema = z.preprocess(
+  normalizeUserListType,
+  z.enum(['active', 'pending']),
+);
+
+const optionalUserSearchQuerySchema = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') return value;
+
+  const query = value.trim();
+  return query || undefined;
+}, z.string().max(150, 'Query is too long').optional());
+
+export const userOnboardingSchema = z
+  .object({
+    type: z
+      .preprocess(
+        (value) =>
+          typeof value === 'string' ? value.trim().toLowerCase() : value,
+        z.literal('initiate'),
+      )
+      .optional(),
+    basicDetails: z
+      .object({
+        name: nameSchema()
+          .min(2, 'Name must be at least 2 characters')
+          .max(20, 'Name too long'),
+        email: emailSchema,
+        phone: phoneSchema,
+        designation: z
+          .string()
+          .trim()
+          .min(2, 'Designation must be at least 2 characters')
+          .max(100, 'Designation too long')
+          .optional()
+          .nullable(),
+        employeeId: z
+          .string()
+          .trim()
+          .min(2, 'Employee ID must be at least 2 characters')
+          .max(50, 'Employee ID too long')
+          .optional()
+          .nullable(),
+        reportingManager: emailSchema.optional().nullable(),
+      })
+      .strict(),
+    permissions: z
+      .array(permissionSchema)
+      .min(1, 'At least one permission is required')
+      .refine(
+        (permissions) =>
+          permissions.filter((p) => p.accessType === 'PRIMARY').length === 1,
+        {
+          message: 'Exactly one PRIMARY permission is required',
+          path: ['permissions'],
+        },
+      ),
+    levelsHash: z.string().nullable().optional(),
+  })
+  .strict();
+
+const normalizeRequestType = (value: unknown) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value;
+
+const userPermissionMutationSchema = permissionSchema.extend({
+  operation: z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim().toUpperCase() : value),
+    z.enum(['ADD', 'UPDATE', 'REMOVE']).optional(),
+  ),
+  remove: z.boolean().optional(),
 });
+
+export const userModificationSchema = z
+  .object({
+    type: z.preprocess(
+      normalizeRequestType,
+      z.enum(['update', 'active', 'inactive', 'archive']),
+    ),
+    targetUserEmail: emailSchema,
+    basicDetails: z
+      .object({
+        name: nameSchema()
+          .min(2, 'Name must be at least 2 characters')
+          .max(20, 'Name too long')
+          .optional(),
+        email: emailSchema.optional(),
+        phone: phoneSchema.optional(),
+        designation: z
+          .string()
+          .trim()
+          .min(2, 'Designation must be at least 2 characters')
+          .max(100, 'Designation too long')
+          .nullable()
+          .optional(),
+        employeeId: z
+          .string()
+          .trim()
+          .min(2, 'Employee ID must be at least 2 characters')
+          .max(50, 'Employee ID too long')
+          .nullable()
+          .optional(),
+        reportingManager: emailSchema.nullable().optional(),
+      })
+      .strict()
+      .optional(),
+    permissions: z.array(userPermissionMutationSchema).optional(),
+    levelsHash: z.string().nullable().optional(),
+    remarks: z.string().trim().min(2).max(500).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.type === 'update' &&
+      !value.basicDetails &&
+      (!value.permissions || value.permissions.length === 0)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'At least one changed field or permission is required',
+        path: ['type'],
+      });
+    }
+  });
 
 export const userListSchema = z
   .object({
-    companyCode: z.string().trim().min(1, 'Company code is required'),
+    type: z.preprocess(
+      normalizeUserListType,
+      z.enum(['active', 'pending']).optional(),
+    ),
+    query: optionalUserSearchQuerySchema,
     page: z.preprocess(
       (value) =>
         value === undefined || value === null || value === ''
@@ -117,11 +203,11 @@ export const userListSchema = z
   })
   .strict();
 
-export const userFilterOptionsSchema = z
-  .object({
-    companyCode: optionalTrimmedStringSchema('Company code'),
-  })
-  .strict();
+export const fetchAllUserSchema = userListSchema.extend({
+  type: requiredUserListTypeSchema,
+});
+
+export const userFilterOptionsSchema = z.object({}).strict();
 
 export const userActionSchema = z
   .object({
@@ -144,7 +230,6 @@ export const userStatusUpdateSchema = z
 export const userHistory = z
   .object({
     email: emailSchema,
-    companyCode: z.string().trim().min(1, 'Company code is required'),
   })
   .strict();
 

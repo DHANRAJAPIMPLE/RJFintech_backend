@@ -16,14 +16,15 @@ import { internalPost } from '../../utils/internal-fetch.util';
 import { zodParse } from '../../utils/zod-parse.util';
 import {
   workflowOnboardingSchema,
+  workflowModificationSchema,
   workflowActionSchema,
   workflowHistorySchema,
+  workflowListSchema,
 } from '../../validations/workflow.validation';
 import type {
   FetchWorkflowHistoryInternalResponse,
   FetchWorkflowHistoryInternalSuccess,
   FetchWorkflowHistoryResponse,
-  FetchWorkflowsData,
   FetchWorkflowsInternalData,
   FetchWorkflowsInternalResponse,
   FetchWorkflowsResponse,
@@ -128,36 +129,87 @@ export class WorkflowController {
   }
 
   static async initiateWorkflow(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response<InitiateWorkflowResponse>,
     next: NextFunction,
   ) {
     try {
-      const validatedData = zodParse(workflowOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { companyCode, nodePath, levelsHash } = validatedData;
+      const companyId = req.user?.companyId;
 
-      if (!initiatorId) {
+      if (!initiatorId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
-      // 1. Get Company ID from Backend
+      const type =
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
+          : 'initiate';
+      const isModification = type === 'update' || type === 'inactive';
+      const validatedData = isModification
+        ? zodParse(workflowModificationSchema, req.body)
+        : zodParse(workflowOnboardingSchema, req.body);
+
+      if (isModification) {
+        const modification = validatedData as ReturnType<
+          typeof workflowModificationSchema.parse
+        >;
+        const { target, levelsHash, remarks, ...requestData } = modification;
+        const {
+          data: createRes,
+          ok: createOk,
+          status: createStatus,
+        } = await internalPost<WorkflowInitiateInternalResponse>(
+          `${config.backendUrl}/internal/workflow/initiate`,
+          {
+            initiatorId,
+            companyId,
+            type: modification.type.toUpperCase(),
+            target,
+            levelsHash: levelsHash || null,
+            remarks,
+            data: requestData,
+          },
+        );
+
+        if (!createOk) {
+          throw new AppError(
+            createRes?.message ||
+              createRes?.error ||
+              'Failed to initiate workflow modification request',
+            createStatus,
+          );
+        }
+
+        return res.status(201).json({
+          message: 'Workflow modification request created successfully',
+        });
+      }
+
+      const initiation = validatedData as ReturnType<
+        typeof workflowOnboardingSchema.parse
+      >;
+      const { nodePath, levelsHash } = initiation;
+
       const { data: company, ok: companyOk } = await internalPost<
         WorkflowCompanyLookupInternalResponse | WorkflowApiErrorResponse | null
-      >(`${config.backendUrl}/internal/company/get-by-code`, { companyCode });
-
-      if (!companyOk || !company || !('id' in company)) {
+      >(`${config.backendUrl}/internal/company/get-by-id`, { id: companyId });
+      if (!companyOk || !company || !('companyCode' in company)) {
         const errorData = company as WorkflowApiErrorResponse | null;
         throw new AppError(
           errorData?.message || errorData?.error || 'Company not found',
           404,
         );
       }
+      const companyCode = company.companyCode;
 
       // 2. Check if Node Path exists
       const { data: node, ok: nodeOk } = await internalPost<
         WorkflowNodeLookupInternalResponse | WorkflowApiErrorResponse | null
-      >(`${config.backendUrl}/internal/workflow/get-node`, { nodePath });
+      >(`${config.backendUrl}/internal/workflow/get-node-by-company`, {
+        nodePath,
+        companyId,
+      });
 
       if (!nodeOk || !node || !('id' in node)) {
         throw new AppError(`Node path '${nodePath}' not found`, 400);
@@ -189,9 +241,10 @@ export class WorkflowController {
         `${config.backendUrl}/internal/workflow/initiate`,
         {
           initiatorId,
-          companyId: company.id,
+          companyId,
           levelsHash: levelsHash || null,
-          data: validatedData,
+          type: 'INITIATE',
+          data: initiation,
           eligibleApprovers,
         },
       );
@@ -223,9 +276,10 @@ export class WorkflowController {
     try {
       const validatedData = zodParse(workflowActionSchema, req.body);
       const approverId = req.user?.id;
+      const companyId = req.user?.companyId;
       const { levelsHash, action, remark } = validatedData;
 
-      if (!approverId) {
+      if (!approverId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
@@ -234,7 +288,7 @@ export class WorkflowController {
         WorkflowRequestInternal | WorkflowApiErrorResponse | null
       >(`${config.backendUrl}/internal/workflow/get-request`, {
         levelsHash,
-        companyId: req.user?.companyId,
+        companyId,
       });
 
       if (!fetchOk || !onboarding || !('status' in onboarding)) {
@@ -271,7 +325,7 @@ export class WorkflowController {
         `${config.backendUrl}/internal/workflow/action`,
         {
           levelsHash,
-          companyId: req.user?.companyId,
+          companyId,
           approverId,
           remark,
           status: action,
@@ -310,10 +364,11 @@ export class WorkflowController {
         throw new AppError('Unauthorized: Company information missing', 401);
       }
 
+      const body = zodParse(workflowListSchema, req.body ?? {});
       const { data, ok, status } =
         await internalPost<FetchWorkflowsInternalResponse>(
           `${config.backendUrl}/internal/workflow/fetch`,
-          { companyId, userId: req.user?.id },
+          { ...body, companyId, userId: req.user?.id },
         );
 
       if (!ok) {
@@ -325,18 +380,25 @@ export class WorkflowController {
       }
 
       const workflowData = data as FetchWorkflowsInternalData;
-      const publicData: FetchWorkflowsData = {
-        active: workflowData.active.map(
-          WorkflowController.formatActiveWorkflow,
-        ),
-        pending: workflowData.pending.map(
-          WorkflowController.formatPendingWorkflow,
-        ),
-      };
+      const publicData =
+        body.type === 'active'
+          ? workflowData.data.map((workflow) =>
+              WorkflowController.formatActiveWorkflow(
+                workflow as WorkflowActiveItem,
+              ),
+            )
+          : workflowData.data.map((workflow) =>
+              WorkflowController.formatPendingWorkflow(
+                workflow as WorkflowPendingInternalItem,
+              ),
+            );
       const response: FetchWorkflowsResponse = {
         message: 'Workflows fetched successfully!',
         code: 200,
         data: publicData,
+        activeCount: workflowData.activeCount,
+        pendingCount: workflowData.pendingCount,
+        pageInfo: workflowData.pageInfo,
       };
 
       res.status(200).json(response);

@@ -5,20 +5,359 @@ import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
 
+type OrgNodeStatus = 'ACTIVE' | 'INACTIVE';
+
+type OrgNodeSnapshot = {
+  newNodeName: string;
+  nodeType: string;
+  nodePath: string;
+  parentNode: {
+    nodeName: string;
+    nodePath: string;
+  };
+  status: OrgNodeStatus;
+};
+
 /**
  * Controller for managing the organizational hierarchy (nodes) for companies.
  * Handles the creation, approval, and retrieval of organization units (Roots, Groups, Locations, etc.)
  */
 export class OrgStructureDbController {
+  private static pathSegment(value: string) {
+    return value
+      .trim()
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .toUpperCase();
+  }
+
+  private static pathsOverlap(left: string, right: string) {
+    return (
+      left === right ||
+      left.startsWith(`${right}.`) ||
+      right.startsWith(`${left}.`)
+    );
+  }
+
+  private static toNodeSnapshot(node: any): OrgNodeSnapshot {
+    return {
+      newNodeName: node.nodeName,
+      nodeType: node.nodeType,
+      nodePath: node.nodePath,
+      parentNode: node.parent
+        ? {
+            nodeName: node.parent.nodeName,
+            nodePath: node.parent.nodePath,
+          }
+        : {
+            nodeName: 'ROOT',
+            nodePath: 'ROOT',
+          },
+      status: node.status || 'ACTIVE',
+    };
+  }
+
+  private static async validateModificationPermission(
+    initiatorId: string,
+    companyId: string,
+  ) {
+    const access = await prisma.userAccess.findFirst({
+      where: {
+        userId: initiatorId,
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+        OR: [
+          { roleCode: 'SAAS_ADMIN' },
+          { isGlobalAccess: true },
+          { role: { subCategory: 'ORG_STR', modify: true } },
+        ],
+      },
+    });
+
+    if (!access) {
+      throw new AppError(
+        'Access Denied: UPDATE permission is required for organization modifications',
+        403,
+      );
+    }
+  }
+
+  private static async assertNoPendingHierarchyConflict(
+    companyId: string,
+    node: { nodePath: string },
+  ) {
+    const pendingRequests = await prisma.orgStructureReq.findMany({
+      where: { companyId, status: 'PENDING' },
+      select: {
+        data: true,
+      },
+    });
+
+    for (const request of pendingRequests) {
+      const data = request.data as any;
+      const oldData = data?.oldData as any;
+      const pendingNodePath =
+        data?.nodePath ||
+        (data?.parentNode?.nodePath && data?.newNodeName
+          ? `${data.parentNode.nodePath}.${OrgStructureDbController.pathSegment(data.newNodeName)}`
+          : null);
+      const affectedPaths = [oldData?.nodePath, pendingNodePath].filter(
+        (path): path is string => typeof path === 'string',
+      );
+
+      if (
+        affectedPaths.some((path) =>
+          OrgStructureDbController.pathsOverlap(path, node.nodePath),
+        )
+      ) {
+        throw new AppError(
+          'A parent or child organization node has a pending approval request',
+          400,
+        );
+      }
+    }
+  }
+
+  private static async getSubtreeNodes(
+    client: any,
+    companyId: string,
+    nodePath: string,
+  ) {
+    return client.orgStructure.findMany({
+      where: {
+        companyId,
+        OR: [{ nodePath }, { nodePath: { startsWith: `${nodePath}.` } }],
+      },
+      orderBy: { nodePath: 'asc' },
+    });
+  }
+
+  private static async assertNoPrimaryAccessInSubtree(
+    client: any,
+    companyId: string,
+    nodePath: string,
+  ) {
+    const nodes = await OrgStructureDbController.getSubtreeNodes(
+      client,
+      companyId,
+      nodePath,
+    );
+    const primaryAccess = await client.userAccess.findFirst({
+      where: {
+        companyId,
+        nodeId: { in: nodes.map((node: any) => node.id) },
+        accessType: 'PRIMARY',
+      },
+    });
+
+    if (primaryAccess) {
+      throw new AppError(
+        'Node cannot be made inactive while it or a child node has PRIMARY user access',
+        400,
+      );
+    }
+  }
+
+  private static async createModificationRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const {
+        initiatorId,
+        companyId,
+        targetNodePath,
+        levelsHash,
+        remarks,
+        data = {},
+      } = req.body;
+
+      if (!initiatorId || !companyId) {
+        throw new AppError('initiatorId and companyId are required', 400);
+      }
+      await OrgStructureDbController.validateModificationPermission(
+        initiatorId,
+        companyId,
+      );
+
+      if (!targetNodePath) {
+        throw new AppError('Target node path is required', 400);
+      }
+      if (data.status !== 'INACTIVE') {
+        throw new AppError(
+          'Only inactive organization requests are supported; inactive nodes cannot be reactivated',
+          400,
+        );
+      }
+
+      const node = await prisma.orgStructure.findUnique({
+        where: { nodePath: targetNodePath },
+        include: { parent: true },
+      });
+      if (!node || node.companyId !== companyId) {
+        throw new AppError('Organization node not found', 404);
+      }
+      if (node.status !== 'ACTIVE') {
+        throw new AppError(
+          'Inactive organization nodes cannot be modified or reactivated',
+          400,
+        );
+      }
+
+      await OrgStructureDbController.assertNoPendingHierarchyConflict(
+        companyId,
+        node,
+      );
+
+      const oldData = OrgStructureDbController.toNodeSnapshot(node);
+      const proposed: OrgNodeSnapshot = {
+        ...oldData,
+        status: 'INACTIVE',
+      };
+      const impact = 'INACTIVE';
+      await OrgStructureDbController.assertNoPrimaryAccessInSubtree(
+        prisma as any,
+        companyId,
+        oldData.nodePath,
+      );
+
+      const requestData = {
+        ...proposed,
+        oldData,
+        newData: proposed,
+      };
+      let notificationRecipients: string[] = [];
+      const request = await prisma.$transaction(async (tx) => {
+        const requestRecord = await tx.orgStructureReq.create({
+          data: {
+            companyId,
+            type: 'UPDATE',
+            impact,
+            initiatorId,
+            data: requestData as any,
+            remarks: remarks || null,
+          },
+        });
+        const workflow = await WorkflowApproverUtil.resolveAndCreateApprovers(
+          tx,
+          {
+            levelsHash: levelsHash || null,
+            module: 'SYSTEM_ACCESS',
+            subModule: 'ORG_STR',
+            companyId,
+            nodeId: node.id,
+            initiatorId,
+            reqId: requestRecord.id,
+            reqTable: 'org_structure_req',
+          },
+        );
+        notificationRecipients = workflow.eligibleApprovers;
+        await tx.orgStructureReq.update({
+          where: { id: requestRecord.id },
+          data: {
+            workflowId: workflow.workflowId,
+            data: {
+              ...requestData,
+              workflowSnapshot: {
+                levelsHash: levelsHash || null,
+                levels: workflow.approvers.map((level: any) => ({
+                  level: level.level,
+                  approversList: level.approversList,
+                  mandatoryCount: level.mandatoryCount,
+                })),
+              },
+            } as any,
+          },
+        });
+        await tx.orgHistory.create({
+          data: {
+            companyId,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+            orgReqId: requestRecord.id,
+            remarks: remarks || null,
+          },
+        });
+        return requestRecord;
+      });
+
+      await NotificationService.createRequestNotification({
+        companyId,
+        type: 'INITIATE',
+        referenceType: 'ORG',
+        referenceId: request.id,
+        referenceName: proposed.newNodeName,
+        createdBy: initiatorId,
+        recipientUserIds: notificationRecipients,
+      });
+      res.status(201).json(request);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  private static async applyApprovedModification(tx: any, request: any) {
+    const requestData = request.data as any;
+    const oldData = requestData.oldData as OrgNodeSnapshot;
+    const proposed = (requestData.newData || requestData) as OrgNodeSnapshot;
+    if (
+      request.impact !== 'INACTIVE' ||
+      oldData?.status !== 'ACTIVE' ||
+      proposed?.status !== 'INACTIVE'
+    ) {
+      throw new AppError(
+        'Only one-way organization deactivation requests can be approved',
+        400,
+      );
+    }
+
+    const node = await tx.orgStructure.findUnique({
+      where: { nodePath: oldData.nodePath },
+    });
+
+    if (!node || node.companyId !== request.companyId) {
+      throw new AppError('Organization node not found', 404);
+    }
+    if (node.status !== 'ACTIVE') {
+      throw new AppError(
+        'Inactive organization nodes cannot be modified or reactivated',
+        400,
+      );
+    }
+    await OrgStructureDbController.assertNoPrimaryAccessInSubtree(
+      tx,
+      request.companyId,
+      oldData.nodePath,
+    );
+
+    const subtree = await OrgStructureDbController.getSubtreeNodes(
+      tx,
+      request.companyId,
+      oldData.nodePath,
+    );
+    const subtreeIds = subtree.map((subtreeNode: any) => subtreeNode.id);
+    await tx.userAccess.deleteMany({
+      where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
+    });
+    await tx.orgStructure.updateMany({
+      where: { id: { in: subtreeIds } },
+      data: { status: 'INACTIVE' },
+    });
+  }
+
   // --- Internal Atomic Operations ---
 
   /**
    * Fetches a specific organization structure request by ID.
    */
   static async getOrgRequestById(req: Request, res: Response) {
-    const { id } = req.body;
-    const request = await prisma.orgStructureReq.findUnique({
-      where: { id },
+    const { id, companyId } = req.body;
+    const request = await prisma.orgStructureReq.findFirst({
+      where: { id, companyId },
       include: { company: true },
     });
     res.json(request);
@@ -66,6 +405,7 @@ export class OrgStructureDbController {
     try {
       const {
         id,
+        companyId,
         status, // 'approved' | 'rejected'
         approverId,
         remarks,
@@ -75,8 +415,8 @@ export class OrgStructureDbController {
         parentId,
       } = req.body;
 
-      if (!id || !status) {
-        throw new Error('id and status are required');
+      if (!id || !companyId || !status) {
+        throw new Error('id, companyId and status are required');
       }
       let notificationCompanyId = '';
       let notificationRecipients: string[] = [];
@@ -103,12 +443,15 @@ export class OrgStructureDbController {
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        const request = await tx.orgStructureReq.findUnique({
-          where: { id },
+        const request = await tx.orgStructureReq.findFirst({
+          where: { id, companyId },
           include: { company: true },
         });
 
         if (!request) throw new Error('Request not found');
+        if (request.status !== 'PENDING') {
+          throw new AppError('Request is already processed', 400);
+        }
         notificationCompanyId = request.companyId;
         notificationRecipients = request.eligibleApprovers || [];
         notificationSubject =
@@ -222,7 +565,24 @@ export class OrgStructureDbController {
               id: request.id,
               status: 'PARTIAL_APPROVED',
               level: approvedLevel,
+              type: request.type,
             };
+          }
+
+          if (request.type === 'UPDATE') {
+            await OrgStructureDbController.applyApprovedModification(
+              tx,
+              request,
+            );
+            const updated = await tx.orgStructureReq.update({
+              where: { id },
+              data: {
+                status: 'APPROVED',
+                remarks,
+              },
+            });
+
+            return { ...updated, status: 'APPROVED' };
           }
 
           // ── All levels approved — proceed with node creation ─────────────
@@ -337,7 +697,10 @@ export class OrgStructureDbController {
             notificationRecipients,
           );
       } else if (result && result.status === 'APPROVED') {
-        message = 'Org structure request approved and node created';
+        message =
+          result.type === 'UPDATE'
+            ? 'Org structure modification approved'
+            : 'Org structure request approved and node created';
       } else if (result && result.status === 'REJECTED') {
         message = 'Org structure request rejected';
       }
@@ -393,6 +756,14 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
+      if (String(req.body?.type || 'INITIATE').toUpperCase() === 'UPDATE') {
+        return OrgStructureDbController.createModificationRequest(
+          req,
+          res,
+          next,
+        );
+      }
+
       const { initiatorId, companyCode, companyId, levelsHash, ...rest } =
         req.body;
       let resolvedCompanyId = companyId;
@@ -430,6 +801,7 @@ export class OrgStructureDbController {
         const reqRecord = await tx.orgStructureReq.create({
           data: {
             ...rest,
+            initiatorId: initiatorId || null,
             companyId: resolvedCompanyId,
           },
           include: { company: true },
@@ -541,9 +913,10 @@ export class OrgStructureDbController {
       if (parentNode && parentNode.nodePath) {
         const parentRecord = await prisma.orgStructure.findFirst({
           where: {
-            companyId,
+            companyId: resolvedCompanyId,
             nodePath: parentNode.nodePath,
             nodeName: parentNode.nodeName,
+            status: 'ACTIVE',
           },
         });
         if (!parentRecord) {
@@ -557,7 +930,7 @@ export class OrgStructureDbController {
       // 2. Prevent overlapping pending requests for the same node name
       const pendingCheck = await prisma.orgStructureReq.findFirst({
         where: {
-          companyId,
+          companyId: resolvedCompanyId,
           status: 'PENDING',
           data: {
             path: ['newNodeName'],
@@ -952,7 +1325,7 @@ export class OrgStructureDbController {
 
       // 1. Fetch active nodes in the hierarchy
       const nodes = await prisma.orgStructure.findMany({
-        where: { companyId: resolvedCompanyId },
+        where: { companyId: resolvedCompanyId, status: 'ACTIVE' },
         orderBy: { nodePath: 'asc' },
       });
 

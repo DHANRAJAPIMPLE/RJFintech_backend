@@ -241,6 +241,7 @@ export class WorkflowApproverUtil {
           companyId: opts.companyId,
           module: opts.module,
           subModule: opts.subModule,
+          status: 'ACTIVE',
         },
         select: { id: true, name: true },
       });
@@ -261,6 +262,7 @@ export class WorkflowApproverUtil {
         module: opts.module,
         subModule: opts.subModule,
         name: { contains: 'DEFAULT' },
+        status: 'ACTIVE',
       },
       orderBy: { createdAt: 'desc' },
       select: { id: true, name: true },
@@ -504,12 +506,7 @@ export class WorkflowApproverUtil {
       this.getGlobalAccessUserIds(tx, companyId, subModule),
       this.getNodeApprovers(tx, companyId, node.id, subModule),
       this.getHierarchyApprovers(tx, companyId, node.nodePath, subModule),
-      this.filterUserIdsBySubModuleApproval(
-        tx,
-        companyId,
-        rmChain,
-        subModule,
-      ),
+      this.filterUserIdsBySubModuleApproval(tx, companyId, rmChain, subModule),
     ]);
 
     [...globalIds, ...nodeIds, ...hierarchyIds, ...managerIds].forEach((id) =>
@@ -594,7 +591,11 @@ export class WorkflowApproverUtil {
       orderBy: { level: 'asc' },
     });
 
-    const initiatorId = await this.getInitiatorId(prisma as any, reqId, reqTable);
+    const initiatorId = await this.getInitiatorId(
+      prisma as any,
+      reqId,
+      reqTable,
+    );
     const approvedUsers = new Set(
       await this.getApprovedUserIds(prisma as any, reqId, reqTable),
     );
@@ -849,8 +850,6 @@ export class WorkflowApproverUtil {
     });
   }
 
-
-
   private static async syncPendingEligibleApprovers(
     tx: TxClient,
     reqTable: string,
@@ -941,10 +940,7 @@ export class WorkflowApproverUtil {
         seenUsers.add(userId);
 
         const assignedSlot = userToSlot.get(userId);
-        if (
-          assignedSlot === undefined ||
-          tryAssign(assignedSlot, seenUsers)
-        ) {
+        if (assignedSlot === undefined || tryAssign(assignedSlot, seenUsers)) {
           userToSlot.set(userId, slotIndex);
           return true;
         }
@@ -999,15 +995,19 @@ export class WorkflowApproverUtil {
     );
     consumedApprovers.add(opts.approverId);
 
-    const initiatorId = await this.getInitiatorId(tx, opts.reqId, opts.reqTable);
+    const initiatorId = await this.getInitiatorId(
+      tx,
+      opts.reqId,
+      opts.reqTable,
+    );
     if (initiatorId) consumedApprovers.add(initiatorId);
 
     for (const row of pendingRows) {
       if (row.level < opts.level) continue;
 
-      const approversList = this
-        .toStringArray(row.approversList)
-        .filter((id) => !consumedApprovers.has(id));
+      const approversList = this.toStringArray(row.approversList).filter(
+        (id) => !consumedApprovers.has(id),
+      );
 
       if (row.level === opts.level) {
         if (opts.currentLevelSatisfied) continue;

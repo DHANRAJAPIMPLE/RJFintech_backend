@@ -20,7 +20,7 @@ import type {
 export class MonitoringController {
   private static formatFetchAllSpan(
     span: FetchMonitoringSpanInternalItem,
-  ): FetchMonitoringSpansResponse[number] {
+  ): FetchMonitoringSpansResponse['data'][number] {
     return {
       trackingId: span.trackingId,
       apiUrl: span.apiUrl,
@@ -58,10 +58,15 @@ export class MonitoringController {
         );
       }
 
-      const spans = data as FetchMonitoringSpanInternalItem[];
-      return res
-        .status(200)
-        .json(spans.map(MonitoringController.formatFetchAllSpan));
+      const spans = data as Exclude<
+        FetchMonitoringSpansInternalResponse,
+        MonitoringApiErrorResponse
+      >;
+      return res.status(200).json({
+        data: spans.data.map(MonitoringController.formatFetchAllSpan),
+        totalCount: spans.totalCount,
+        pageInfo: spans.pageInfo,
+      });
     } catch (error) {
       return next(error);
     }

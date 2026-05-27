@@ -101,3 +101,49 @@ export const paginationSchema = {
     max: 100,
   }),
 };
+
+export const requiredActivePendingTypeSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value.trim().toLowerCase() : value),
+  z.enum(['active', 'pending']),
+);
+
+export const optionalSearchQuerySchema = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') return value;
+
+  const query = value.trim();
+  return query || undefined;
+}, z.string().max(150, 'Query is too long').optional());
+
+export const cursorPaginationFields = {
+  query: optionalSearchQuerySchema,
+  page: z.preprocess(
+    (value) =>
+      value === undefined || value === null || value === '' ? undefined : value,
+    z.coerce
+      .number()
+      .int('Page must be an integer')
+      .min(1, 'Page must be greater than or equal to 1')
+      .optional(),
+  ),
+  direction: z.preprocess(
+    (value) => {
+      if (value === undefined || value === null || value === '') {
+        return undefined;
+      }
+
+      return typeof value === 'string' ? value.trim().toLowerCase() : value;
+    },
+    z
+      .enum(['next', 'prev', 'previous'])
+      .optional()
+      .default('next')
+      .transform((value) => (value === 'previous' ? 'prev' : value)),
+  ),
+  cursor: optionalCursorTokenSchema('Cursor'),
+  prevCursor: optionalCursorTokenSchema('Previous cursor'),
+  nextCursor: optionalCursorTokenSchema('Next cursor'),
+  cursorId: optionalCursorTokenSchema('Cursor'),
+  topCursor: optionalCursorTokenSchema('Top cursor'),
+  ...paginationSchema,
+};

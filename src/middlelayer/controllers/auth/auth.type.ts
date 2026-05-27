@@ -107,6 +107,7 @@ export type AuthBackendCompany = AuthCompany & {
 
 export type AuthBackendUserMapping = {
   companyId: string;
+  status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE';
   company: AuthBackendCompany;
 };
 

@@ -33,7 +33,7 @@ export type WorkflowActionResultStatus =
   | 'PARTIAL_APPROVED';
 
 export type InitiateWorkflowResponse = {
-  message: 'Workflow initiation request created successfully';
+  message: string;
 };
 
 export type WorkflowActionResponse = {
@@ -106,9 +106,17 @@ export type WorkflowPendingItem = {
   workflowName: string;
 };
 
-export type FetchWorkflowsData = {
-  active: WorkflowActiveItem[];
-  pending: WorkflowPendingItem[];
+export type WorkflowListType = 'active' | 'pending';
+
+export type WorkflowListPageInfo = {
+  page: number;
+  nextCursor: string | null;
+  prevCursor: string | null;
+  topCursor: string | null;
+  hasNext: boolean;
+  hasPrev: boolean;
+  hasNewData: boolean;
+  newCount: number;
 };
 
 export type WorkflowPendingInternalRequestData = WorkflowPendingRequestData & {
@@ -123,15 +131,25 @@ export type WorkflowPendingInternalItem = Omit<WorkflowPendingItem, 'data'> & {
   data: WorkflowPendingInternalRequestData;
 };
 
+export type WorkflowActiveInternalItem = WorkflowActiveItem & {
+  id: string;
+  createdAt: string;
+};
+
 export type FetchWorkflowsInternalData = {
-  active: WorkflowActiveItem[];
-  pending: WorkflowPendingInternalItem[];
+  data: WorkflowActiveInternalItem[] | WorkflowPendingInternalItem[];
+  activeCount: number;
+  pendingCount: number;
+  pageInfo: WorkflowListPageInfo;
 };
 
 export type FetchWorkflowsResponse = {
   message: 'Workflows fetched successfully!';
   code: 200;
-  data: FetchWorkflowsData;
+  data: WorkflowActiveItem[] | WorkflowPendingItem[];
+  activeCount: number;
+  pendingCount: number;
+  pageInfo: WorkflowListPageInfo;
 };
 
 export type WorkflowHistoryAuditUser = {

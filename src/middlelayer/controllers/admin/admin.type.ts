@@ -50,15 +50,24 @@ export type AdminPendingCompanyGroup = {
   companyDetails: AdminPendingCompanyDetails[];
 };
 
-export type AdminGroupsCompanies = {
-  active: AdminCompanyGroup[];
-  pending: AdminPendingCompanyGroup[];
-  inactive: AdminCompanyGroup[];
+export type AdminListPageInfo = {
+  page: number;
+  nextCursor: string | null;
+  prevCursor: string | null;
+  topCursor: string | null;
+  hasNext: boolean;
+  hasPrev: boolean;
+  hasNewData: boolean;
+  newCount: number;
 };
 
 export type FetchAdminGroupsResponse = {
   message: 'Companies fetched successfully!';
-  companies: AdminGroupsCompanies;
+  data: AdminCompanyGroup[] | AdminPendingCompanyGroup[];
+  activeCount: number;
+  inactiveCount: number;
+  pendingCount: number;
+  pageInfo: AdminListPageInfo;
 };
 
 export type InitiateCompanyOnboardingResponse = {
@@ -106,7 +115,7 @@ export type FetchCompanyHistoryResponse = {
 };
 
 export type AdminBackendCompany = {
-  id?: string;
+  id: string;
   companyCode: string;
   legalName: string;
   gstNumber: string | null;
@@ -116,6 +125,12 @@ export type AdminBackendCompany = {
   address: string | null;
   status: AdminCompanyStatus;
   signatories?: AdminCompanySignatory[];
+  companyMappings?: Array<{
+    group: {
+      groupCode: string;
+      name: string;
+    };
+  }>;
 };
 
 export type AdminBackendCompanyMapping = {
@@ -155,9 +170,11 @@ export type AdminBackendPendingOnboarding = {
 };
 
 export type FetchAdminGroupsInternalSuccess = {
-  groups: AdminBackendGroup[];
-  soloCompanies: AdminBackendCompany[];
-  pendingOnboardings: AdminBackendPendingOnboarding[];
+  data: AdminBackendCompany[] | AdminBackendPendingOnboarding[];
+  activeCount: number;
+  inactiveCount: number;
+  pendingCount: number;
+  pageInfo: AdminListPageInfo;
 };
 
 export type AdminApiErrorResponse = {

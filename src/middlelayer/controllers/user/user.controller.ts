@@ -24,6 +24,8 @@ import {
   userFetchByNodePathCountSchema,
   userFilterOptionsSchema,
   userListSchema,
+  fetchAllUserSchema,
+  userModificationSchema,
 } from '../../validations/user.validation';
 import type {
   ActionUserOnboardingInternalResponse,
@@ -32,11 +34,10 @@ import type {
   FetchCompanyNodesInternalResponse,
   FetchCompanyNodesResponse,
   UserCompanyNode,
-  FetchActiveUsersResponse,
+  FetchAllUsersResponse,
   FetchAndProcessUsersResult,
   FetchUserFilterOptionsInternalResponse,
   FetchUserFilterOptionsResponse,
-  FetchPendingUsersResponse,
   FetchUsersByNodePathCountInternalResponse,
   FetchUsersByNodePathCountResponse,
   FetchUserHistoryInternalResponse,
@@ -178,11 +179,10 @@ export class UserController {
   }
 
   private static async fetchAndProcessUsers(
-    req: Request,
+    req: Request & { user?: { id: string; companyId: string } },
     listType?: 'active' | 'pending',
   ): Promise<FetchAndProcessUsersResult> {
     const {
-      companyCode,
       direction,
       cursor: bodyCursor,
       prevCursor,
@@ -192,7 +192,13 @@ export class UserController {
       offset,
       limit,
       page,
+      query,
     } = zodParse(userListSchema, req.body ?? {});
+    const companyId = req.user?.companyId;
+    const userId = req.user?.id;
+    if (!companyId || !userId) {
+      throw new AppError('Unauthorized', 401);
+    }
     const cursor =
       bodyCursor ??
       (direction === 'prev' ? prevCursor : nextCursor) ??
@@ -202,8 +208,8 @@ export class UserController {
     const { data, ok, status } = await internalPost<any>(
       `${config.backendUrl}/internal/user/fetch-all`,
       {
-        companyCode,
-        userId: (req as any).user?.id,
+        companyId,
+        userId,
         listType,
         direction,
         cursor,
@@ -211,6 +217,7 @@ export class UserController {
         offset,
         limit,
         page,
+        query,
       },
     );
     if (!ok) {
@@ -247,50 +254,24 @@ export class UserController {
     };
   }
 
-  static async fetchActiveUsers(
-    req: Request,
-    res: Response,
+  static async fetchAllUsers(
+    req: Request & { user?: { id: string; companyId: string } },
+    res: Response<FetchAllUsersResponse>,
     next: NextFunction,
   ) {
     try {
+      const { type } = zodParse(fetchAllUserSchema, req.body ?? {});
       const {
         activeUsers,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        pageInfo,
-      } = await UserController.fetchAndProcessUsers(req, 'active');
-
-      const response: FetchActiveUsersResponse = {
-        data: activeUsers,
-        activeCount,
-        inactiveCount,
-        pendingCount,
-        pageInfo,
-      };
-
-      res.status(200).json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  static async fetchPendingUsers(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const {
         pendingUsers,
         activeCount,
         inactiveCount,
         pendingCount,
         pageInfo,
-      } = await UserController.fetchAndProcessUsers(req, 'pending');
+      } = await UserController.fetchAndProcessUsers(req, type);
 
-      const response: FetchPendingUsersResponse = {
-        data: pendingUsers,
+      const response: FetchAllUsersResponse = {
+        data: type === 'active' ? activeUsers : pendingUsers,
         activeCount,
         inactiveCount,
         pendingCount,
@@ -310,17 +291,16 @@ export class UserController {
   ) {
     try {
       const companyId = req.user?.companyId;
-      const { companyCode } = zodParse(userFilterOptionsSchema, req.body ?? {});
+      zodParse(userFilterOptionsSchema, req.body ?? {});
 
-      if (!companyId && !companyCode) {
-        throw new AppError('Company context is required', 400);
+      if (!companyId) {
+        throw new AppError('Unauthorized', 401);
       }
 
       const { data, ok, status } = await internalPost<
         FetchUserFilterOptionsInternalResponse | UserApiErrorResponse
       >(`${config.backendUrl}/internal/user/filter-option`, {
         companyId,
-        companyCode,
       });
 
       if (!ok) {
@@ -375,18 +355,67 @@ export class UserController {
   }
 
   static async initiateUserOnboarding(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId?: string } },
     res: Response<InitiateUserOnboardingResponse>,
     next: NextFunction,
   ) {
     try {
+      const requestType =
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
+          : 'initiate';
+
+      if (requestType !== 'initiate') {
+        const modification = zodParse(userModificationSchema, req.body);
+        const initiatorId = req.user?.id;
+        const companyId = req.user?.companyId;
+
+        if (!initiatorId || !companyId) {
+          throw new AppError('Unauthorized', 401);
+        }
+
+        const {
+          data: createRes,
+          ok: createOk,
+          status: createStatus,
+        } = await internalPost<CreateUserOnboardingInternalResponse>(
+          `${config.backendUrl}/internal/user/create`,
+          {
+            initiatorId,
+            companyId,
+            type: modification.type.toUpperCase(),
+            targetEmail: modification.targetUserEmail,
+            levelsHash: modification.levelsHash || null,
+            remarks: modification.remarks,
+            data: {
+              basicDetails: modification.basicDetails,
+              permissions: modification.permissions,
+            },
+            status: 'PENDING',
+          },
+        );
+
+        if (!createOk) {
+          throw new AppError(
+            createRes?.message ||
+              createRes?.error ||
+              'Failed to initiate user modification',
+            createStatus,
+          );
+        }
+
+        return res.status(201).json({
+          message: 'User onboarding initiated successfully',
+        });
+      }
+
       const validatedData = zodParse(userOnboardingSchema, req.body);
       const initiatorId = req.user?.id;
-      const { basicDetails, companyId, permissions, levelsHash } =
-        validatedData;
+      const companyId = req.user?.companyId;
+      const { basicDetails, permissions, levelsHash } = validatedData;
       const { email, reportingManager } = basicDetails;
 
-      if (!initiatorId) {
+      if (!initiatorId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
@@ -405,6 +434,16 @@ export class UserController {
           );
         }
         manager = m;
+        const managerInCompany = manager.userMappings?.some(
+          (mapping: any) =>
+            mapping.companyId === companyId && mapping.status === 'ACTIVE',
+        );
+        if (!managerInCompany) {
+          throw new AppError(
+            'Reporting manager is not active in your company',
+            400,
+          );
+        }
       }
 
       // 2. Logic: Check if user already exists
@@ -442,13 +481,6 @@ export class UserController {
       }
 
       // 4. Logic: Validate Permissions (Roles and Nodes)
-      const targetCompanyId =
-        manager?.userMappings?.[0]?.companyId || (req as any).user?.companyId;
-
-      if (!targetCompanyId) {
-        throw new AppError('Unable to determine target company', 400);
-      }
-
       for (const permission of permissions) {
         const { data: roles, ok: rolesOk } = await internalPost<any>(
           `${config.backendUrl}/internal/roles/fetch`,
@@ -467,7 +499,7 @@ export class UserController {
           `${config.backendUrl}/internal/org/get-node-by-path-companyid`,
           {
             nodePath: permission.nodePath,
-            companyId: targetCompanyId,
+            companyId,
           },
         );
 
@@ -486,32 +518,15 @@ export class UserController {
       let companyCode: string | undefined;
       let groupCode: string | undefined;
 
-      if (manager) {
-        const managerMapping = manager.userMappings?.[0];
-        if (managerMapping && managerMapping.company) {
-          companyCode = managerMapping.company.companyCode;
-          const compMapping = managerMapping.company.companyMappings?.[0];
-          if (compMapping && compMapping.group) {
-            groupCode = compMapping.group.groupCode;
-          }
-        }
-      } else {
-        // Resolve from body companyId or initiator's session companyId
-        const resolveId = companyId || (req as any).user?.companyId;
-
-        if (resolveId) {
-          const { data: initiatorCompany, ok: initOk } =
-            await internalPost<any>(
-              `${config.backendUrl}/internal/company/get-by-id`,
-              { id: resolveId },
-            );
-          if (initOk && initiatorCompany) {
-            companyCode = initiatorCompany.companyCode;
-            const compMapping = initiatorCompany.companyMappings?.[0];
-            if (compMapping && compMapping.group) {
-              groupCode = compMapping.group.groupCode;
-            }
-          }
+      const { data: initiatorCompany, ok: initOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/company/get-by-id`,
+        { id: companyId },
+      );
+      if (initOk && initiatorCompany) {
+        companyCode = initiatorCompany.companyCode;
+        const compMapping = initiatorCompany.companyMappings?.[0];
+        if (compMapping && compMapping.group) {
+          groupCode = compMapping.group.groupCode;
         }
       }
 
@@ -545,8 +560,10 @@ export class UserController {
         `${config.backendUrl}/internal/user/create`,
         {
           initiatorId,
+          companyId,
           companyCode,
           groupCode,
+          type: 'INITIATE',
           levelsHash: levelsHash || null,
           data: {
             basicDetails,
@@ -577,23 +594,24 @@ export class UserController {
   }
 
   static async actionUserOnboarding(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response<ActionUserOnboardingResponse>,
     next: NextFunction,
   ) {
     try {
       const validatedData = zodParse(userActionSchema, req.body);
       const approverId = req.user?.id;
+      const companyId = req.user?.companyId;
       const { id, action, remark } = validatedData;
 
-      if (!approverId) {
+      if (!approverId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
       // 1. Fetch onboarding record
       const { data: onboarding, ok: fetchOk } = await internalPost<
         UserOnboardingInternalResponse | UserApiErrorResponse | null
-      >(`${config.backendUrl}/internal/user/get`, { id });
+      >(`${config.backendUrl}/internal/user/get`, { id, companyId });
 
       if (!fetchOk || !onboarding || !('status' in onboarding)) {
         const errorData = onboarding as UserApiErrorResponse | null;
@@ -629,6 +647,7 @@ export class UserController {
         `${config.backendUrl}/internal/user/action`,
         {
           id,
+          companyId,
           approverId,
           remark,
           status: action,
@@ -713,17 +732,22 @@ export class UserController {
   }
 
   static async getUserHistory(
-    req: Request,
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response<FetchUserHistoryResponse>,
     next: NextFunction,
   ) {
     try {
-      const { email, companyCode } = zodParse(userHistory, req.body);
+      const { email } = zodParse(userHistory, req.body);
+      const companyId = req.user?.companyId;
+      const userId = req.user?.id;
+      if (!companyId || !userId) {
+        throw new AppError('Unauthorized', 401);
+      }
 
       const { data, ok, status } =
         await internalPost<FetchUserHistoryInternalResponse>(
           `${config.backendUrl}/internal/user/history`,
-          { email, companyCode, userId: (req as any).user?.id },
+          { email, companyId, userId },
         );
 
       if (!ok) {

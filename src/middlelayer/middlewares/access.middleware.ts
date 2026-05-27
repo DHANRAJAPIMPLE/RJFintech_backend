@@ -26,6 +26,7 @@ const getTargetNode = (body: any, moduleName?: string): string | undefined => {
   const data = body?.data;
   const candidates = [
     body?.nodePath,
+    body?.target?.nodePath,
     body?.parentNode,
     body?.node,
     data?.nodePath,

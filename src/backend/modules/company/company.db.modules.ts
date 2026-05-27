@@ -4,6 +4,14 @@ import { HashUtil } from '../../../shared/utils/hash.util';
 import { AppError } from '../../middlewares/error.middleware';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
+import {
+  appendCursorWhere,
+  buildPage,
+  getInMemoryPageRows,
+  getPageOrder,
+  isRowInCursorDirection,
+  resolveCursorPagination,
+} from '../../../shared/utils/cursor-pagination.util';
 
 /**
  * Controller for managing company records, group associations, and the company onboarding lifecycle.
@@ -47,12 +55,7 @@ export class CompanyDbController {
   }
 
   /**
-   * Fetches a structured view of all company records for the administration panel.
-   * This method performs a multi-step aggregation:
-   * 1. Retrieves Group Companies and their associated Active companies.
-   * 2. Retrieves Solo Companies (those not mapped to any group).
-   * 3. Retrieves Pending Onboarding requests.
-   * 4. Enriches all records with Initiator and Approver data from the history tables.
+   * Fetches one cursor-paginated active or pending company list.
    */
   static async getGroupCompanies(
     req: Request,
@@ -62,203 +65,242 @@ export class CompanyDbController {
     try {
       const viewerUserId =
         typeof req.body?.userId === 'string' ? req.body.userId : null;
-
-      // 1. Fetch groups and their companies (Active)
-      const groups = await prisma.groupCompany.findMany({
-        include: {
-          companyMappings: {
-            include: {
-              company: {
-                include: {
-                  userAccesses: {
-                    where: { isGlobalAccess: true },
-                    include: {
-                      user: {
-                        include: {
-                          userMappings: true,
-                        },
+      const type = req.body?.type === 'pending' ? 'pending' : 'active';
+      const query =
+        typeof req.body?.query === 'string' && req.body.query.trim()
+          ? req.body.query.trim()
+          : null;
+      const pagination = resolveCursorPagination(req.body ?? {});
+      const buildCompanyWhere = (status: 'ACTIVE' | 'INACTIVE') => ({
+        status,
+        ...(query
+          ? {
+              OR: [
+                {
+                  legalName: { contains: query, mode: 'insensitive' as const },
+                },
+                {
+                  companyCode: {
+                    contains: query,
+                    mode: 'insensitive' as const,
+                  },
+                },
+                {
+                  gstNumber: {
+                    contains: query,
+                    mode: 'insensitive' as const,
+                  },
+                },
+                { ieCode: { contains: query, mode: 'insensitive' as const } },
+                {
+                  companyMappings: {
+                    some: {
+                      group: {
+                        OR: [
+                          {
+                            name: {
+                              contains: query,
+                              mode: 'insensitive' as const,
+                            },
+                          },
+                          {
+                            groupCode: {
+                              contains: query,
+                              mode: 'insensitive' as const,
+                            },
+                          },
+                        ],
                       },
                     },
                   },
                 },
-              },
-            },
+              ],
+            }
+          : {}),
+      });
+      const pendingWhere = { status: 'PENDING' as const };
+      const activeWhere = buildCompanyWhere('ACTIVE');
+      const inactiveWhere = buildCompanyWhere('INACTIVE');
+      const normalizedQuery = query?.toLowerCase() || null;
+      const filteredPendingRows = normalizedQuery
+        ? (
+            await prisma.companyOnboarding.findMany({ where: pendingWhere })
+          ).filter((onboarding) => {
+            const data = onboarding.data as any;
+            return [
+              onboarding.companyCode,
+              onboarding.groupCode,
+              data?.company?.name,
+              data?.company?.gst,
+              data?.company?.ieCode,
+              data?.group?.name,
+            ].some(
+              (value) =>
+                typeof value === 'string' &&
+                value.toLowerCase().includes(normalizedQuery),
+            );
+          })
+        : null;
+      const listWhere = type === 'active' ? activeWhere : pendingWhere;
+      const pageWhere = pagination.cursor
+        ? appendCursorWhere(
+            listWhere as any,
+            pagination.cursor,
+            pagination.direction === 'prev' ? 'newer' : 'older',
+          )
+        : listWhere;
+      const newWhere = pagination.topCursor
+        ? appendCursorWhere(listWhere as any, pagination.topCursor, 'newer')
+        : null;
+      const companyInclude = {
+        companyMappings: {
+          take: 1,
+          include: {
+            group: { select: { groupCode: true, name: true } },
           },
         },
-      });
-
-      // 2. Fetch companies NOT in any group (Solo)
-      const soloCompanies = await prisma.company.findMany({
-        where: {
-          companyMappings: {
-            none: {},
+        userAccesses: {
+          where: { isGlobalAccess: true },
+          include: {
+            user: { include: { userMappings: true } },
           },
         },
-        include: {
-          userAccesses: {
-            where: { isGlobalAccess: true },
-            include: {
-              user: {
-                include: {
-                  userMappings: true,
-                },
-              },
-            },
-          },
-        },
-      });
+      } as const;
+      const [activeCount, inactiveCount, pendingCount, selectedRows, newCount] =
+        await Promise.all([
+          prisma.company.count({ where: activeWhere }),
+          prisma.company.count({ where: inactiveWhere }),
+          filteredPendingRows
+            ? Promise.resolve(filteredPendingRows.length)
+            : prisma.companyOnboarding.count({ where: pendingWhere }),
+          type === 'active'
+            ? prisma.company.findMany({
+                where: pageWhere as any,
+                include: companyInclude,
+                orderBy: getPageOrder(pagination.direction) as any,
+                skip: pagination.cursor ? 0 : pagination.offset,
+                take: pagination.limit + 1,
+              })
+            : filteredPendingRows
+              ? Promise.resolve(
+                  getInMemoryPageRows(filteredPendingRows, pagination),
+                )
+              : prisma.companyOnboarding.findMany({
+                  where: pageWhere as any,
+                  orderBy: getPageOrder(pagination.direction) as any,
+                  skip: pagination.cursor ? 0 : pagination.offset,
+                  take: pagination.limit + 1,
+                }),
+          newWhere
+            ? type === 'active'
+              ? prisma.company.count({ where: newWhere as any })
+              : filteredPendingRows && pagination.topCursor
+                ? Promise.resolve(
+                    filteredPendingRows.filter((onboarding) =>
+                      isRowInCursorDirection(
+                        onboarding,
+                        pagination.topCursor!,
+                        'newer',
+                      ),
+                    ).length,
+                  )
+                : prisma.companyOnboarding.count({ where: newWhere as any })
+            : Promise.resolve(0),
+        ]);
+      const pageData = buildPage(selectedRows as any[], pagination, newCount);
+      const firstPageRow = pageData.pageRows[0];
+      if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
+        const newerWhere = appendCursorWhere(
+          listWhere as any,
+          firstPageRow,
+          'newer',
+        );
+        const newerCount =
+          type === 'active'
+            ? await prisma.company.count({ where: newerWhere as any })
+            : filteredPendingRows
+              ? filteredPendingRows.filter((onboarding) =>
+                  isRowInCursorDirection(onboarding, firstPageRow, 'newer'),
+                ).length
+              : await prisma.companyOnboarding.count({
+                  where: newerWhere as any,
+                });
+        pageData.pageInfo.page = Math.floor(newerCount / pagination.limit) + 1;
+      }
 
-      // 3. Fetch pending onboarding records
-      const pendingOnboardings = await prisma.companyOnboarding.findMany({
-        where: { status: 'PENDING' },
-      });
+      if (type === 'active') {
+        const companies = pageData.pageRows.map((company: any) => {
+          const signatories = company.userAccesses.map((userAccess: any) => {
+            const mapping = userAccess.user.userMappings.find(
+              (userMapping: any) => userMapping.companyId === company.id,
+            );
+            return {
+              name: userAccess.user.name,
+              email: userAccess.user.email,
+              phone: userAccess.user.phone,
+              designation: mapping?.designation || null,
+              employeeId: mapping?.employeeId || null,
+            };
+          });
+          const companyData = { ...company };
+          delete companyData.userAccesses;
+          return { ...companyData, signatories };
+        });
 
-      // 4. Resolve audit history for all entities to identify who initiated/approved them
-      const allActiveCompanyCodes = [
-        ...groups.flatMap((g: any) =>
-          g.companyMappings.map((cm: any) => cm.company.companyCode),
-        ),
-        ...soloCompanies.map((c: any) => c.companyCode),
-      ];
-      const allGroupCodes = groups.map((g: any) => g.groupCode);
-      const allPendingCodes = pendingOnboardings.map((onb) => onb.companyCode);
+        return res.status(200).json({
+          data: companies,
+          activeCount,
+          inactiveCount,
+          pendingCount,
+          pageInfo: pageData.pageInfo,
+        });
+      }
 
-      const allCodes = [
-        ...new Set([
-          ...allActiveCompanyCodes,
-          ...allGroupCodes,
-          ...allPendingCodes,
-        ]),
-      ];
-
+      const pendingCodes = pageData.pageRows.map(
+        (onboarding: any) => onboarding.companyCode,
+      );
       const histories = await prisma.companyHistory.findMany({
         where: {
-          companyCode: { in: allCodes },
+          companyCode: { in: pendingCodes },
+          event: 'INITIATE',
         },
         include: {
           user: { select: { id: true, name: true, email: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
-
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
         viewerUserId,
-        ...histories.map((h) => h.eventUserId),
+        ...histories.map((history) => history.eventUserId),
       ]);
-
-      const historyMap = new Map();
-      histories.forEach((h) => {
-        const key = `${h.companyCode}_${h.event}`;
-        if (!historyMap.has(key)) {
-          historyMap.set(key, {
-            user: HistoryUserUtil.formatAuditUser(
-              h.user,
-              h.eventUserId,
+      const initiatorByCompanyCode = new Map<string, unknown>();
+      histories.forEach((history) => {
+        if (!initiatorByCompanyCode.has(history.companyCode)) {
+          initiatorByCompanyCode.set(
+            history.companyCode,
+            HistoryUserUtil.formatAuditUser(
+              history.user,
+              history.eventUserId,
               saasAdminUserIds,
               viewerUserId,
             ),
-            createdAt: h.createdAt,
-          });
+          );
         }
       });
+      const pending = pageData.pageRows.map((onboarding: any) => ({
+        ...onboarding,
+        initiator: initiatorByCompanyCode.get(onboarding.companyCode) || null,
+      }));
 
-      // 5. Enhance Active data with history
-      const enhancedGroups = groups.map((g: any) => {
-        const initiateHistory = historyMap.get(`${g.groupCode}_INITIATE`);
-        const approveHistory = historyMap.get(`${g.groupCode}_APPROVED`);
-
-        return {
-          ...g,
-          initiator: initiateHistory?.user || null,
-          approver: approveHistory?.user || null,
-          approvedAt: approveHistory?.createdAt || null,
-          createdAt: initiateHistory?.createdAt || g.createdAt,
-          companyMappings: g.companyMappings.map((cm: any) => {
-            const compInit = historyMap.get(
-              `${cm.company.companyCode}_INITIATE`,
-            );
-            const compApprove = historyMap.get(
-              `${cm.company.companyCode}_APPROVED`,
-            );
-            const signatories = cm.company.userAccesses.map((ua: any) => {
-              const mapping = ua.user.userMappings.find(
-                (m: any) => m.companyId === cm.company.id,
-              );
-              return {
-                name: ua.user.name,
-                email: ua.user.email,
-                phone: ua.user.phone,
-                designation: mapping?.designation || null,
-                employeeId: mapping?.employeeId || null,
-              };
-            });
-
-            // Remove internal mapping fields to keep response clean
-            const { userAccesses, ...companyData } = cm.company;
-
-            return {
-              ...cm,
-              company: {
-                ...companyData,
-                signatories,
-                initiator: compInit?.user || initiateHistory?.user || null,
-                approver: compApprove?.user || approveHistory?.user || null,
-                approvedAt:
-                  compApprove?.createdAt || approveHistory?.createdAt || null,
-                createdAt:
-                  compInit?.createdAt ||
-                  initiateHistory?.createdAt ||
-                  cm.company.createdAt,
-              },
-            };
-          }),
-        };
-      });
-
-      const enhancedSoloCompanies = soloCompanies.map((c: any) => {
-        const compInit = historyMap.get(`${c.companyCode}_INITIATE`);
-        const compApprove = historyMap.get(`${c.companyCode}_APPROVED`);
-        const signatories = c.userAccesses.map((ua: any) => {
-          const mapping = ua.user.userMappings.find(
-            (m: any) => m.companyId === c.id,
-          );
-          return {
-            name: ua.user.name,
-            email: ua.user.email,
-            phone: ua.user.phone,
-            designation: mapping?.designation || null,
-            employeeId: mapping?.employeeId || null,
-          };
-        });
-
-        const { userAccesses, ...companyData } = c;
-
-        return {
-          ...companyData,
-          signatories,
-          initiator: compInit?.user || null,
-          approver: compApprove?.user || null,
-          approvedAt: compApprove?.createdAt || null,
-          createdAt: compInit?.createdAt || c.createdAt,
-        };
-      });
-
-      // 6. Enhance Pending data with history
-      const enhancedPending = pendingOnboardings.map((onb: any) => {
-        const init = historyMap.get(`${onb.companyCode}_INITIATE`);
-        return {
-          ...onb,
-          initiator: init?.user || null,
-        };
-      });
-
-      res.status(200).json({
-        groups: enhancedGroups,
-        soloCompanies: enhancedSoloCompanies,
-        pendingOnboardings: enhancedPending,
+      return res.status(200).json({
+        data: pending,
+        activeCount,
+        inactiveCount,
+        pendingCount,
+        pageInfo: pageData.pageInfo,
       });
     } catch (error) {
-      next(error);
+      return next(error);
     }
   }
 
@@ -426,16 +468,6 @@ export class CompanyDbController {
           (onboarding.data as any)?.company?.name ||
           onboarding.companyCode ||
           notificationSubject;
-        const initiateHistory = onboarding.companyCode
-          ? await tx.companyHistory.findFirst({
-              where: {
-                companyCode: onboarding.companyCode,
-                event: 'INITIATE',
-              },
-              orderBy: { createdAt: 'desc' },
-            })
-          : null;
-        const initiatorId = initiateHistory?.eventUserId || approverId;
 
         // Authorization check
         if (
@@ -627,6 +659,7 @@ export class CompanyDbController {
             levelsHash,
             alias: '1M_1C_D',
             levels: {
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- Workflow levels use numeric keys.
               1: {
                 approver1: 'NODE_APPROVER',
                 type: 'OR',
@@ -792,7 +825,7 @@ export class CompanyDbController {
 
         return {
           message: 'Onboarding approved and company created successfully',
-          status: 'APPROVED'
+          status: 'APPROVED',
         };
       });
 

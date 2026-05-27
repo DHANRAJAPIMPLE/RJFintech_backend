@@ -10,26 +10,58 @@
 import { z } from 'zod';
 import { nameSchema } from './common.validation';
 
+const nodeTypeSchema = z.enum([
+  'ROOT',
+  'DIVISION',
+  'DEPARTMENT',
+  'TEAM',
+  'PLANT',
+  'LOCATION',
+]);
+
+const parentNodeSchema = z
+  .object({
+    nodeName: nameSchema('Node name').min(1, 'Node name is required'),
+    nodePath: z.string().trim().min(1, 'Node path is required'),
+  })
+  .strict();
+
 export const orgOnboardingSchema = z
   .object({
-    companyCode: z.string().trim().min(1, 'Company code is required'),
+    type: z
+      .preprocess(
+        (value) =>
+          typeof value === 'string' ? value.trim().toLowerCase() : value,
+        z.literal('initiate'),
+      )
+      .optional(),
     newNodeName: nameSchema('New node name').min(
       1,
       'New node name is required',
     ),
-    nodeType: z.enum([
-      'ROOT',
-      'DIVISION',
-      'DEPARTMENT',
-      'TEAM',
-      'PLANT',
-      'LOCATION',
-    ]),
-    parentNode: z.object({
-      nodeName: nameSchema('Node name').min(1, 'Node name is required'),
-      nodePath: z.string().trim().min(1, 'Node path is required'),
-    }),
+    nodeType: nodeTypeSchema,
+    parentNode: parentNodeSchema,
     levelsHash: z.string().nullable().optional(),
+  })
+  .strict();
+
+export const orgModificationSchema = z
+  .object({
+    type: z.preprocess(
+      (value) =>
+        typeof value === 'string' ? value.trim().toLowerCase() : value,
+      z.literal('update'),
+    ),
+    nodePath: z.string().trim().min(1, 'Node path is required'),
+    status: z.preprocess(
+      (value) =>
+        typeof value === 'string' ? value.trim().toUpperCase() : value,
+      z.literal('INACTIVE', {
+        message: 'Only INACTIVE status is allowed for organization updates',
+      }),
+    ),
+    levelsHash: z.string().nullable().optional(),
+    remarks: z.string().trim().min(2).max(500).optional(),
   })
   .strict();
 
@@ -47,7 +79,6 @@ export const orgOnboardingAction = z
 
 export const orgHistory = z
   .object({
-    companyCode: z.string().trim().min(1, 'Company code is required'),
     nodeName: nameSchema('Node name').optional(),
     nodePath: z.string().trim().optional(),
     pending: z.boolean().optional(),
@@ -68,3 +99,5 @@ export const orgHistory = z
       });
     }
   });
+
+export const orgFetchSchema = z.object({}).strict();

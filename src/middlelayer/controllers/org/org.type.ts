@@ -26,6 +26,8 @@ export type OrgPendingRequestData = {
   newNodeName: string;
   nodeType: OrgNodeType;
   parentNode: OrgParentNode;
+  nodePath?: string;
+  status?: 'ACTIVE' | 'INACTIVE';
   [key: string]: unknown;
 };
 
@@ -99,6 +101,7 @@ export type OrgStructureRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type OrgStructureRequestInternal = {
   id: string;
   status: OrgStructureRequestStatus;
+  type?: 'INITIATE' | 'UPDATE';
   company: {
     id?: string;
     companyCode: string;
@@ -116,6 +119,7 @@ export type OrgNodeInternal = {
   nodeType: OrgNodeType;
   nodePath: string;
   parentId?: string | null;
+  status?: 'ACTIVE' | 'INACTIVE';
 };
 
 export type OrgActionInternalResponse = {

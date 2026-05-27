@@ -9,9 +9,14 @@
  * - To strictly type workflow initiation, actions, and history lookups.
  */
 import { z } from 'zod';
-import { nameSchema } from './common.validation';
+import {
+  cursorPaginationFields,
+  nameSchema,
+  requiredActivePendingTypeSchema,
+} from './common.validation';
 
 const approverTypeEnum = z.enum([
+  'GLOBAL_APPROVER',
   'REPORTING_MANAGER',
   'NODE_APPROVER',
   'HIERARCHY_APPROVER',
@@ -27,27 +32,70 @@ const levelSchema = z
   .nullable()
   .optional();
 
+const levelsSchema = z.object({
+  l1: levelSchema,
+  l2: levelSchema,
+  l3: levelSchema,
+  l4: levelSchema,
+  l5: levelSchema,
+});
+
+const normalizeRequestType = (value: unknown) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value;
+
 export const workflowOnboardingSchema = z
   .object({
-    companyCode: z.string().trim().min(1, 'Company code is required'),
+    type: z.preprocess(normalizeRequestType, z.literal('initiate')).optional(),
     name: nameSchema('Workflow name')
       .min(2, 'Workflow name must be at least 2 characters')
       .max(100, 'Workflow name too long'),
     module: z.string().trim().min(1, 'Module is required'),
     nodePath: z.string().trim().min(1, 'Node path is required'),
     subModule: z.string().trim().min(1, 'Sub-module is required'),
-    levels: z
-      .object({
-        l1: levelSchema,
-        l2: levelSchema,
-        l3: levelSchema,
-        l4: levelSchema,
-        l5: levelSchema,
-      })
-      .optional(),
+    levels: levelsSchema.optional(),
     levelsHash: z.string().nullable().optional(),
   })
   .strict();
+
+export const workflowModificationSchema = z
+  .object({
+    type: z.preprocess(normalizeRequestType, z.enum(['update', 'inactive'])),
+    target: z
+      .object({
+        module: z.string().trim().min(1, 'Target module is required'),
+        subModule: z.string().trim().min(1, 'Target sub-module is required'),
+        nodePath: z.string().trim().min(1, 'Target node path is required'),
+        levelsHash: z.string().trim().min(1, 'Target levels hash is required'),
+      })
+      .strict(),
+    name: nameSchema('Workflow name')
+      .min(2, 'Workflow name must be at least 2 characters')
+      .max(100, 'Workflow name too long')
+      .optional(),
+    module: z.string().trim().min(1, 'Module is required').optional(),
+    nodePath: z.string().trim().min(1, 'Node path is required').optional(),
+    subModule: z.string().trim().min(1, 'Sub-module is required').optional(),
+    levels: levelsSchema.optional(),
+    levelsHash: z.string().nullable().optional(),
+    remarks: z.string().trim().min(2).max(500).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.type === 'update' &&
+      !value.name &&
+      !value.module &&
+      !value.nodePath &&
+      !value.subModule &&
+      !value.levels
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'At least one changed workflow field is required',
+        path: ['type'],
+      });
+    }
+  });
 
 export const workflowActionSchema = z
   .object({
@@ -70,14 +118,15 @@ export const workflowHistorySchema = z
   })
   .strict();
 
-export const companyCodeOnlySchema = z
-  .object({
-    companyCode: z.string().trim().min(1, 'Company code is required'),
-  })
-  .strict();
-
 export const workflowRequestsSchema = z
   .object({
     workflowId: z.string().uuid('Invalid workflow ID'),
+  })
+  .strict();
+
+export const workflowListSchema = z
+  .object({
+    type: requiredActivePendingTypeSchema,
+    ...cursorPaginationFields,
   })
   .strict();

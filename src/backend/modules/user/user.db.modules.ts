@@ -34,11 +34,412 @@ type CompanyNodeWorkflowOption = {
   alias: string;
 };
 
+type UserRequestType =
+  | 'INITIATE'
+  | 'UPDATE'
+  | 'ACTIVE'
+  | 'INACTIVE'
+  | 'ARCHIVE';
+
+type UserPermissionSnapshot = {
+  accessType: 'PRIMARY' | 'SECONDARY';
+  roleName: string;
+  roleCategory: string;
+  roleSubCategory: string;
+  nodeName: string;
+  nodePath: string;
+  accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
+};
+
+type UserDataSnapshot = {
+  basicDetails: {
+    name: string;
+    email: string;
+    phone: string;
+    designation: string | null;
+    employeeId: string | null;
+    reportingManager: string | null;
+    status: string;
+  };
+  permissions: UserPermissionSnapshot[];
+};
+
+type UserPermissionDiff = {
+  added: UserPermissionSnapshot[];
+  removed: UserPermissionSnapshot[];
+  updated: Array<{
+    oldData: UserPermissionSnapshot;
+    newData: UserPermissionSnapshot;
+  }>;
+};
+
 /**
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
  * Handles production user data and pending user requests.
  */
 export class UserDbController {
+  private static normalizeUserRequestType(value: unknown): UserRequestType {
+    const type =
+      typeof value === 'string' ? value.trim().toUpperCase() : 'INITIATE';
+    const accepted: UserRequestType[] = [
+      'INITIATE',
+      'UPDATE',
+      'ACTIVE',
+      'INACTIVE',
+      'ARCHIVE',
+    ];
+
+    if (!accepted.includes(type as UserRequestType)) {
+      throw new AppError('Invalid user request type', 400);
+    }
+
+    return type as UserRequestType;
+  }
+
+  private static normalizePermission(permission: any): UserPermissionSnapshot {
+    return {
+      accessType: permission.accessType,
+      roleName: permission.roleName,
+      roleCategory: permission.roleCategory,
+      roleSubCategory: permission.roleSubCategory,
+      nodeName: permission.nodeName,
+      nodePath: permission.nodePath,
+      accessCategory: permission.accessCategory || null,
+    };
+  }
+
+  private static permissionsEqual(
+    left: UserPermissionSnapshot,
+    right: UserPermissionSnapshot,
+  ) {
+    return (
+      left.accessType === right.accessType &&
+      left.roleName === right.roleName &&
+      left.roleCategory === right.roleCategory &&
+      left.roleSubCategory === right.roleSubCategory &&
+      left.nodeName === right.nodeName &&
+      left.nodePath === right.nodePath &&
+      left.accessCategory === right.accessCategory
+    );
+  }
+
+  private static permissionReplacementKey(permission: UserPermissionSnapshot) {
+    if (permission.accessType === 'PRIMARY') return 'PRIMARY';
+
+    return [
+      permission.accessType,
+      permission.nodePath,
+      permission.roleSubCategory,
+    ].join('|');
+  }
+
+  private static mergePermissionMutations(
+    existing: UserPermissionSnapshot[],
+    requested: any[],
+  ): UserPermissionSnapshot[] {
+    const proposed = existing.map((permission) => ({ ...permission }));
+
+    for (const request of requested) {
+      const permission = UserDbController.normalizePermission(request);
+      const operation =
+        request.remove === true
+          ? 'REMOVE'
+          : typeof request.operation === 'string'
+            ? request.operation.toUpperCase()
+            : null;
+      const exactIndex = proposed.findIndex((stored) =>
+        UserDbController.permissionsEqual(stored, permission),
+      );
+      const replacementIndex = proposed.findIndex(
+        (stored) =>
+          UserDbController.permissionReplacementKey(stored) ===
+          UserDbController.permissionReplacementKey(permission),
+      );
+
+      if (operation === 'REMOVE') {
+        const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+        if (index >= 0) proposed.splice(index, 1);
+        continue;
+      }
+
+      if (permission.accessType === 'PRIMARY') {
+        for (let index = proposed.length - 1; index >= 0; index--) {
+          if (proposed[index]?.accessType === 'PRIMARY') {
+            proposed.splice(index, 1);
+          }
+        }
+        proposed.push(permission);
+        continue;
+      }
+
+      const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+      if (index >= 0) {
+        proposed[index] = permission;
+      } else {
+        proposed.push(permission);
+      }
+    }
+
+    return proposed;
+  }
+
+  private static buildPermissionDiff(
+    existing: UserPermissionSnapshot[],
+    proposed: UserPermissionSnapshot[],
+  ): UserPermissionDiff {
+    const removed = existing.filter(
+      (permission) =>
+        !proposed.some((candidate) =>
+          UserDbController.permissionsEqual(permission, candidate),
+        ),
+    );
+    const added = proposed.filter(
+      (permission) =>
+        !existing.some((candidate) =>
+          UserDbController.permissionsEqual(permission, candidate),
+        ),
+    );
+    const pairedAdded = new Set<number>();
+    const pairedRemoved = new Set<number>();
+    const updated: UserPermissionDiff['updated'] = [];
+
+    removed.forEach((oldData, oldIndex) => {
+      const newIndex = added.findIndex(
+        (newData, index) =>
+          !pairedAdded.has(index) &&
+          UserDbController.permissionReplacementKey(oldData) ===
+            UserDbController.permissionReplacementKey(newData),
+      );
+
+      if (newIndex >= 0) {
+        pairedRemoved.add(oldIndex);
+        pairedAdded.add(newIndex);
+        updated.push({ oldData, newData: added[newIndex]! });
+      }
+    });
+
+    return {
+      removed: removed.filter((_, index) => !pairedRemoved.has(index)),
+      added: added.filter((_, index) => !pairedAdded.has(index)),
+      updated,
+    };
+  }
+
+  private static async fetchUserSnapshot(
+    client: any,
+    targetUserId: string,
+    companyId: string,
+  ): Promise<{
+    user: any;
+    mapping: any;
+    snapshot: UserDataSnapshot;
+  }> {
+    const user = await client.user.findUnique({
+      where: { id: targetUserId },
+      include: {
+        userMappings: {
+          where: { companyId },
+          include: { manager: true },
+        },
+        userAccesses: {
+          where: { companyId },
+          include: { role: true, orgStructure: true },
+        },
+      },
+    });
+    const mapping = user?.userMappings?.[0];
+
+    if (!user || !mapping) {
+      throw new AppError('User is not mapped to this company', 404);
+    }
+
+    return {
+      user,
+      mapping,
+      snapshot: {
+        basicDetails: {
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          designation: mapping.designation || null,
+          employeeId: mapping.employeeId || null,
+          reportingManager: mapping.manager?.email || null,
+          status: mapping.status,
+        },
+        permissions: user.userAccesses.map((access: any) => ({
+          accessType: access.accessType || 'SECONDARY',
+          roleName: access.role?.roleName || access.roleCode,
+          roleCategory: access.role?.category || '',
+          roleSubCategory: access.role?.subCategory || '',
+          nodeName: access.orgStructure?.nodeName || '',
+          nodePath: access.orgStructure?.nodePath || '',
+          accessCategory: access.accessCategory || null,
+        })),
+      },
+    };
+  }
+
+  private static async validateModificationPermission(
+    initiatorId: string,
+    companyId: string,
+  ) {
+    const access = await prisma.userAccess.findFirst({
+      where: {
+        userId: initiatorId,
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+        OR: [
+          { roleCode: 'SAAS_ADMIN' },
+          { isGlobalAccess: true },
+          { role: { subCategory: 'USER_ACC', modify: true } },
+        ],
+      },
+    });
+
+    if (!access) {
+      throw new AppError(
+        'Access Denied: UPDATE permission is required for user modifications',
+        403,
+      );
+    }
+  }
+
+  private static async validateChangedPermissions(
+    companyId: string,
+    permissions: any[],
+  ) {
+    for (const rawPermission of permissions) {
+      const operation =
+        rawPermission.remove === true
+          ? 'REMOVE'
+          : String(rawPermission.operation || '').toUpperCase();
+      if (operation === 'REMOVE') continue;
+
+      const [role, node] = await Promise.all([
+        prisma.roles.findFirst({
+          where: {
+            roleName: rawPermission.roleName,
+            category: rawPermission.roleCategory,
+            subCategory: rawPermission.roleSubCategory,
+            isActive: true,
+          },
+        }),
+        prisma.orgStructure.findFirst({
+          where: {
+            companyId,
+            nodePath: rawPermission.nodePath,
+            nodeName: rawPermission.nodeName,
+          },
+        }),
+      ]);
+
+      if (!role) {
+        throw new AppError(`Role '${rawPermission.roleName}' not found`, 400);
+      }
+      if (!node) {
+        throw new AppError(`Node '${rawPermission.nodePath}' not found`, 400);
+      }
+    }
+  }
+
+  private static async validateReportingManagerChange(
+    targetUserId: string,
+    companyId: string,
+    reportingManager: unknown,
+  ) {
+    if (reportingManager === undefined || reportingManager === null) return;
+
+    const manager = await prisma.user.findUnique({
+      where: { email: reportingManager as string },
+      include: {
+        userMappings: {
+          where: { companyId, status: 'ACTIVE' },
+        },
+      },
+    });
+
+    if (!manager || manager.userMappings.length === 0) {
+      throw new AppError(
+        'Reporting manager must be active in the same company',
+        400,
+      );
+    }
+    if (manager.id === targetUserId) {
+      throw new AppError('A user cannot report to themselves', 400);
+    }
+
+    let managerId: string | null = manager.id;
+    const visited = new Set<string>();
+    while (managerId && !visited.has(managerId)) {
+      if (managerId === targetUserId) {
+        throw new AppError('Reporting manager change creates a cycle', 400);
+      }
+      visited.add(managerId);
+      const mapping: { reportingManager: string | null } | null =
+        await prisma.userMapping.findUnique({
+          where: { userId_companyId: { userId: managerId, companyId } },
+          select: { reportingManager: true },
+        });
+      managerId = mapping?.reportingManager || null;
+    }
+  }
+
+  private static async calculateModificationImpact(
+    type: UserRequestType,
+    existing: UserDataSnapshot,
+    proposed: UserDataSnapshot,
+    diff: UserPermissionDiff,
+  ) {
+    if (type === 'ARCHIVE') return 'ARCHIVE';
+    if (type === 'INACTIVE') return 'INACTIVE';
+    if (type === 'ACTIVE') return 'ACTIVE';
+
+    const updatedRoles = diff.updated.flatMap((change) => [
+      change.oldData.roleName,
+      change.newData.roleName,
+    ]);
+    const roles =
+      updatedRoles.length > 0
+        ? await prisma.roles.findMany({
+            where: { roleName: { in: updatedRoles } },
+            select: { roleName: true, permissionLevel: true },
+          })
+        : [];
+    const rank = new Map(
+      roles.map((role) => [
+        role.roleName,
+        { VIEWER: 1, USER: 2, MANAGER: 3 }[
+          String(role.permissionLevel || '').toUpperCase()
+        ] || 0,
+      ]),
+    );
+    const hasLowerRole = diff.updated.some(
+      (change) =>
+        (rank.get(change.newData.roleName) || 0) <
+        (rank.get(change.oldData.roleName) || 0),
+    );
+    const hasHigherRole = diff.updated.some(
+      (change) =>
+        (rank.get(change.newData.roleName) || 0) >=
+        (rank.get(change.oldData.roleName) || 0),
+    );
+
+    if (diff.removed.length > 0 || hasLowerRole) return 'DOWNGRADE';
+    if (diff.added.length > 0 || hasHigherRole) return 'UPGRADE';
+    if (
+      existing.basicDetails.reportingManager !==
+      proposed.basicDetails.reportingManager
+    ) {
+      return 'RMUPDATED';
+    }
+
+    return 'PROFILE_UPDATE';
+  }
+
   private static normalizeFilterText(value: unknown) {
     if (typeof value !== 'string') return null;
 
@@ -398,6 +799,27 @@ export class UserDbController {
     );
   }
 
+  private static matchesPendingUserSearch(
+    onboarding: any,
+    query: string | null,
+  ) {
+    if (!query) return true;
+
+    const basicDetails = (onboarding.data as any)?.basicDetails || {};
+    const normalizedQuery = query.toLowerCase();
+
+    return [
+      basicDetails.name,
+      basicDetails.email,
+      basicDetails.designation,
+      basicDetails.phone,
+    ].some(
+      (value) =>
+        typeof value === 'string' &&
+        value.toLowerCase().includes(normalizedQuery),
+    );
+  }
+
   private static async fetchPendingUserOnboardings(params: {
     resolvedCompanyId: string;
     isGlobal: boolean;
@@ -411,6 +833,7 @@ export class UserDbController {
     topCursor?: { id: string; createdAt: Date } | null;
     requestedTopCursor?: string | null;
     direction?: 'next' | 'prev';
+    query?: string | null;
   }) {
     const {
       resolvedCompanyId,
@@ -425,10 +848,11 @@ export class UserDbController {
       topCursor = null,
       requestedTopCursor = null,
       direction = 'next',
+      query = null,
     } = params;
     const effectiveDirection = cursor ? direction : 'next';
 
-    if (isGlobal) {
+    if (isGlobal && !query) {
       const where = {
         status: 'PENDING' as const,
         companyId: resolvedCompanyId,
@@ -489,7 +913,7 @@ export class UserDbController {
       return { pendingCount, pendingOnboardings: pageRows, pageInfo };
     }
 
-    if (visibleNodePaths.length === 0) {
+    if (!isGlobal && visibleNodePaths.length === 0) {
       return {
         pendingCount: 0,
         pendingOnboardings: [],
@@ -518,11 +942,14 @@ export class UserDbController {
       orderBy: UserDbController.getPageOrder(effectiveDirection),
     });
 
-    const visiblePendingOnboardings = allPendingOnboardings.filter((onb) =>
-      UserDbController.isPendingOnboardingVisibleToNodePaths(
-        onb,
-        visibleNodePathSet,
-      ),
+    const visiblePendingOnboardings = allPendingOnboardings.filter(
+      (onb) =>
+        (isGlobal ||
+          UserDbController.isPendingOnboardingVisibleToNodePaths(
+            onb,
+            visibleNodePathSet,
+          )) &&
+        UserDbController.matchesPendingUserSearch(onb, query),
     );
     const pendingCount = visiblePendingOnboardings.length;
     const newCount =
@@ -582,7 +1009,10 @@ export class UserDbController {
     resolvedCompanyId: string,
   ) {
     const pendingEmails = pendingOnboardings
-      .map((onb: any) => (onb.data as any)?.basicDetails?.email)
+      .map((onb: any) => {
+        const data = onb.data as any;
+        return data?.targetUserEmail || data?.basicDetails?.email;
+      })
       .filter(Boolean);
 
     const histories =
@@ -643,9 +1073,10 @@ export class UserDbController {
       const basic = dataBlob?.basicDetails || {};
       const permissions = dataBlob?.permissions || [];
       const email = basic.email;
+      const historyEmail = dataBlob?.targetUserEmail || email;
       const managerEmail = basic.reportingManager;
-      const init = historyMap.get(`${email}_INITIATE`);
-      const approve = historyMap.get(`${email}_APPROVED`);
+      const init = historyMap.get(`${historyEmail}_INITIATE`);
+      const approve = historyMap.get(`${historyEmail}_APPROVED`);
       const managerInfo = managerMap.get(managerEmail);
       const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
 
@@ -707,6 +1138,7 @@ export class UserDbController {
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId, userId, listType } = req.body;
+      const query = UserDbController.normalizeFilterText(req.body?.query);
       const pagination = getPagination(req.body);
       const rawPage = Number(req.body?.page);
       const requestedPage =
@@ -842,6 +1274,26 @@ export class UserDbController {
             status,
           },
         },
+        ...(query
+          ? {
+              OR: [
+                { name: { contains: query, mode: 'insensitive' as const } },
+                { email: { contains: query, mode: 'insensitive' as const } },
+                { phone: { contains: query, mode: 'insensitive' as const } },
+                {
+                  userMappings: {
+                    some: {
+                      companyId: resolvedCompanyId,
+                      designation: {
+                        contains: query,
+                        mode: 'insensitive' as const,
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : {}),
         ...(isGlobal
           ? {}
           : {
@@ -936,6 +1388,7 @@ export class UserDbController {
                 topCursor,
                 requestedTopCursor,
                 direction: effectiveDirection,
+                query,
               }),
           activeNewWhere
             ? prisma.user.count({ where: activeNewWhere })
@@ -994,6 +1447,7 @@ export class UserDbController {
                 applyPagination: true,
                 page,
                 isPagePagination,
+                query,
               })
             ).pendingCount
           : pendingResult.pendingCount;
@@ -1341,6 +1795,529 @@ export class UserDbController {
     }
   }
 
+  private static async createUserModificationRequest(
+    req: Request,
+    res: Response,
+    type: UserRequestType,
+  ) {
+    const {
+      initiatorId,
+      companyId,
+      targetEmail,
+      levelsHash,
+      remarks,
+      data = {},
+    } = req.body;
+
+    if (!initiatorId || !companyId) {
+      throw new AppError('initiatorId and companyId are required', 400);
+    }
+
+    await UserDbController.validateModificationPermission(
+      initiatorId,
+      companyId,
+    );
+
+    if (!targetEmail) {
+      throw new AppError('targetUserEmail is required', 400);
+    }
+
+    const target = await prisma.user.findUnique({
+      where: { email: targetEmail },
+    });
+
+    if (!target) {
+      throw new AppError('Target user not found', 404);
+    }
+
+    const current = await UserDbController.fetchUserSnapshot(
+      prisma as any,
+      target.id,
+      companyId,
+    );
+
+    if (current.mapping.status === 'ARCHIVE') {
+      throw new AppError(
+        'Archived users cannot be modified or reactivated',
+        400,
+      );
+    }
+    if (type === 'ACTIVE' && current.mapping.status === 'ACTIVE') {
+      throw new AppError('User is already active', 400);
+    }
+    if (
+      (type === 'INACTIVE' || type === 'ARCHIVE') &&
+      current.mapping.status !== 'ACTIVE'
+    ) {
+      throw new AppError('Only active users can be disabled or archived', 400);
+    }
+
+    const pending = await prisma.userOnboarding.findFirst({
+      where: {
+        companyId,
+        status: 'PENDING',
+        OR: [
+          {
+            data: {
+              path: ['targetUserEmail'],
+              equals: current.user.email,
+            },
+          },
+          {
+            data: {
+              path: ['basicDetails', 'email'],
+              equals: current.user.email,
+            },
+          },
+        ],
+      },
+    });
+    if (pending) {
+      throw new AppError(
+        'User already has a pending onboarding or modification request',
+        400,
+      );
+    }
+
+    const initiator = await prisma.user.findUnique({
+      where: { id: initiatorId },
+      select: { email: true },
+    });
+    if (!initiator) {
+      throw new AppError('Initiator not found', 404);
+    }
+
+    const initiatorRestriction = await prisma.userOnboarding.findFirst({
+      where: {
+        companyId,
+        data: {
+          path: ['targetUserEmail'],
+          equals: initiator.email,
+        },
+        status: 'PENDING',
+        OR: [
+          { type: { in: ['INACTIVE', 'ARCHIVE'] } },
+          { impact: 'DOWNGRADE' },
+        ],
+      },
+    });
+    if (initiatorRestriction) {
+      throw new AppError(
+        'Initiator has a pending downgrade, inactive or archive request',
+        400,
+      );
+    }
+
+    const permissionMutations = Array.isArray(data?.permissions)
+      ? data.permissions
+      : [];
+    await UserDbController.validateChangedPermissions(
+      companyId,
+      permissionMutations,
+    );
+    await UserDbController.validateReportingManagerChange(
+      target.id,
+      companyId,
+      data?.basicDetails?.reportingManager,
+    );
+
+    const proposed: UserDataSnapshot = {
+      basicDetails: { ...current.snapshot.basicDetails },
+      permissions:
+        type === 'ARCHIVE'
+          ? []
+          : UserDbController.mergePermissionMutations(
+              current.snapshot.permissions,
+              permissionMutations,
+            ),
+    };
+    const changedDetails = data?.basicDetails || {};
+    const editableFields = [
+      'name',
+      'email',
+      'phone',
+      'designation',
+      'employeeId',
+      'reportingManager',
+    ] as const;
+    for (const field of editableFields) {
+      if (changedDetails[field] !== undefined) {
+        proposed.basicDetails[field] = changedDetails[field];
+      }
+    }
+    if (proposed.basicDetails.email !== current.snapshot.basicDetails.email) {
+      const existingEmailUser = await prisma.user.findUnique({
+        where: { email: proposed.basicDetails.email },
+        select: { id: true },
+      });
+      if (existingEmailUser && existingEmailUser.id !== target.id) {
+        throw new AppError('Email is already assigned to another user', 400);
+      }
+    }
+
+    if (type === 'ACTIVE') proposed.basicDetails.status = 'ACTIVE';
+    if (type === 'INACTIVE') proposed.basicDetails.status = 'INACTIVE';
+    if (type === 'ARCHIVE') proposed.basicDetails.status = 'ARCHIVE';
+
+    const permissionDiff = UserDbController.buildPermissionDiff(
+      current.snapshot.permissions,
+      proposed.permissions,
+    );
+    const requiresPrimaryValidation =
+      permissionMutations.length > 0 || type === 'ACTIVE';
+    if (
+      requiresPrimaryValidation &&
+      type !== 'INACTIVE' &&
+      type !== 'ARCHIVE' &&
+      proposed.permissions.filter(
+        (permission) => permission.accessType === 'PRIMARY',
+      ).length !== 1
+    ) {
+      throw new AppError(
+        'Exactly one PRIMARY permission is required for an active user',
+        400,
+      );
+    }
+
+    const detailsChanged = editableFields.some(
+      (field) =>
+        current.snapshot.basicDetails[field] !== proposed.basicDetails[field],
+    );
+    const permissionsChanged =
+      permissionDiff.added.length > 0 ||
+      permissionDiff.removed.length > 0 ||
+      permissionDiff.updated.length > 0;
+    const statusChanged =
+      current.snapshot.basicDetails.status !== proposed.basicDetails.status;
+    if (!detailsChanged && !permissionsChanged && !statusChanged) {
+      throw new AppError('No user changes were provided', 400);
+    }
+
+    const impact = await UserDbController.calculateModificationImpact(
+      type,
+      current.snapshot,
+      proposed,
+      permissionDiff,
+    );
+    if (
+      impact === 'DOWNGRADE' ||
+      impact === 'INACTIVE' ||
+      impact === 'ARCHIVE'
+    ) {
+      const pendingApprovalRows = await prisma.workflowApprover.findMany({
+        where: { status: 'PENDING' },
+        select: { reqId: true, approversList: true },
+      });
+      const blockingApproval = pendingApprovalRows.find(
+        (row) =>
+          Array.isArray(row.approversList) &&
+          row.approversList.includes(target.id),
+      );
+      if (blockingApproval) {
+        throw new AppError(
+          'User access cannot be reduced while the user is required on a pending approval workflow',
+          400,
+        );
+      }
+    }
+
+    const primaryPermission =
+      proposed.permissions.find(
+        (permission) => permission.accessType === 'PRIMARY',
+      ) ||
+      current.snapshot.permissions.find(
+        (permission) => permission.accessType === 'PRIMARY',
+      ) ||
+      proposed.permissions[0] ||
+      current.snapshot.permissions[0];
+    const approvalNode = primaryPermission
+      ? await prisma.orgStructure.findFirst({
+          where: { companyId, nodePath: primaryPermission.nodePath },
+        })
+      : await prisma.orgStructure.findFirst({
+          where: { companyId, nodeType: 'ROOT' },
+        });
+
+    if (!approvalNode) {
+      throw new AppError('Organization node not found for user workflow', 400);
+    }
+
+    const requestData = {
+      ...proposed,
+      targetUserEmail: current.user.email,
+      oldData: current.snapshot,
+      newData: proposed,
+      permissionDiff,
+    };
+    let notificationRecipients: string[] = [];
+    const onboarding = await prisma.$transaction(async (tx) => {
+      const request = await tx.userOnboarding.create({
+        data: {
+          companyId,
+          initiatorId,
+          type,
+          impact,
+          data: requestData as any,
+          remarks: remarks || null,
+          status: 'PENDING',
+        },
+      });
+
+      const workflow = await WorkflowApproverUtil.resolveAndCreateApprovers(
+        tx,
+        {
+          levelsHash: levelsHash || null,
+          module: 'SYSTEM_ACCESS',
+          subModule: 'USER_ACC',
+          companyId,
+          nodeId: approvalNode.id,
+          initiatorId,
+          reqId: request.id,
+          reqTable: 'user_onboarding',
+        },
+      );
+      notificationRecipients = workflow.eligibleApprovers;
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          workflowId: workflow.workflowId,
+          data: {
+            ...requestData,
+            workflowSnapshot: {
+              levelsHash: levelsHash || null,
+              levels: workflow.approvers.map((level: any) => ({
+                level: level.level,
+                approversList: level.approversList,
+                mandatoryCount: level.mandatoryCount,
+              })),
+            },
+          } as any,
+        },
+      });
+      await tx.userHistory.create({
+        data: {
+          email: current.user.email,
+          event: 'INITIATE',
+          eventUserId: initiatorId,
+          companyId,
+          reqId: request.id,
+          remarks: remarks || null,
+        },
+      });
+
+      return request;
+    });
+
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'INITIATE',
+      referenceType: 'USER',
+      referenceId: onboarding.id,
+      referenceName: current.user.email,
+      createdBy: initiatorId,
+      recipientUserIds: notificationRecipients,
+    });
+
+    res.status(201).json(onboarding);
+  }
+
+  private static async removeApprovedPermission(
+    tx: any,
+    companyId: string,
+    targetUserId: string,
+    permission: UserPermissionSnapshot,
+  ) {
+    const [role, node] = await Promise.all([
+      tx.roles.findUnique({ where: { roleName: permission.roleName } }),
+      tx.orgStructure.findFirst({
+        where: { companyId, nodePath: permission.nodePath },
+      }),
+    ]);
+    if (!role || !node) return;
+
+    await tx.userAccess.deleteMany({
+      where: {
+        userId: targetUserId,
+        companyId,
+        roleCode: role.roleCode,
+        nodeId: node.id,
+      },
+    });
+  }
+
+  private static async upsertApprovedPermission(
+    tx: any,
+    companyId: string,
+    targetUserId: string,
+    permission: UserPermissionSnapshot,
+  ) {
+    const [role, node] = await Promise.all([
+      tx.roles.findUnique({ where: { roleName: permission.roleName } }),
+      tx.orgStructure.findFirst({
+        where: { companyId, nodePath: permission.nodePath },
+      }),
+    ]);
+    if (!role || !node) {
+      throw new AppError('Approved user permission is no longer valid', 400);
+    }
+
+    await tx.userAccess.upsert({
+      where: {
+        userId_roleCode_companyId_nodeId: {
+          userId: targetUserId,
+          roleCode: role.roleCode,
+          companyId,
+          nodeId: node.id,
+        },
+      },
+      update: {
+        accessType: permission.accessType,
+        accessCategory: permission.accessCategory || 'NODE',
+        isGlobalAccess: permission.roleName === 'Corp Admin',
+      },
+      create: {
+        userId: targetUserId,
+        roleCode: role.roleCode,
+        companyId,
+        nodeId: node.id,
+        accessType: permission.accessType,
+        accessCategory:
+          permission.roleName === 'Corp Admin'
+            ? permission.accessCategory || 'ALL_CHILD'
+            : permission.accessCategory || 'NODE',
+        isGlobalAccess: permission.roleName === 'Corp Admin',
+      },
+    });
+  }
+
+  private static async applyApprovedUserModification(tx: any, onboarding: any) {
+    const requestData = onboarding.data as any;
+    const oldData = requestData.oldData as UserDataSnapshot | null;
+    const targetEmail =
+      requestData.targetUserEmail || oldData?.basicDetails?.email;
+    const target = targetEmail
+      ? await tx.user.findUnique({ where: { email: targetEmail } })
+      : null;
+    if (!target) {
+      throw new AppError(
+        'Target user is missing from modification request',
+        400,
+      );
+    }
+
+    const targetUserId = target.id;
+    const proposed = (requestData.newData || requestData) as UserDataSnapshot;
+    const permissionDiff = (requestData.permissionDiff || {
+      added: [],
+      removed: [],
+      updated: [],
+    }) as UserPermissionDiff;
+    const manager = proposed.basicDetails.reportingManager
+      ? await tx.user.findUnique({
+          where: { email: proposed.basicDetails.reportingManager },
+        })
+      : null;
+
+    if (proposed.basicDetails.reportingManager && !manager) {
+      throw new AppError('Reporting Manager not found', 404);
+    }
+
+    if (oldData && oldData.basicDetails.email !== proposed.basicDetails.email) {
+      const existingEmailUser = await tx.user.findUnique({
+        where: { email: proposed.basicDetails.email },
+        select: { id: true },
+      });
+      if (existingEmailUser && existingEmailUser.id !== targetUserId) {
+        throw new AppError('Email is already assigned to another user', 400);
+      }
+    }
+
+    await tx.user.update({
+      where: { id: targetUserId },
+      data: {
+        name: proposed.basicDetails.name,
+        email: proposed.basicDetails.email,
+        phone: proposed.basicDetails.phone,
+      },
+    });
+    if (oldData && oldData.basicDetails.email !== proposed.basicDetails.email) {
+      await tx.userHistory.updateMany({
+        where: {
+          companyId: onboarding.companyId,
+          email: oldData.basicDetails.email,
+        },
+        data: { email: proposed.basicDetails.email },
+      });
+    }
+    await tx.userMapping.update({
+      where: {
+        userId_companyId: {
+          userId: targetUserId,
+          companyId: onboarding.companyId,
+        },
+      },
+      data: {
+        reportingManager: manager?.id || null,
+        designation: proposed.basicDetails.designation,
+        employeeId: proposed.basicDetails.employeeId,
+        status: proposed.basicDetails.status,
+      },
+    });
+
+    if (onboarding.type === 'ARCHIVE') {
+      await tx.userAccess.deleteMany({
+        where: { userId: targetUserId, companyId: onboarding.companyId },
+      });
+    } else {
+      for (const permission of permissionDiff.removed) {
+        await UserDbController.removeApprovedPermission(
+          tx,
+          onboarding.companyId,
+          targetUserId,
+          permission,
+        );
+      }
+      for (const change of permissionDiff.updated) {
+        await UserDbController.removeApprovedPermission(
+          tx,
+          onboarding.companyId,
+          targetUserId,
+          change.oldData,
+        );
+        await UserDbController.upsertApprovedPermission(
+          tx,
+          onboarding.companyId,
+          targetUserId,
+          change.newData,
+        );
+      }
+      for (const permission of permissionDiff.added) {
+        await UserDbController.upsertApprovedPermission(
+          tx,
+          onboarding.companyId,
+          targetUserId,
+          permission,
+        );
+      }
+    }
+
+    if (
+      onboarding.type === 'INACTIVE' ||
+      onboarding.type === 'ARCHIVE' ||
+      onboarding.impact === 'DOWNGRADE'
+    ) {
+      await tx.userActivity.updateMany({
+        where: { userId: targetUserId, companyId: onboarding.companyId },
+        data: {
+          refreshToken: null,
+          forceLogToken: null,
+          version: null,
+          expiryAt: new Date(),
+        },
+      });
+    }
+  }
+
   /**
    * Creates a new user onboarding request in the database.
    * Performs an atomic transaction to create the request and the initial history log.
@@ -1354,6 +2331,11 @@ export class UserDbController {
    * 4. Log the INITIATE event in UserHistory with the reqId.
    */
   static async createUserOnboarding(req: Request, res: Response) {
+    const type = UserDbController.normalizeUserRequestType(req.body?.type);
+    if (type !== 'INITIATE') {
+      return UserDbController.createUserModificationRequest(req, res, type);
+    }
+
     const {
       initiatorId,
       companyCode,
@@ -1432,6 +2414,8 @@ export class UserDbController {
       const onb = await tx.userOnboarding.create({
         data: {
           ...onboardingData,
+          type: 'INITIATE',
+          initiatorId: initiatorId || null,
           companyId: resolvedCompanyId,
           groupId: groupId,
         },
@@ -1513,9 +2497,9 @@ export class UserDbController {
    * Fetches a single user onboarding request by its ID.
    */
   static async getUserOnboardingById(req: Request, res: Response) {
-    const { id } = req.body;
-    const onboarding = await prisma.userOnboarding.findUnique({
-      where: { id },
+    const { id, companyId } = req.body;
+    const onboarding = await prisma.userOnboarding.findFirst({
+      where: { id, companyId },
     });
     res.json(onboarding);
   }
@@ -1544,10 +2528,14 @@ export class UserDbController {
     next: NextFunction,
   ) {
     try {
-      const { id, status, approverId, remark } = req.body;
+      const { id, companyId, status, approverId, remark } = req.body;
 
-      const onboarding = await prisma.userOnboarding.findUnique({
-        where: { id },
+      if (!companyId) {
+        throw new AppError('companyId is required', 400);
+      }
+
+      const onboarding = await prisma.userOnboarding.findFirst({
+        where: { id, companyId },
       });
 
       if (!onboarding) {
@@ -1602,18 +2590,33 @@ export class UserDbController {
         throw new AppError('You have already approved this request once', 403);
       }
 
-      const data = onboarding.data as any;
+      const requestData = onboarding.data as any;
+      const data =
+        onboarding.type && onboarding.type !== 'INITIATE'
+          ? requestData?.newData || requestData
+          : requestData;
       const { basicDetails, permissions } = data || {};
       const { name, email, phone, reportingManager, designation, employeeId } =
         basicDetails || {};
+      const historyEmail =
+        onboarding.type && onboarding.type !== 'INITIATE'
+          ? requestData?.oldData?.basicDetails?.email || email
+          : email;
       let notificationRecipients = onboarding.eligibleApprovers || [];
 
       // ── Approver Restriction and Signatory Check ──
       const statusStr = status.toString().toLowerCase();
       const isApproving = statusStr === 'approve' || statusStr === 'approved';
       const hasCorpAdminRole =
-        Array.isArray(permissions) &&
-        permissions.some((p: any) => p.roleName === 'Corp Admin');
+        onboarding.type === 'INITIATE'
+          ? Array.isArray(permissions) &&
+            permissions.some((p: any) => p.roleName === 'Corp Admin')
+          : (requestData?.permissionDiff?.added || []).some(
+              (p: any) => p.roleName === 'Corp Admin',
+            ) ||
+            (requestData?.permissionDiff?.updated || []).some(
+              (p: any) => p.newData?.roleName === 'Corp Admin',
+            );
 
       const approverAccess = await prisma.userAccess.findFirst({
         where: {
@@ -1662,10 +2665,10 @@ export class UserDbController {
           }
 
           // Log level-wise APPROVED event in history
-          if (email && approverId) {
+          if (historyEmail && approverId) {
             await tx.userHistory.create({
               data: {
-                email,
+                email: historyEmail,
                 event: 'APPROVED',
                 eventUserId: approverId,
                 companyId: onboarding.companyId,
@@ -1679,6 +2682,22 @@ export class UserDbController {
           // If NOT all levels are approved, return early (partial approval)
           if (!allLevelsApproved) {
             return { status: 'PARTIAL_APPROVED', level: approvedLevel };
+          }
+
+          if (onboarding.type && onboarding.type !== 'INITIATE') {
+            await UserDbController.applyApprovedUserModification(
+              tx,
+              onboarding,
+            );
+            await tx.userOnboarding.update({
+              where: { id },
+              data: {
+                status: 'APPROVED',
+                approvalRemark: remark,
+              },
+            });
+
+            return { status: 'APPROVED', requestType: onboarding.type };
           }
 
           // ── All levels approved — proceed with production user creation ───
@@ -1957,7 +2976,10 @@ export class UserDbController {
             },
           });
 
-          const userEmail = (updated.data as any)?.basicDetails?.email;
+          const userEmail =
+            updated.type && updated.type !== 'INITIATE'
+              ? (updated.data as any)?.oldData?.basicDetails?.email
+              : (updated.data as any)?.basicDetails?.email;
 
           if (approverId && userEmail) {
             await tx.userHistory.create({
@@ -1994,7 +3016,10 @@ export class UserDbController {
             notificationRecipients,
           );
       } else if (result && result.status === 'APPROVED') {
-        message = 'User approved and onboarded';
+        message =
+          onboarding.type && onboarding.type !== 'INITIATE'
+            ? `User ${onboarding.type.toLowerCase()} request approved`
+            : 'User approved and onboarded';
       } else if (result && result.status === 'REJECTED') {
         message = 'User request rejected';
       }
@@ -2346,11 +3371,10 @@ export class UserDbController {
         },
       });
 
-      const defaultWorkflow =
-        await UserDbController.fetchDefaultWorkflowOption(
-          companyId,
-          workflowSubCategory,
-        );
+      const defaultWorkflow = await UserDbController.fetchDefaultWorkflowOption(
+        companyId,
+        workflowSubCategory,
+      );
 
       if (globalAccess) {
         const companyNodes = await prisma.orgStructure.findMany({
@@ -2375,10 +3399,7 @@ export class UserDbController {
         });
 
         const nodes = companyNodes.map((node) => ({
-          ...UserDbController.withDefaultWorkflowOption(
-            node,
-            defaultWorkflow,
-          ),
+          ...UserDbController.withDefaultWorkflowOption(node, defaultWorkflow),
           roleName: globalAccess.role?.roleName || globalAccess.roleCode,
         }));
 

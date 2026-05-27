@@ -3,6 +3,12 @@ import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import { sanitizeMonitoringPayload } from '../../../shared/utils/monitoring/sanitizeMonitoringPayload';
 import { prisma } from '../../lib/prisma';
+import {
+  appendCursorWhere,
+  buildPage,
+  getPageOrder,
+  resolveCursorPagination,
+} from '../../../shared/utils/cursor-pagination.util';
 
 export const apiSpanTypeSchema = z.enum(['MIDDLELAYER', 'BACKEND', 'EXTERNAL']);
 
@@ -82,6 +88,7 @@ export const apiSpanDetailSelect = {
 } as const;
 
 export const apiSpanMonitoringBasicSelect = {
+  id: true,
   trackingId: true,
   subCount: true,
   type: true,
@@ -162,19 +169,15 @@ export const createApiSpanSafely = async (
 };
 
 export const findMiddlelayerMonitoringRows = async (
-  limit: number,
-  offset: number,
+  where: Record<string, unknown>,
+  pagination: ReturnType<typeof resolveCursorPagination>,
 ) => {
   return prisma.apiSpan.findMany({
-    where: {
-      type: 'MIDDLELAYER',
-    },
+    where: where as any,
     select: apiSpanMonitoringBasicSelect,
-    orderBy: {
-      createdAt: 'desc',
-    },
-    skip: offset,
-    take: limit,
+    orderBy: getPageOrder(pagination.direction) as any,
+    skip: pagination.cursor ? 0 : pagination.offset,
+    take: pagination.limit + 1,
   });
 };
 
@@ -206,7 +209,9 @@ export const countBackendRowsByTrackingIds = async (trackingIds: string[]) => {
       },
       type: 'BACKEND',
     },
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma aggregate API key.
     _count: {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma aggregate API key.
       _all: true,
     },
   });
@@ -317,17 +322,68 @@ export class MonitoringService {
     });
   }
 
-  static async fetchAllMiddlelayerSpans(limit: number, offset: number) {
-    const parents = await findMiddlelayerMonitoringRows(limit, offset);
-    const trackingIds = parents.map((parent) => parent.trackingId);
+  static async fetchAllMiddlelayerSpans(input: Record<string, unknown>) {
+    const query =
+      typeof input.query === 'string' && input.query.trim()
+        ? input.query.trim()
+        : null;
+    const pagination = resolveCursorPagination(input);
+    const where: any = {
+      type: 'MIDDLELAYER',
+      ...(query
+        ? {
+            company: {
+              is: {
+                OR: [
+                  { legalName: { contains: query, mode: 'insensitive' } },
+                  { companyCode: { contains: query, mode: 'insensitive' } },
+                ],
+              },
+            },
+          }
+        : {}),
+    };
+    const pageWhere = pagination.cursor
+      ? appendCursorWhere(
+          where,
+          pagination.cursor,
+          pagination.direction === 'prev' ? 'newer' : 'older',
+        )
+      : where;
+    const newWhere = pagination.topCursor
+      ? appendCursorWhere(where, pagination.topCursor, 'newer')
+      : null;
+    const [totalCount, parentRows, newCount] = await Promise.all([
+      prisma.apiSpan.count({ where }),
+      findMiddlelayerMonitoringRows(pageWhere, pagination),
+      newWhere
+        ? prisma.apiSpan.count({ where: newWhere as any })
+        : Promise.resolve(0),
+    ]);
+    const pageData = buildPage(parentRows, pagination, newCount);
+    const firstPageRow = pageData.pageRows[0];
+    if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
+      const newerCount = await prisma.apiSpan.count({
+        where: appendCursorWhere(where, firstPageRow, 'newer') as any,
+      });
+      pageData.pageInfo.page = Math.floor(newerCount / pagination.limit) + 1;
+    }
+    const trackingIds = pageData.pageRows.map((parent) => parent.trackingId);
     const counts = await countBackendRowsByTrackingIds(trackingIds);
     const countByTrackingId = new Map(
       counts.map((count) => [count.trackingId, count._count._all]),
     );
 
-    return parents.map((parent) =>
-      formatFetchAllSpan(parent, countByTrackingId.get(parent.trackingId) ?? 0),
-    );
+    return {
+      data: pageData.pageRows.map((parent) =>
+        formatFetchAllSpan(
+          parent,
+          countByTrackingId.get(parent.trackingId) ?? 0,
+        ),
+      ),
+      totalCount,
+      pageInfo: pageData.pageInfo,
+    };
   }
 
   static async getTraceDetails(trackingId: string) {
@@ -357,26 +413,6 @@ const formatZodIssues = (issues: z.ZodIssue[]) => {
     path: issue.path.join('.'),
     message: issue.message,
   }));
-};
-
-const getOptionalLimit = (value: unknown): number => {
-  const parsed = Number(value);
-
-  if (!Number.isFinite(parsed)) {
-    return 100;
-  }
-
-  return Math.min(Math.max(Math.trunc(parsed), 1), 500);
-};
-
-const getOptionalOffset = (value: unknown): number => {
-  const parsed = Number(value);
-
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
-
-  return Math.max(Math.trunc(parsed), 0);
 };
 
 const getTrackingId = (req: Request): string | null => {
@@ -414,8 +450,7 @@ export class MonitoringController {
   static async fetchAll(req: Request, res: Response, next: NextFunction) {
     try {
       const spans = await MonitoringService.fetchAllMiddlelayerSpans(
-        getOptionalLimit(req.body?.limit ?? req.query?.limit),
-        getOptionalOffset(req.body?.offset ?? req.query?.offset),
+        req.body ?? {},
       );
       return res.status(200).json(spans);
     } catch (error) {

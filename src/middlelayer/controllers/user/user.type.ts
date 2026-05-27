@@ -188,16 +188,8 @@ export type FetchAndProcessUsersResult = {
   pageInfo: UserListPageInfo;
 };
 
-export type FetchActiveUsersResponse = {
-  data: UserListItem[];
-  activeCount: number;
-  inactiveCount: number;
-  pendingCount: number;
-  pageInfo: UserListPageInfo;
-};
-
-export type FetchPendingUsersResponse = {
-  data: PendingUserListItem[];
+export type FetchAllUsersResponse = {
+  data: UserListItem[] | PendingUserListItem[];
   activeCount: number;
   inactiveCount: number;
   pendingCount: number;

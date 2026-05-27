@@ -14,11 +14,12 @@ import { AppError } from '../../../shared/middlewares/error.middleware';
 import { config } from '../../config';
 import { internalPost } from '../../utils/internal-fetch.util';
 import { zodParse } from '../../utils/zod-parse.util';
-import { companyCodeOnly } from '../../validations/company.validation';
 import {
   orgOnboardingSchema,
+  orgModificationSchema,
   orgOnboardingAction,
   orgHistory,
+  orgFetchSchema,
 } from '../../validations/org.validation';
 import type {
   InitiateOrgRequestResponse,
@@ -87,24 +88,70 @@ export class OrgController {
   }
 
   static async initiateOrgRequest(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId?: string } },
     res: Response<InitiateOrgRequestResponse>,
     next: NextFunction,
   ) {
     try {
-      const { companyCode, newNodeName, nodeType, parentNode, levelsHash } =
-        zodParse(orgOnboardingSchema, req.body);
+      const requestType =
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
+          : 'initiate';
       const initiatorId = req.user?.id;
+      const companyId = req.user?.companyId;
 
-      if (!initiatorId) {
+      if (requestType === 'update') {
+        const modification = zodParse(orgModificationSchema, req.body);
+
+        if (!initiatorId || !companyId) {
+          throw new AppError('Unauthorized', 401);
+        }
+
+        const { data, ok, status } =
+          await internalPost<OrgInitiateInternalResponse>(
+            `${config.backendUrl}/internal/org/initiate`,
+            {
+              initiatorId,
+              companyId,
+              type: 'UPDATE',
+              targetNodePath: modification.nodePath,
+              levelsHash: modification.levelsHash || null,
+              remarks: modification.remarks,
+              data: {
+                status: modification.status,
+              },
+              status: 'PENDING',
+            },
+          );
+
+        if (!ok) {
+          throw new AppError(
+            data?.message ||
+              data?.error ||
+              'Failed to initiate org structure modification',
+            status,
+          );
+        }
+
+        return res.status(201).json({
+          success: true,
+          message: 'Org structure request initiated',
+        });
+      }
+
+      const { newNodeName, nodeType, parentNode, levelsHash } = zodParse(
+        orgOnboardingSchema,
+        req.body,
+      );
+
+      if (!initiatorId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
-      // 1. Get Company ID from Backend
       const { data: company, ok: companyOk } =
         await internalPost<OrgCompanyLookupInternalResponse>(
-          `${config.backendUrl}/internal/company/get-by-code`,
-          { companyCode },
+          `${config.backendUrl}/internal/company/get-by-id`,
+          { id: companyId },
         );
 
       if (!companyOk || !company?.id) {
@@ -113,6 +160,7 @@ export class OrgController {
           404,
         );
       }
+      const companyCode = company.companyCode;
 
       // 2. Logic: Get eligible approver IDs (Global Access + Org Structure Managers + SAAS_ADMIN)
       const [globalRes, mgrRes] = await Promise.all([
@@ -135,7 +183,7 @@ export class OrgController {
         await internalPost<OrgValidateInitiationInternalResponse>(
           `${config.backendUrl}/internal/org/validate-initiation`,
           {
-            companyId: company.id,
+            companyId,
             newNodeName,
             nodeType,
             parentNode,
@@ -156,7 +204,8 @@ export class OrgController {
           `${config.backendUrl}/internal/org/initiate`,
           {
             initiatorId,
-            companyId: company.id,
+            companyId,
+            type: 'INITIATE',
             levelsHash: levelsHash || null,
             data: {
               newNodeName,
@@ -187,22 +236,23 @@ export class OrgController {
   }
 
   static async approveOrgRequest(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response<OrgRequestActionResponse>,
     next: NextFunction,
   ) {
     try {
       const { id, action, remark } = zodParse(orgOnboardingAction, req.body);
       const approverId = req.user?.id;
+      const companyId = req.user?.companyId;
 
-      if (!approverId) {
+      if (!approverId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
       // 1. Fetch request from Backend
       const { data: request, ok: fetchOk } = await internalPost<
         OrgStructureRequestInternal | OrgApiErrorResponse | null
-      >(`${config.backendUrl}/internal/org/get-request`, { id });
+      >(`${config.backendUrl}/internal/org/get-request`, { id, companyId });
 
       if (!fetchOk || !request || !('status' in request)) {
         throw new AppError(
@@ -237,6 +287,7 @@ export class OrgController {
           `${config.backendUrl}/internal/org/action`,
           {
             id,
+            companyId,
             status: 'REJECTED',
             approverId,
             remarks: remark,
@@ -255,6 +306,38 @@ export class OrgController {
         return res
           .status(200)
           .json({ success: true, message: 'Org structure request rejected' });
+      }
+
+      if (request.type === 'UPDATE') {
+        const {
+          data: commitRes,
+          ok: commitOk,
+          status: commitStatus,
+        } = await internalPost<OrgActionInternalResponse>(
+          `${config.backendUrl}/internal/org/action`,
+          {
+            id,
+            companyId,
+            status: 'APPROVED',
+            approverId,
+            remarks: remark,
+          },
+        );
+
+        if (!commitOk) {
+          throw new AppError(
+            commitRes?.message ||
+              commitRes?.error ||
+              'Failed to approve org structure modification',
+            commitStatus,
+          );
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: commitRes?.message || 'Org structure modification approved',
+          nodePath: request.data.nodePath || '',
+        });
       }
 
       // 4. Logic: Path Generation
@@ -306,6 +389,7 @@ export class OrgController {
         `${config.backendUrl}/internal/org/action`,
         {
           id,
+          companyId,
           status: 'APPROVED',
           approverId,
           remarks: remark,
@@ -338,15 +422,16 @@ export class OrgController {
   }
 
   static async fetchOrgStructure(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response<FetchOrgStructureResponse>,
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = zodParse(companyCodeOnly, req.body);
+      zodParse(orgFetchSchema, req.body ?? {});
       const userId = req.user?.id;
+      const companyId = req.user?.companyId;
 
-      if (!userId) {
+      if (!userId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
@@ -354,7 +439,7 @@ export class OrgController {
       const { data, ok, status } =
         await internalPost<FetchOrgStructureInternalResponse>(
           `${config.backendUrl}/internal/org/fetch`,
-          { companyCode, userId },
+          { companyId, userId },
         );
 
       if (!ok) {
@@ -406,18 +491,16 @@ export class OrgController {
   }
 
   static async fetchOrgHistory(
-    req: Request & { user?: { id: string } },
+    req: Request & { user?: { id: string; companyId: string } },
     res: Response<FetchOrgHistoryResponse>,
     next: NextFunction,
   ) {
     try {
-      const { companyCode, nodeName, nodePath } = zodParse(
-        orgHistory,
-        req.body,
-      );
+      const { nodeName, nodePath } = zodParse(orgHistory, req.body);
       const userId = req.user?.id;
+      const companyId = req.user?.companyId;
 
-      if (!userId) {
+      if (!userId || !companyId) {
         throw new AppError('Unauthorized', 401);
       }
 
@@ -425,7 +508,7 @@ export class OrgController {
       const { data, ok, status } =
         await internalPost<FetchOrgHistoryInternalResponse>(
           `${config.backendUrl}/internal/org/fetch-history`,
-          { companyCode, nodeName, nodePath, userId },
+          { companyId, nodeName, nodePath, userId },
         );
 
       if (!ok) {

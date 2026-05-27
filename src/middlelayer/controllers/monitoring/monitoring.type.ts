@@ -11,7 +11,22 @@ export type FetchMonitoringSpanItem = {
   createdAt: string;
 };
 
-export type FetchMonitoringSpansResponse = FetchMonitoringSpanItem[];
+export type MonitoringListPageInfo = {
+  page: number;
+  nextCursor: string | null;
+  prevCursor: string | null;
+  topCursor: string | null;
+  hasNext: boolean;
+  hasPrev: boolean;
+  hasNewData: boolean;
+  newCount: number;
+};
+
+export type FetchMonitoringSpansResponse = {
+  data: FetchMonitoringSpanItem[];
+  totalCount: number;
+  pageInfo: MonitoringListPageInfo;
+};
 
 export type FetchMonitoringSpanInternalItem = FetchMonitoringSpanItem & {
   subCount: string | null;
@@ -74,7 +89,11 @@ export type MonitoringApiErrorResponse = {
 };
 
 export type FetchMonitoringSpansInternalResponse =
-  | FetchMonitoringSpanInternalItem[]
+  | {
+      data: FetchMonitoringSpanInternalItem[];
+      totalCount: number;
+      pageInfo: MonitoringListPageInfo;
+    }
   | MonitoringApiErrorResponse;
 
 export type FetchMonitoringDetailsInternalResponse =

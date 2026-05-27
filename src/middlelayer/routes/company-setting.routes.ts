@@ -11,21 +11,102 @@
  *      (e.g., 'initiate' permission for 'USER_ACC' module).
  */
 import { Router } from 'express';
+import type { NextFunction, Response } from 'express';
 import { authMiddleware } from '../middlewares/auth.middleware';
+import type { AuthRequest } from '../middlewares/auth.middleware';
+import { AppError } from '../../shared/middlewares/error.middleware';
+import { EditLockController } from '../controllers/edit-lock/edit-lock.controller';
 import { OrgController } from '../controllers/org/org.controller';
 import { RoleController } from '../controllers/role/role.controller';
 import { UserController } from '../controllers/user/user.controller';
 import { WorkflowController } from '../controllers/workflow/workflow.controller';
 
-import { authorize, checkGlobalUser } from '../middlewares/access.middleware';
+import { authorize } from '../middlewares/access.middleware';
 
 const router = Router();
 router.use(authMiddleware);
 
+const authorizeUserInitiate = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toLowerCase()
+      : 'initiate';
+
+  return authorize(type === 'initiate' ? 'initiate' : 'modify', 'USER_ACC')(
+    req,
+    res,
+    next,
+  );
+};
+
+const authorizeOrgInitiate = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toLowerCase()
+      : 'initiate';
+
+  return authorize(type === 'update' ? 'modify' : 'initiate', 'ORG_STR')(
+    req,
+    res,
+    next,
+  );
+};
+
+const authorizeWorkflowInitiate = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toLowerCase()
+      : 'initiate';
+
+  return authorize(
+    type === 'update' || type === 'inactive' ? 'modify' : 'initiate',
+    'WORK_FLOW',
+  )(req, res, next);
+};
+
+const authorizeEditLock = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  let moduleName: 'USER_ACC' | 'ORG_STR' | 'WORK_FLOW' | null = null;
+  switch (req.body?.type) {
+    case 'USER':
+      moduleName = 'USER_ACC';
+      break;
+    case 'ORG':
+      moduleName = 'ORG_STR';
+      break;
+    case 'WORKFLOW':
+      moduleName = 'WORK_FLOW';
+      break;
+  }
+
+  if (!moduleName) {
+    return next(new AppError('Invalid edit lock type', 400));
+  }
+
+  return authorize('modify', moduleName)(req, res, next);
+};
+
+router.post('/edit-lock', authorizeEditLock, EditLockController.toggle);
+
 // -------------user routes----------------------------------
 router.post(
   '/user/initiate',
-  authorize('initiate', 'USER_ACC'),
+  authorizeUserInitiate,
   UserController.initiateUserOnboarding,
 );
 
@@ -35,15 +116,10 @@ router.post(
   UserController.actionUserOnboarding,
 );
 router.post(
-  '/user/fetch-all-active-user',
+  '/user/fetch-all-user',
   authorize('view', 'USER_ACC'),
-  UserController.fetchActiveUsers,
-);  //done
-router.post(
-  '/user/fetch-all-pending-user',
-  authorize('view', 'USER_ACC'),
-  UserController.fetchPendingUsers,
-);  //done
+  UserController.fetchAllUsers,
+);
 router.post(
   '/user/user-filter-option',
   authorize('view', 'USER_ACC'),
@@ -54,23 +130,23 @@ router.post(
   '/user/fetch-history',
   authorize('view', 'USER_ACC'),
   UserController.getUserHistory,
-);  //done
+); //done
 router.post(
   '/user/fetch-company-nodes',
   authorize('initiate'),
   UserController.fetchCompanyNodes,
-);  //done
+); //done
 router.post(
   '/user/fetch-users-by-nodepath-count',
   UserController.fetchUsersByNodePathCount,
-);  //done
+); //done
 
 // ----------------------------------------------------------
 
 //--------------org routes-----------------------------------
 router.post(
   '/org/initiate',
-  authorize('initiate', 'ORG_STR'),
+  authorizeOrgInitiate,
   OrgController.initiateOrgRequest,
 );
 router.post(
@@ -82,18 +158,18 @@ router.post(
   '/org/fetch',
   authorize('view', 'ORG_STR'),
   OrgController.fetchOrgStructure,
-);  //done
+); //done
 router.post(
   '/org/fetch-history',
   authorize('view', 'ORG_STR'),
   OrgController.fetchOrgHistory,
-);  //done
+); //done
 // ----------------------------------------------------------
 
 // --------------workflow routes------------------------------
 router.post(
   '/workflow/initiate',
-  authorize('initiate', 'WORK_FLOW'),
+  authorizeWorkflowInitiate,
   WorkflowController.initiateWorkflow,
 );
 router.post(
@@ -105,18 +181,18 @@ router.post(
   '/workflow/fetch',
   authorize('view', 'WORK_FLOW'),
   WorkflowController.fetchAllWorkflows,
-);  //done
+); //done
 router.post(
   '/workflow/fetch-history',
   authorize('view', 'WORK_FLOW'),
   WorkflowController.fetchWorkflowHistory,
-);  //done
+); //done
 
 // ----------------------------------------------------------
 
 // --------------roles routes--------------------------------
 // router.post('/role/create', RoleController.createRoles);
-router.post('/role/fetch-all', RoleController.fetchAllRoles);  //done
+router.post('/role/fetch-all', RoleController.fetchAllRoles); //done
 // ----------------------------------------------------------
 
 export default router;

@@ -116,9 +116,11 @@ export class AuthController {
         throw new AppError('Invalid credentials', 401);
       }
 
-      const firstMapping = user.userMappings[0];
+      const firstMapping = user.userMappings.find(
+        (mapping) => mapping.status === 'ACTIVE',
+      );
       if (!firstMapping) {
-        throw new AppError('Company mapping not found', 400);
+        throw new AppError('User is inactive or archived', 403);
       }
 
       const companyId = firstMapping.companyId;
@@ -271,6 +273,16 @@ export class AuthController {
       if (!activity || !activity.refreshToken) {
         clearAuthCookies(res);
         throw new AppError('Unauthorized - Invalid session', 401);
+      }
+
+      const activeMapping = activity.user?.userMappings?.some(
+        (mapping: any) =>
+          mapping.companyId === activity.companyId &&
+          mapping.status === 'ACTIVE',
+      );
+      if (!activeMapping) {
+        clearAuthCookies(res);
+        throw new AppError('Unauthorized - User is inactive or archived', 401);
       }
 
       if (activity.refreshToken !== refreshTokenHash) {

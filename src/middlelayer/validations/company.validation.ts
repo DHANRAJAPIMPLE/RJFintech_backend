@@ -8,7 +8,12 @@
  * - To provide strict typing for company actions (approve/reject) and history lookups.
  */
 import { z } from 'zod';
-import { emailSchema, nameSchema } from './common.validation';
+import {
+  cursorPaginationFields,
+  emailSchema,
+  nameSchema,
+  requiredActivePendingTypeSchema,
+} from './common.validation';
 
 const phoneSchema = z
   .string()
@@ -130,5 +135,12 @@ export const companyHistory = z
 export const companyCodeOnly = z
   .object({
     companyCode: z.string().trim().min(1, 'Company code is required'),
+  })
+  .strict();
+
+export const companyListSchema = z
+  .object({
+    type: requiredActivePendingTypeSchema,
+    ...cursorPaginationFields,
   })
   .strict();

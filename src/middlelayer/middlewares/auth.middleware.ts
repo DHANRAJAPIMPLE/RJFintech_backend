@@ -102,6 +102,17 @@ export const authMiddleware = async (
       throw new AppError(mapAuthError('Unauthorized - Session not found'), 401);
     }
 
+    const currentMapping = activity.user?.userMappings?.find(
+      (mapping: any) => mapping.companyId === activity.companyId,
+    );
+    if (!currentMapping || currentMapping.status !== 'ACTIVE') {
+      clearAuthCookies(res);
+      throw new AppError(
+        mapAuthError('Unauthorized - User is inactive or archived'),
+        401,
+      );
+    }
+
     const dbVersionHash = activity.version
       ? HashUtil.hashToken(activity.version)
       : null;
@@ -155,7 +166,9 @@ export const authMiddleware = async (
 
       if (requestedCompanyCode) {
         const mapping = activity.user?.userMappings?.find(
-          (m: any) => m?.company?.companyCode === requestedCompanyCode,
+          (m: any) =>
+            m?.company?.companyCode === requestedCompanyCode &&
+            m.status === 'ACTIVE',
         );
 
         if (!mapping) {

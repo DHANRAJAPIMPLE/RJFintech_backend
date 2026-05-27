@@ -23,6 +23,7 @@ import onboardingDbRoutes from './routes/onboarding.db.routes';
 import rolesDbRoutes from './routes/roles.db.routes';
 import orgDbRoutes from './routes/org.db.routes';
 import workflowDbRoutes from './routes/workflow.db.routes';
+import editLockDbRoutes from './routes/edit-lock.db.routes';
 import monitoringDbRoutes from './routes/monitoring.db.routes';
 import notificationDbRoutes from './routes/notification.db.routes';
 import { createErrorMiddleware } from '../shared/middlewares/error.middleware';
@@ -48,6 +49,7 @@ app1.use('/internal/onboarding', onboardingDbRoutes);
 app1.use('/internal/roles', rolesDbRoutes);
 app1.use('/internal/org', orgDbRoutes);
 app1.use('/internal/workflow', workflowDbRoutes);
+app1.use('/internal/edit-lock', editLockDbRoutes);
 app1.use('/internal/notifications', notificationDbRoutes);
 app1.use('/monitoring', monitoringDbRoutes);
 

@@ -18,6 +18,7 @@ import {
   companyOnboardingSchema,
   companyActionSchema,
   companyHistory,
+  companyListSchema,
 } from '../../validations/company.validation';
 import type {
   ActionCompanyOnboardingInternalResponse,
@@ -47,11 +48,11 @@ export class AdminController {
     next: NextFunction,
   ) {
     try {
-      // 1. Fetch raw data from Backend (5001)
+      const body = zodParse(companyListSchema, req.body ?? {});
       const { data, ok, status } =
         await internalPost<FetchAdminGroupsInternalResponse>(
           `${config.backendCompanyUrl}/groups`,
-          { userId: req.user?.id },
+          { ...body, userId: req.user?.id },
         );
 
       if (!ok) {
@@ -63,162 +64,78 @@ export class AdminController {
       }
 
       const backendData = data as FetchAdminGroupsInternalSuccess;
-      const { groups, soloCompanies, pendingOnboardings } = backendData;
-
-      const active: AdminCompanyGroup[] = [];
-      const inactive: AdminCompanyGroup[] = [];
-      const pending: AdminPendingCompanyGroup[] = [];
-
-      // 2. Process Groups
-      groups.forEach((g) => {
-        const processCompanies = (
-          companies: AdminBackendCompany[],
-        ): AdminCompanyGroup => {
-          const signatoryMap = new Map();
-          const companyDetails = companies.map((c) => ({
-            companyCode: c.companyCode,
-            name: c.legalName,
-            gst: c.gstNumber,
-            brand: c.brandName,
-            ieCode: c.ieCode || '',
-            registration: c.registrationDate,
-            address: c.address || '',
-            signatories: c.signatories || [],
-          }));
-
-          companies.forEach((c) => {
-            if (c.signatories) {
-              c.signatories.forEach((s) => {
-                if (!signatoryMap.has(s.email)) {
-                  signatoryMap.set(s.email, s);
-                }
-              });
-            }
-          });
-
-          return {
-            groupDetails: {
-              groupCode: g.groupCode,
-              groupName: g.name,
-            },
-            companyDetails: companyDetails,
-          };
-        };
-
-        const mappedCompanies = g.companyMappings.map((cm) => cm.company);
-        const activeGroupCompanies = mappedCompanies.filter(
-          (c) => c.status === 'ACTIVE',
-        );
-        const inactiveGroupCompanies = mappedCompanies.filter(
-          (c) => c.status === 'INACTIVE',
-        );
-
-        if (g.status === 'ACTIVE') {
-          if (activeGroupCompanies.length > 0) {
-            active.push(processCompanies(activeGroupCompanies));
-          }
-          if (inactiveGroupCompanies.length > 0) {
-            inactive.push(processCompanies(inactiveGroupCompanies));
-          }
-        } else {
-          // If the group itself is inactive, all companies go to the inactive list
-          if (mappedCompanies.length > 0) {
-            inactive.push(processCompanies(mappedCompanies));
-          } else {
-            // Even if no companies, still show the inactive group if it's inactive?
-            // The original code did this. Let's keep it.
-            inactive.push({
-              groupDetails: {
-                groupCode: g.groupCode,
-                groupName: g.name,
+      const publicData =
+        body.type === 'active'
+          ? (backendData.data as AdminBackendCompany[]).map(
+              (company): AdminCompanyGroup => {
+                const group = company.companyMappings?.[0]?.group;
+                return {
+                  groupDetails: group
+                    ? {
+                        groupCode: group.groupCode,
+                        groupName: group.name,
+                      }
+                    : null,
+                  companyDetails: [
+                    {
+                      companyCode: company.companyCode,
+                      name: company.legalName,
+                      gst: company.gstNumber,
+                      brand: company.brandName,
+                      ieCode: company.ieCode || '',
+                      registration: company.registrationDate,
+                      address: company.address || '',
+                      signatories: company.signatories || [],
+                    },
+                  ],
+                };
               },
-              companyDetails: [],
-              signatories: [],
-            });
-          }
-        }
-      });
+            )
+          : (backendData.data as AdminBackendPendingOnboarding[]).map(
+              (onboarding): AdminPendingCompanyGroup => {
+                const onboardingData = onboarding.data || {};
+                const group = onboardingData.group || {};
+                const company = onboardingData.company || {};
+                const signatories = onboardingData.signatories || [];
+                const companyDetails: AdminPendingCompanyDetails = {
+                  companyId: onboarding.id,
+                  companyCode: onboarding.companyCode,
+                  name: company.name || '',
+                  gst: company.gst || '',
+                  brand: company.brand || '',
+                  iecode: company.ieCode || '',
+                  registration: company.registeredAt || '',
+                  address: company.address || '',
+                  initiatorName: onboarding.initiator?.name || null,
+                  initiatorEmail: onboarding.initiator?.email || null,
+                  initiatedDate: onboarding.createdAt,
+                  signatories: signatories.map((signatory) => ({
+                    name: signatory.name || '',
+                    email: signatory.email || '',
+                    phone: signatory.phone || '',
+                    designation: signatory.designation || null,
+                    employeeId: signatory.employeeId || null,
+                  })),
+                };
 
-      // 3. Process Solo Companies
-      soloCompanies.forEach((c) => {
-        const soloEntry: AdminCompanyGroup = {
-          groupDetails: null,
-          companyDetails: [
-            {
-              companyCode: c.companyCode,
-              name: c.legalName,
-              gst: c.gstNumber,
-              brand: c.brandName,
-              ieCode: c.ieCode || '',
-              registration: c.registrationDate,
-              address: c.address || '',
-              signatories: c.signatories || [],
-            },
-          ],
-        };
-
-        if (c.status === 'ACTIVE') {
-          active.push(soloEntry);
-        } else {
-          inactive.push(soloEntry);
-        }
-      });
-
-      // 4. Process Pending Onboardings
-      const pendingGroups: Record<string, AdminPendingCompanyGroup> = {};
-      pendingOnboardings.forEach((onb: AdminBackendPendingOnboarding) => {
-        const onbData = onb.data || {};
-        const group = onbData.group || {};
-        const company = onbData.company || {};
-        const signatories = onbData.signatories || [];
-        const groupCode =
-          onb.groupCode || `SOLO_PENDING_${onb.companyCode || onb.id}`;
-
-        if (!pendingGroups[groupCode]) {
-          pendingGroups[groupCode] = {
-            groupDetails: onb.groupCode
-              ? {
-                  groupCode: onb.groupCode,
-                  groupName: group.name || 'Pending Group',
-                }
-              : null,
-            companyDetails: [],
-          };
-        }
-
-        const companyDetails: AdminPendingCompanyDetails = {
-          companyId: onb.id,
-          companyCode: onb.companyCode,
-          name: company.name || '',
-          gst: company.gst || '',
-          brand: company.brand || '',
-          iecode: company.ieCode || '',
-          registration: company.registeredAt ? company.registeredAt : '',
-          address: company.address || '',
-          initiatorName: onb.initiator?.name || null,
-          initiatorEmail: onb.initiator?.email || null,
-          initiatedDate: onb.createdAt,
-          signatories: signatories.map((s: any) => ({
-            name: s.name || '',
-            email: s.email || '',
-            phone: s.phone || '',
-            designation: s.designation || '',
-            employeeId: s.employeeId || '',
-          })),
-        };
-
-        pendingGroups[groupCode].companyDetails.push(companyDetails);
-      });
-      pending.push(...Object.values(pendingGroups));
-
-      // 5. Final Response
+                return {
+                  groupDetails: onboarding.groupCode
+                    ? {
+                        groupCode: onboarding.groupCode,
+                        groupName: group.name || 'Pending Group',
+                      }
+                    : null,
+                  companyDetails: [companyDetails],
+                };
+              },
+            );
       const response: FetchAdminGroupsResponse = {
         message: 'Companies fetched successfully!',
-        companies: {
-          active,
-          pending,
-          inactive,
-        },
+        data: publicData,
+        activeCount: backendData.activeCount,
+        inactiveCount: backendData.inactiveCount,
+        pendingCount: backendData.pendingCount,
+        pageInfo: backendData.pageInfo,
       };
 
       res.status(200).json(response);
