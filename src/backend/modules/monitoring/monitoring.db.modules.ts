@@ -332,14 +332,32 @@ export class MonitoringService {
       type: 'MIDDLELAYER',
       ...(query
         ? {
-            company: {
-              is: {
-                OR: [
-                  { legalName: { contains: query, mode: 'insensitive' } },
-                  { companyCode: { contains: query, mode: 'insensitive' } },
-                ],
+            OR: [
+              { url: { contains: query, mode: 'insensitive' } },
+              { ipAddress: { contains: query, mode: 'insensitive' } },
+              { trackingId: { contains: query, mode: 'insensitive' } },
+              {
+                company: {
+                  is: {
+                    legalName: { contains: query, mode: 'insensitive' },
+                  },
+                },
               },
-            },
+              {
+                company: {
+                  is: {
+                    companyCode: { contains: query, mode: 'insensitive' },
+                  },
+                },
+              },
+              {
+                user: {
+                  is: {
+                    name: { contains: query, mode: 'insensitive' },
+                  },
+                },
+              },
+            ],
           }
         : {}),
     };

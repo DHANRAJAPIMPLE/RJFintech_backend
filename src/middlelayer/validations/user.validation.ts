@@ -60,6 +60,7 @@ export const userOnboardingSchema = z
         z.literal('initiate'),
       )
       .optional(),
+    targetUserEmail: emailSchema.nullable().optional(),
     basicDetails: z
       .object({
         name: nameSchema()
