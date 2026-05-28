@@ -61,6 +61,7 @@ export type WorkflowActiveItem = {
   orgStructure: WorkflowOrgStructure;
   levelsHash: string;
   levels: WorkflowActiveLevel[];
+  pendingRequest?: WorkflowPendingRequestSnapshot | null;
 };
 
 export type WorkflowPendingLevel = {
@@ -96,6 +97,7 @@ export type WorkflowPendingItem = {
   data: WorkflowPendingRequestData;
   type?: 'INITIATE' | 'UPDATE' | 'INACTIVE';
   oldData?: unknown | null;
+  newData?: unknown | null;
   status: 'PENDING';
   alias: string;
   approvalRemark: string | null;
@@ -107,6 +109,15 @@ export type WorkflowPendingItem = {
   nodeName: string | null;
   nodePath: string | null;
   workflowName: string;
+};
+
+export type WorkflowPendingRequestSnapshot = {
+  id: string;
+  type?: 'INITIATE' | 'UPDATE' | 'INACTIVE';
+  status?: string | null;
+  oldData?: unknown | null;
+  newData?: unknown | null;
+  createdAt?: string | null;
 };
 
 export type WorkflowListType = 'active' | 'pending';

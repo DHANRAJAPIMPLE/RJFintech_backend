@@ -736,10 +736,22 @@ export class UserDbController {
       : [{ createdAt: 'desc' }, { id: 'desc' }];
   }
 
-  private static formatProductionUser(u: any) {
+  private static formatProductionUser(u: any, pendingRequest?: any) {
     const mapping = u.userMappings[0];
 
     return {
+      pendingRequest: pendingRequest
+        ? {
+            id: pendingRequest.id,
+            type: pendingRequest.type,
+            status: pendingRequest.status,
+            oldData:
+              pendingRequest.oldData ||
+              ((pendingRequest.data as any)?.oldData ?? null),
+            newData: pendingRequest.data || null,
+            createdAt: pendingRequest.createdAt,
+          }
+        : null,
       basicDetails: {
         name: u.name,
         email: u.email,
@@ -1108,6 +1120,7 @@ export class UserDbController {
         id: onb.id,
         type: onb.type || 'INITIATE',
         oldData: onb.oldData || dataBlob?.oldData || null,
+        newData: dataBlob || null,
         approver: approve?.user || null,
         basicDetails: {
           name: basic.name,
@@ -1428,8 +1441,50 @@ export class UserDbController {
         });
         activePage.pageInfo.page = Math.floor(newerCount / limit) + 1;
       }
-      const activeUsers = activePage.pageRows.map(
-        UserDbController.formatProductionUser,
+      const activeEmails = activePage.pageRows
+        .map((user: any) => user.email)
+        .filter(Boolean);
+      const activePendingRequests =
+        activeEmails.length > 0
+          ? await prisma.userOnboarding.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                status: 'PENDING',
+                OR: activeEmails.flatMap((email: string) => [
+                  {
+                    data: {
+                      path: ['targetUserEmail'],
+                      equals: email,
+                    } as any,
+                  },
+                  {
+                    data: {
+                      path: ['basicDetails', 'email'],
+                      equals: email,
+                    } as any,
+                  },
+                ]),
+              },
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            })
+          : [];
+      const activePendingByEmail = new Map<string, any>();
+      activePendingRequests.forEach((request: any) => {
+        const requestData = request.data as any;
+        const email = (
+          requestData?.targetUserEmail ||
+          requestData?.basicDetails?.email ||
+          ''
+        ).toLowerCase();
+        if (email && !activePendingByEmail.has(email)) {
+          activePendingByEmail.set(email, request);
+        }
+      });
+      const activeUsers = activePage.pageRows.map((user: any) =>
+        UserDbController.formatProductionUser(
+          user,
+          activePendingByEmail.get((user.email || '').toLowerCase()),
+        ),
       );
       const inactiveUsers = inactiveRows.map(
         UserDbController.formatProductionUser,

@@ -1358,10 +1358,22 @@ export class OrgStructureDbController {
         return {
           ...rest,
           oldData: req.oldData || ((req.data as any)?.oldData ?? null),
+          newData: req.data || null,
           initiator,
           workflowName: w?.name || 'N/A',
           alias: w?.alias || 'N/A',
         };
+      });
+      const pendingByNodePath = new Map<string, any>();
+      pendingWithDetails.forEach((request: any) => {
+        const requestData = request.data as any;
+        const targetPath =
+          requestData?.targetNodePath ||
+          requestData?.nodePath ||
+          requestData?.currentData?.nodePath;
+        if (typeof targetPath === 'string' && !pendingByNodePath.has(targetPath)) {
+          pendingByNodePath.set(targetPath, request);
+        }
       });
 
       // 4. Remove internal UUIDs and format for the tree UI
@@ -1371,6 +1383,16 @@ export class OrgStructureDbController {
         nodeName: node.nodeName,
         nodeType: node.nodeType,
         nodePath: node.nodePath,
+        pendingRequest: pendingByNodePath.has(node.nodePath)
+          ? {
+              id: pendingByNodePath.get(node.nodePath).id,
+              type: pendingByNodePath.get(node.nodePath).type,
+              status: pendingByNodePath.get(node.nodePath).status,
+              oldData: pendingByNodePath.get(node.nodePath).oldData ?? null,
+              newData: pendingByNodePath.get(node.nodePath).newData ?? null,
+              createdAt: pendingByNodePath.get(node.nodePath).createdAt,
+            }
+          : null,
       }));
 
       res.status(200).json({

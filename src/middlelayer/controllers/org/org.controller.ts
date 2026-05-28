@@ -50,6 +50,7 @@ export class OrgController {
       nodeName: node.nodeName,
       nodeType: node.nodeType,
       nodePath: node.nodePath,
+      pendingRequest: node.pendingRequest ?? null,
     };
   }
 
@@ -463,6 +464,7 @@ export class OrgController {
             id: req.id,
             type: req.type,
             oldData: req.oldData ?? reqData.oldData ?? null,
+            newData: req.newData ?? reqData ?? null,
             newNodeName: reqData.newNodeName ?? reqData.targetNodePath ?? '',
             nodeType: reqData.nodeType ?? null,
             status: reqData.status ?? null,

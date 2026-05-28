@@ -64,6 +64,7 @@ export class WorkflowController {
         approver2: level.approver2,
         approverType: level.approverType,
       })),
+      pendingRequest: workflow.pendingRequest ?? null,
     };
   }
 
@@ -82,6 +83,7 @@ export class WorkflowController {
       },
       type: workflow.type,
       oldData: workflow.oldData ?? workflow.data.oldData ?? null,
+      newData: workflow.newData ?? workflow.data ?? null,
       status: workflow.status,
       alias: workflow.alias,
       approvalRemark: workflow.approvalRemark,

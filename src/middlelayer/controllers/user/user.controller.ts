@@ -85,6 +85,7 @@ export class UserController {
 
   private static formatUserListItem(user: UserListItem): UserListItem {
     return {
+      pendingRequest: user.pendingRequest ?? null,
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,
@@ -107,6 +108,7 @@ export class UserController {
       id: user.id,
       type: user.type,
       oldData: user.oldData ?? null,
+      newData: user.newData ?? null,
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,

@@ -1712,8 +1712,75 @@ export class WorkflowDbController {
       }
 
       if (type === 'active') {
+        const activeRows = pageData.pageRows as any[];
+        const activeIds = activeRows.map((workflow) => workflow.id);
+        const activeKeys = new Set(
+          activeRows.map((workflow) =>
+            [
+              workflow.module,
+              workflow.subModule,
+              workflow.orgStructure?.nodePath,
+              workflow.levelsHash,
+            ].join('|'),
+          ),
+        );
+        const pendingModifications =
+          activeIds.length > 0
+            ? await prisma.workflowReq.findMany({
+                where: {
+                  companyId: resolvedCompanyId,
+                  status: 'PENDING',
+                  type: { in: ['UPDATE', 'INACTIVE'] },
+                },
+                select: pendingSelect,
+                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              })
+            : [];
+        const pendingByWorkflowId = new Map<string, any>();
+        const pendingByTargetKey = new Map<string, any>();
+        pendingModifications.forEach((request: any) => {
+          if (request.workflowId && !pendingByWorkflowId.has(request.workflowId)) {
+            pendingByWorkflowId.set(request.workflowId, request);
+          }
+          const target = (request.data as any)?.target;
+          const key = [
+            target?.module,
+            target?.subModule,
+            target?.nodePath,
+            target?.levelsHash,
+          ].join('|');
+          if (activeKeys.has(key) && !pendingByTargetKey.has(key)) {
+            pendingByTargetKey.set(key, request);
+          }
+        });
+        const activeWithPending = activeRows.map((workflow) => {
+          const key = [
+            workflow.module,
+            workflow.subModule,
+            workflow.orgStructure?.nodePath,
+            workflow.levelsHash,
+          ].join('|');
+          const pending =
+            pendingByWorkflowId.get(workflow.id) || pendingByTargetKey.get(key);
+
+          return {
+            ...workflow,
+            pendingRequest: pending
+              ? {
+                  id: pending.id,
+                  type: pending.type,
+                  status: pending.status,
+                  oldData:
+                    pending.oldData || ((pending.data as any)?.oldData ?? null),
+                  newData: pending.data || null,
+                  createdAt: pending.createdAt,
+                }
+              : null,
+          };
+        });
+
         return res.status(200).json({
-          data: pageData.pageRows,
+          data: activeWithPending,
           activeCount,
           pendingCount,
           pageInfo: pageData.pageInfo,
@@ -1772,6 +1839,7 @@ export class WorkflowDbController {
         return {
           ...rest,
           oldData: req.oldData || ((req.data as any)?.oldData ?? null),
+          newData: req.data || null,
           initiator,
           initiatorTimestamp,
           nodeType,

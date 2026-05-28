@@ -135,7 +135,17 @@ export type UserListAccess = {
   accessCategory: UserAccessCategory;
 };
 
+export type PendingRequestSnapshot = {
+  id: string;
+  type?: string | null;
+  status?: string | null;
+  oldData?: unknown | null;
+  newData?: unknown | null;
+  createdAt?: string | null;
+};
+
 export type UserListItem = {
+  pendingRequest?: PendingRequestSnapshot | null;
   basicDetails: UserListBasicDetails;
   primary: UserListAccess[];
   secondary: UserListAccess[];
@@ -163,6 +173,7 @@ export type PendingUserListItem = {
   id: string;
   type?: string;
   oldData?: unknown | null;
+  newData?: unknown | null;
   basicDetails: PendingUserBasicDetails;
   primary: PendingUserAccess[];
   secondary: PendingUserAccess[];

@@ -328,39 +328,43 @@ export class MonitoringService {
         ? input.query.trim()
         : null;
     const pagination = resolveCursorPagination(input);
+
+    const queryFilter: any = query
+      ? {
+          OR: [
+            { url: { contains: query, mode: 'insensitive' as const } },
+            { ipAddress: { contains: query, mode: 'insensitive' as const } },
+            { trackingId: { contains: query, mode: 'insensitive' as const } },
+            {
+              company: {
+                is: {
+                  legalName: { contains: query, mode: 'insensitive' as const },
+                },
+              },
+            },
+            {
+              company: {
+                is: {
+                  companyCode: { contains: query, mode: 'insensitive' as const },
+                },
+              },
+            },
+            {
+              user: {
+                is: {
+                  name: { contains: query, mode: 'insensitive' as const },
+                },
+              },
+            },
+          ],
+        }
+      : {};
+
     const where: any = {
       type: 'MIDDLELAYER',
-      ...(query
-        ? {
-            OR: [
-              { url: { contains: query, mode: 'insensitive' } },
-              { ipAddress: { contains: query, mode: 'insensitive' } },
-              { trackingId: { contains: query, mode: 'insensitive' } },
-              {
-                company: {
-                  is: {
-                    legalName: { contains: query, mode: 'insensitive' },
-                  },
-                },
-              },
-              {
-                company: {
-                  is: {
-                    companyCode: { contains: query, mode: 'insensitive' },
-                  },
-                },
-              },
-              {
-                user: {
-                  is: {
-                    name: { contains: query, mode: 'insensitive' },
-                  },
-                },
-              },
-            ],
-          }
-        : {}),
+      ...queryFilter,
     };
+
     const pageWhere = pagination.cursor
       ? appendCursorWhere(
           where,

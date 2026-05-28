@@ -10,6 +10,7 @@ export type OrgActiveNode = {
   nodeName: string;
   nodeType: OrgNodeType | null;
   nodePath: string;
+  pendingRequest?: OrgPendingRequestSnapshot | null;
 };
 
 export type OrgActiveNodeInternal = OrgActiveNode & {
@@ -40,6 +41,7 @@ export type OrgPendingInternalItem = {
   id: string;
   type?: 'INITIATE' | 'UPDATE';
   oldData?: unknown | null;
+  newData?: unknown | null;
   data: OrgPendingRequestData;
   createdAt: string;
   initiator?: OrgPendingInitiator | null;
@@ -51,6 +53,7 @@ export type OrgPendingItem = {
   id: string;
   type?: 'INITIATE' | 'UPDATE';
   oldData?: unknown | null;
+  newData?: unknown | null;
   newNodeName: string;
   nodeType: OrgNodeType;
   status?: 'ACTIVE' | 'INACTIVE' | null;
@@ -60,6 +63,15 @@ export type OrgPendingItem = {
   initiatedDate: string;
   workflowName: string;
   alias: string;
+};
+
+export type OrgPendingRequestSnapshot = {
+  id: string;
+  type?: 'INITIATE' | 'UPDATE';
+  status?: string | null;
+  oldData?: unknown | null;
+  newData?: unknown | null;
+  createdAt?: string | null;
 };
 
 export type InitiateOrgRequestResponse = {
