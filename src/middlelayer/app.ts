@@ -12,21 +12,21 @@ import adminRoutes from './routes/admin.routes';
 import notificationRoutes from './routes/notification.routes';
 import { createErrorMiddleware } from '../shared/middlewares/error.middleware';
 import { traceMonitoringMiddleware } from './middlewares/traceMonitoring.middleware';
-const allowedOrigins = ['*'];
+const allowedOrigins = ['http://localhost:8080', 'http://192.168.1.7:8080'];
 const app = express();
 
-// app.use(
-//   cors({
-//     origin: (origin, callback) => {
-//       if (!origin || allowedOrigins.includes(origin)) {
-//         callback(null, true);
-//       } else {
-//         callback(new Error('Not allowed by CORS'));
-//       }
-//     },
-//     credentials: true,
-//   }),
-// );
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json());
 app.use(cookieParser());
 app.use(traceMonitoringMiddleware);
