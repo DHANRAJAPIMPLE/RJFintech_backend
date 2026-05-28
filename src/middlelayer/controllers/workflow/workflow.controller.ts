@@ -77,8 +77,11 @@ export class WorkflowController {
         module: workflow.data.module,
         nodePath: workflow.data.nodePath,
         subModule: workflow.data.subModule,
-        levelsHash: workflow.data.levelsHash,
+        levelsHash: workflow.data.levelsHash ?? workflow.levelsHash,
+        status: workflow.data.status ?? null,
       },
+      type: workflow.type,
+      oldData: workflow.oldData ?? workflow.data.oldData ?? null,
       status: workflow.status,
       alias: workflow.alias,
       approvalRemark: workflow.approvalRemark,
@@ -101,6 +104,7 @@ export class WorkflowController {
   ): WorkflowHistoryItem {
     const common = {
       workflowName: item.workflowName,
+      oldData: item.oldData ?? null,
     };
 
     if ('eligibleapprovers' in item) {

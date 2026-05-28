@@ -147,6 +147,7 @@ export type PendingUserApprover = {
 };
 
 export type PendingUserBasicDetails = UserListBasicDetails & {
+  status?: string | null;
   initiatorName: string | null;
   initiatorEmail: string | null;
   initiatedDate: string;
@@ -160,6 +161,8 @@ export type PendingUserAccess = Omit<UserListAccess, 'nodeType'> & {
 
 export type PendingUserListItem = {
   id: string;
+  type?: string;
+  oldData?: unknown | null;
   basicDetails: PendingUserBasicDetails;
   primary: PendingUserAccess[];
   secondary: PendingUserAccess[];
@@ -226,6 +229,7 @@ export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
 export type UserHistoryBaseItem = {
   email: string;
+  oldData?: unknown | null;
 };
 
 export type UserHistoryActionItem = UserHistoryBaseItem & {

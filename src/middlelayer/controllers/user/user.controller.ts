@@ -105,6 +105,8 @@ export class UserController {
   ): PendingUserListItem {
     return {
       id: user.id,
+      type: user.type,
+      oldData: user.oldData ?? null,
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,
@@ -112,6 +114,7 @@ export class UserController {
         createdAt: user.basicDetails.createdAt,
         designation: user.basicDetails.designation,
         employeeId: user.basicDetails.employeeId,
+        status: user.basicDetails.status,
         reportingManagerName: user.basicDetails.reportingManagerName,
         reportingManagerEmail: user.basicDetails.reportingManagerEmail,
         initiatorName: user.basicDetails.initiatorName,
@@ -151,6 +154,7 @@ export class UserController {
   ): UserHistoryItem {
     const common = {
       email: item.email,
+      oldData: item.oldData ?? null,
     };
 
     if ('eligibleapprovers' in item) {

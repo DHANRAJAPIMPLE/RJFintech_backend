@@ -12,7 +12,7 @@ import adminRoutes from './routes/admin.routes';
 import notificationRoutes from './routes/notification.routes';
 import { createErrorMiddleware } from '../shared/middlewares/error.middleware';
 import { traceMonitoringMiddleware } from './middlewares/traceMonitoring.middleware';
-// const allowedOrigins = ['*'];
+const allowedOrigins = ['*'];
 const app = express();
 
 // app.use(

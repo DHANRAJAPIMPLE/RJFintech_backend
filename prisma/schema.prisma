@@ -164,6 +164,7 @@ model UserOnboarding {
   type              String           @default("INITIATE")
   impact            String           @default("NO_ISSUES")
   data              Json
+  oldData           Json?            @map("old_data")
   initiatorId       String?          @map("initiator_id")
   remarks           String?
   status            OnboardingStatus @default(PENDING)
@@ -238,6 +239,7 @@ model NotificationUser {
 model OrgStructureReq {
   id                String           @id @default(uuid())
   data              Json
+  oldData           Json?            @map("old_data")
   companyId         String           @map("company_id")
   workflowId        String?          @map("workflow_id")
   type              RequestType      @default(INITIATE)
@@ -409,6 +411,7 @@ model WorkflowReq {
   workflowId        String?              @map("workflow_id")
   alias             String?              @map("alias")
   data              Json
+  oldData           Json?                @map("old_data")
   initiatorId       String?              @map("initiator_id")
   status            OnboardingStatus     @default(PENDING)
   approvalRemark    String?              @map("approval_remark")

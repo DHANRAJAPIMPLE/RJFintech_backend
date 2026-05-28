@@ -39,6 +39,7 @@ export const orgOnboardingSchema = z
       1,
       'New node name is required',
     ),
+    status:z.string().nullable().optional(),
     nodeType: nodeTypeSchema,
     parentNode: parentNodeSchema,
     levelsHash: z.string().nullable().optional(),

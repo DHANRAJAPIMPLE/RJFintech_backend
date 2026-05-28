@@ -84,6 +84,7 @@ export type WorkflowPendingRequestData = {
   nodePath: string;
   subModule: WorkflowSubModule;
   levelsHash: string | null;
+  status?: 'ACTIVE' | 'INACTIVE' | null;
 };
 
 export type WorkflowInitiator = {
@@ -93,6 +94,8 @@ export type WorkflowInitiator = {
 
 export type WorkflowPendingItem = {
   data: WorkflowPendingRequestData;
+  type?: 'INITIATE' | 'UPDATE' | 'INACTIVE';
+  oldData?: unknown | null;
   status: 'PENDING';
   alias: string;
   approvalRemark: string | null;
@@ -167,6 +170,7 @@ export type WorkflowHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
 export type WorkflowHistoryBaseItem = {
   workflowName: string | null;
+  oldData?: unknown | null;
 };
 
 export type WorkflowHistoryActionItem = WorkflowHistoryBaseItem & {

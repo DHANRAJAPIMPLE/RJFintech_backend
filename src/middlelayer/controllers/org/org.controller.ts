@@ -60,6 +60,7 @@ export class OrgController {
       newNodeName: item.newNodeName,
       nodeType: item.nodeType,
       parentNodeName: item.parentNodeName,
+      oldData: item.oldData ?? null,
     };
 
     if ('eligibleapprovers' in item) {
@@ -460,11 +461,14 @@ export class OrgController {
           const reqData = req.data || {};
           return {
             id: req.id,
-            newNodeName: reqData.newNodeName,
-            nodeType: reqData.nodeType,
+            type: req.type,
+            oldData: req.oldData ?? reqData.oldData ?? null,
+            newNodeName: reqData.newNodeName ?? reqData.targetNodePath ?? '',
+            nodeType: reqData.nodeType ?? null,
+            status: reqData.status ?? null,
             parentNode: {
-              nodeName: reqData.parentNode.nodeName,
-              nodePath: reqData.parentNode.nodePath,
+              nodeName: reqData.parentNode?.nodeName ?? '',
+              nodePath: reqData.parentNode?.nodePath ?? '',
             },
             initiatorName: req.initiator?.name || null,
             initiatorEmail: req.initiator?.email || null,

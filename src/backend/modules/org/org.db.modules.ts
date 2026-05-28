@@ -93,18 +93,20 @@ export class OrgStructureDbController {
       where: { companyId, status: 'PENDING' },
       select: {
         data: true,
+        oldData: true,
       },
     });
 
     for (const request of pendingRequests) {
       const data = request.data as any;
-      const oldData = data?.oldData as any;
+      const targetNodePath =
+        data?.targetNodePath || data?.currentData?.nodePath;
       const pendingNodePath =
         data?.nodePath ||
         (data?.parentNode?.nodePath && data?.newNodeName
           ? `${data.parentNode.nodePath}.${OrgStructureDbController.pathSegment(data.newNodeName)}`
           : null);
-      const affectedPaths = [oldData?.nodePath, pendingNodePath].filter(
+      const affectedPaths = [targetNodePath, pendingNodePath].filter(
         (path): path is string => typeof path === 'string',
       );
 
@@ -213,22 +215,19 @@ export class OrgStructureDbController {
         node,
       );
 
-      const oldData = OrgStructureDbController.toNodeSnapshot(node);
-      const proposed: OrgNodeSnapshot = {
-        ...oldData,
-        status: 'INACTIVE',
+      const oldData = {
+        status: node.status || 'ACTIVE',
       };
       const impact = 'INACTIVE';
       await OrgStructureDbController.assertNoPrimaryAccessInSubtree(
         prisma as any,
         companyId,
-        oldData.nodePath,
+        node.nodePath,
       );
 
       const requestData = {
-        ...proposed,
-        oldData,
-        newData: proposed,
+        targetNodePath,
+        ...data,
       };
       let notificationRecipients: string[] = [];
       const request = await prisma.$transaction(async (tx) => {
@@ -239,6 +238,7 @@ export class OrgStructureDbController {
             impact,
             initiatorId,
             data: requestData as any,
+            oldData: oldData as any,
             remarks: remarks || null,
           },
         });
@@ -260,17 +260,6 @@ export class OrgStructureDbController {
           where: { id: requestRecord.id },
           data: {
             workflowId: workflow.workflowId,
-            data: {
-              ...requestData,
-              workflowSnapshot: {
-                levelsHash: levelsHash || null,
-                levels: workflow.approvers.map((level: any) => ({
-                  level: level.level,
-                  approversList: level.approversList,
-                  mandatoryCount: level.mandatoryCount,
-                })),
-              },
-            } as any,
           },
         });
         await tx.orgHistory.create({
@@ -290,7 +279,7 @@ export class OrgStructureDbController {
         type: 'INITIATE',
         referenceType: 'ORG',
         referenceId: request.id,
-        referenceName: proposed.newNodeName,
+        referenceName: targetNodePath,
         createdBy: initiatorId,
         recipientUserIds: notificationRecipients,
       });
@@ -302,12 +291,15 @@ export class OrgStructureDbController {
 
   private static async applyApprovedModification(tx: any, request: any) {
     const requestData = request.data as any;
-    const oldData = requestData.oldData as OrgNodeSnapshot;
-    const proposed = (requestData.newData || requestData) as OrgNodeSnapshot;
+    const oldData = (request.oldData || requestData.oldData) as {
+      status?: OrgNodeStatus;
+    };
+    const targetNodePath = requestData.targetNodePath || requestData.nodePath;
+    const proposedStatus = requestData.status;
     if (
       request.impact !== 'INACTIVE' ||
       oldData?.status !== 'ACTIVE' ||
-      proposed?.status !== 'INACTIVE'
+      proposedStatus !== 'INACTIVE'
     ) {
       throw new AppError(
         'Only one-way organization deactivation requests can be approved',
@@ -316,7 +308,7 @@ export class OrgStructureDbController {
     }
 
     const node = await tx.orgStructure.findUnique({
-      where: { nodePath: oldData.nodePath },
+      where: { nodePath: targetNodePath },
     });
 
     if (!node || node.companyId !== request.companyId) {
@@ -331,13 +323,13 @@ export class OrgStructureDbController {
     await OrgStructureDbController.assertNoPrimaryAccessInSubtree(
       tx,
       request.companyId,
-      oldData.nodePath,
+      targetNodePath,
     );
 
     const subtree = await OrgStructureDbController.getSubtreeNodes(
       tx,
       request.companyId,
-      oldData.nodePath,
+      targetNodePath,
     );
     const subtreeIds = subtree.map((subtreeNode: any) => subtreeNode.id);
     await tx.userAccess.deleteMany({
@@ -1200,6 +1192,9 @@ export class OrgStructureDbController {
               resultList.push({
                 orgReqId: h.orgReqId,
                 companyCode: h.company.companyCode,
+                oldData:
+                  h.orgReq?.oldData ||
+                  ((h.orgReq?.data as any)?.oldData ?? null),
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -1263,6 +1258,8 @@ export class OrgStructureDbController {
         return {
           orgReqId: h.orgReqId,
           companyCode: h.company.companyCode,
+          oldData:
+            h.orgReq?.oldData || ((h.orgReq?.data as any)?.oldData ?? null),
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,
@@ -1360,6 +1357,7 @@ export class OrgStructureDbController {
         const { orgHistories, ...rest } = req;
         return {
           ...rest,
+          oldData: req.oldData || ((req.data as any)?.oldData ?? null),
           initiator,
           workflowName: w?.name || 'N/A',
           alias: w?.alias || 'N/A',

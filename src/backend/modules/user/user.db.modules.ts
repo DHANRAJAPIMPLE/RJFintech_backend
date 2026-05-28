@@ -1072,7 +1072,7 @@ export class UserDbController {
       const dataBlob = onb.data as any;
       const basic = dataBlob?.basicDetails || {};
       const permissions = dataBlob?.permissions || [];
-      const email = basic.email;
+      const email = basic.email || dataBlob?.targetUserEmail;
       const historyEmail = dataBlob?.targetUserEmail || email;
       const managerEmail = basic.reportingManager;
       const init = historyMap.get(`${historyEmail}_INITIATE`);
@@ -1106,6 +1106,8 @@ export class UserDbController {
 
       return {
         id: onb.id,
+        type: onb.type || 'INITIATE',
+        oldData: onb.oldData || dataBlob?.oldData || null,
         approver: approve?.user || null,
         basicDetails: {
           name: basic.name,
@@ -1114,6 +1116,7 @@ export class UserDbController {
           createdAt: onb.createdAt,
           designation: basic.designation || null,
           employeeId: basic.employeeId || null,
+          status: basic.status || null,
           reportingManagerName: managerInfo?.name || null,
           reportingManagerEmail: managerInfo?.email || null,
           initiatorName: init?.user?.name || null,
@@ -1993,6 +1996,30 @@ export class UserDbController {
       throw new AppError('No user changes were provided', 400);
     }
 
+    const oldBasicDetails: Record<string, unknown> = {};
+    for (const field of editableFields) {
+      if (
+        current.snapshot.basicDetails[field] !== proposed.basicDetails[field]
+      ) {
+        oldBasicDetails[field] = current.snapshot.basicDetails[field];
+      }
+    }
+    if (statusChanged) {
+      oldBasicDetails.status = current.snapshot.basicDetails.status;
+    }
+
+    const changedOldData: Record<string, unknown> = {};
+    if (Object.keys(oldBasicDetails).length > 0) {
+      changedOldData.basicDetails = oldBasicDetails;
+    }
+    const changedOldPermissions = [
+      ...permissionDiff.removed,
+      ...permissionDiff.updated.map((change) => change.oldData),
+    ];
+    if (changedOldPermissions.length > 0) {
+      changedOldData.permissions = changedOldPermissions;
+    }
+
     const impact = await UserDbController.calculateModificationImpact(
       type,
       current.snapshot,
@@ -2042,13 +2069,16 @@ export class UserDbController {
       throw new AppError('Organization node not found for user workflow', 400);
     }
 
-    const requestData = {
-      ...proposed,
+    const requestData: Record<string, unknown> = {
       targetUserEmail: current.user.email,
-      oldData: current.snapshot,
-      newData: proposed,
-      permissionDiff,
+      ...(data || {}),
     };
+    if (statusChanged) {
+      requestData.basicDetails = {
+        ...((requestData.basicDetails as Record<string, unknown>) || {}),
+        status: proposed.basicDetails.status,
+      };
+    }
     let notificationRecipients: string[] = [];
     const onboarding = await prisma.$transaction(async (tx) => {
       const request = await tx.userOnboarding.create({
@@ -2058,6 +2088,7 @@ export class UserDbController {
           type,
           impact,
           data: requestData as any,
+          oldData: changedOldData as any,
           remarks: remarks || null,
           status: 'PENDING',
         },
@@ -2081,17 +2112,6 @@ export class UserDbController {
         where: { id: request.id },
         data: {
           workflowId: workflow.workflowId,
-          data: {
-            ...requestData,
-            workflowSnapshot: {
-              levelsHash: levelsHash || null,
-              levels: workflow.approvers.map((level: any) => ({
-                level: level.level,
-                approversList: level.approversList,
-                mandatoryCount: level.mandatoryCount,
-              })),
-            },
-          } as any,
         },
       });
       await tx.userHistory.create({
@@ -2192,9 +2212,7 @@ export class UserDbController {
 
   private static async applyApprovedUserModification(tx: any, onboarding: any) {
     const requestData = onboarding.data as any;
-    const oldData = requestData.oldData as UserDataSnapshot | null;
-    const targetEmail =
-      requestData.targetUserEmail || oldData?.basicDetails?.email;
+    const targetEmail = requestData.targetUserEmail;
     const target = targetEmail
       ? await tx.user.findUnique({ where: { email: targetEmail } })
       : null;
@@ -2206,12 +2224,50 @@ export class UserDbController {
     }
 
     const targetUserId = target.id;
-    const proposed = (requestData.newData || requestData) as UserDataSnapshot;
-    const permissionDiff = (requestData.permissionDiff || {
-      added: [],
-      removed: [],
-      updated: [],
-    }) as UserPermissionDiff;
+    const current = await UserDbController.fetchUserSnapshot(
+      tx,
+      targetUserId,
+      onboarding.companyId,
+    );
+    const permissionMutations = Array.isArray(requestData?.permissions)
+      ? requestData.permissions
+      : [];
+    const proposed: UserDataSnapshot = {
+      basicDetails: { ...current.snapshot.basicDetails },
+      permissions:
+        onboarding.type === 'ARCHIVE'
+          ? []
+          : UserDbController.mergePermissionMutations(
+              current.snapshot.permissions,
+              permissionMutations,
+            ),
+    };
+    const changedDetails = requestData?.basicDetails || {};
+    const editableFields = [
+      'name',
+      'email',
+      'phone',
+      'designation',
+      'employeeId',
+      'reportingManager',
+    ] as const;
+    for (const field of editableFields) {
+      if (changedDetails[field] !== undefined) {
+        proposed.basicDetails[field] = changedDetails[field];
+      }
+    }
+    if (onboarding.type === 'ACTIVE') proposed.basicDetails.status = 'ACTIVE';
+    if (onboarding.type === 'INACTIVE') {
+      proposed.basicDetails.status = 'INACTIVE';
+    }
+    if (onboarding.type === 'ARCHIVE') proposed.basicDetails.status = 'ARCHIVE';
+    if (changedDetails.status !== undefined) {
+      proposed.basicDetails.status = changedDetails.status;
+    }
+    const permissionDiff = UserDbController.buildPermissionDiff(
+      current.snapshot.permissions,
+      proposed.permissions,
+    );
     const manager = proposed.basicDetails.reportingManager
       ? await tx.user.findUnique({
           where: { email: proposed.basicDetails.reportingManager },
@@ -2222,7 +2278,7 @@ export class UserDbController {
       throw new AppError('Reporting Manager not found', 404);
     }
 
-    if (oldData && oldData.basicDetails.email !== proposed.basicDetails.email) {
+    if (targetEmail && targetEmail !== proposed.basicDetails.email) {
       const existingEmailUser = await tx.user.findUnique({
         where: { email: proposed.basicDetails.email },
         select: { id: true },
@@ -2240,11 +2296,11 @@ export class UserDbController {
         phone: proposed.basicDetails.phone,
       },
     });
-    if (oldData && oldData.basicDetails.email !== proposed.basicDetails.email) {
+    if (targetEmail && targetEmail !== proposed.basicDetails.email) {
       await tx.userHistory.updateMany({
         where: {
           companyId: onboarding.companyId,
-          email: oldData.basicDetails.email,
+          email: targetEmail,
         },
         data: { email: proposed.basicDetails.email },
       });
@@ -2600,7 +2656,7 @@ export class UserDbController {
         basicDetails || {};
       const historyEmail =
         onboarding.type && onboarding.type !== 'INITIATE'
-          ? requestData?.oldData?.basicDetails?.email || email
+          ? (requestData?.targetUserEmail ?? email)
           : email;
       let notificationRecipients = onboarding.eligibleApprovers || [];
 
@@ -2611,11 +2667,14 @@ export class UserDbController {
         onboarding.type === 'INITIATE'
           ? Array.isArray(permissions) &&
             permissions.some((p: any) => p.roleName === 'Corp Admin')
-          : (requestData?.permissionDiff?.added || []).some(
-              (p: any) => p.roleName === 'Corp Admin',
-            ) ||
-            (requestData?.permissionDiff?.updated || []).some(
-              (p: any) => p.newData?.roleName === 'Corp Admin',
+          : (Array.isArray(requestData?.permissions)
+              ? requestData.permissions
+              : []
+            ).some(
+              (p: any) =>
+                p.roleName === 'Corp Admin' &&
+                p.operation !== 'REMOVE' &&
+                p.remove !== true,
             );
 
       const approverAccess = await prisma.userAccess.findFirst({
@@ -2978,7 +3037,7 @@ export class UserDbController {
 
           const userEmail =
             updated.type && updated.type !== 'INITIATE'
-              ? (updated.data as any)?.oldData?.basicDetails?.email
+              ? (updated.data as any)?.targetUserEmail
               : (updated.data as any)?.basicDetails?.email;
 
           if (approverId && userEmail) {
@@ -3101,10 +3160,21 @@ export class UserDbController {
         new Set(history.map((h) => h.reqId).filter(Boolean)),
       ) as string[];
 
-      const workflowApprovers = await prisma.workflowApprover.findMany({
-        where: { reqId: { in: reqIds } },
-        orderBy: { level: 'asc' },
-      });
+      const [workflowApprovers, requestSnapshots] = await Promise.all([
+        prisma.workflowApprover.findMany({
+          where: { reqId: { in: reqIds } },
+          orderBy: { level: 'asc' },
+        }),
+        reqIds.length > 0
+          ? prisma.userOnboarding.findMany({
+              where: { id: { in: reqIds } },
+              select: { id: true, data: true, oldData: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      const requestSnapshotMap = new Map(
+        requestSnapshots.map((request) => [request.id, request]),
+      );
 
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
@@ -3227,6 +3297,10 @@ export class UserDbController {
               resultList.push({
                 email: h.email,
                 companyCode: h.company.companyCode,
+                oldData:
+                  requestSnapshotMap.get(h.reqId)?.oldData ||
+                  ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ??
+                    null),
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -3281,6 +3355,10 @@ export class UserDbController {
         return {
           email: h.email,
           companyCode: h.company.companyCode,
+          oldData: h.reqId
+            ? requestSnapshotMap.get(h.reqId)?.oldData ||
+              ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ?? null)
+            : null,
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,

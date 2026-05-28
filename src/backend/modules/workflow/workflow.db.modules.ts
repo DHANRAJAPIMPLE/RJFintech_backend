@@ -267,7 +267,7 @@ export class WorkflowDbController {
 
     const proposedLevelsHash =
       WorkflowDbController.buildLevelsHash(proposedLevels);
-    const oldData = {
+    const currentData = {
       name: target.name,
       module: target.module,
       subModule: target.subModule,
@@ -278,22 +278,34 @@ export class WorkflowDbController {
       status: target.status,
     };
     const newData = {
-      ...oldData,
-      name: data?.name || oldData.name,
-      module: data?.module || oldData.module,
-      subModule: data?.subModule || oldData.subModule,
+      ...currentData,
+      name: data?.name || currentData.name,
+      module: data?.module || currentData.module,
+      subModule: data?.subModule || currentData.subModule,
       nodePath: proposedNodePath,
       levels: proposedLevels,
       levelsHash: proposedLevelsHash,
       alias: WorkflowDbController.buildAlias(proposedLevels),
-      status: type === 'INACTIVE' ? 'INACTIVE' : oldData.status,
+      status: type === 'INACTIVE' ? 'INACTIVE' : currentData.status,
     };
 
     if (
       type === 'UPDATE' &&
-      JSON.stringify(oldData) === JSON.stringify(newData)
+      JSON.stringify(currentData) === JSON.stringify(newData)
     ) {
       throw new AppError('Workflow update does not change any values', 400);
+    }
+
+    const oldData: Record<string, unknown> = {};
+    for (const field of ['name', 'module', 'subModule', 'nodePath', 'status']) {
+      if ((currentData as any)[field] !== (newData as any)[field]) {
+        oldData[field] = (currentData as any)[field];
+      }
+    }
+    if (JSON.stringify(currentData.levels) !== JSON.stringify(newData.levels)) {
+      oldData.levels = currentData.levels;
+      oldData.levelsHash = currentData.levelsHash;
+      oldData.alias = currentData.alias;
     }
 
     const duplicateActive = await prisma.workflow.findUnique({
@@ -329,12 +341,9 @@ export class WorkflowDbController {
     }
 
     const requestData = {
-      ...newData,
-      levelsHash: parentLevelsHash || null,
       target: requestedTarget,
-      oldData,
-      newData,
-      workflowSnapshot: { selectedLevelsHash: parentLevelsHash || null },
+      ...(data || {}),
+      ...(type === 'INACTIVE' ? { status: 'INACTIVE' } : {}),
     };
     let notificationRecipients: string[] = [];
     const request = await prisma.$transaction(async (tx) => {
@@ -348,7 +357,8 @@ export class WorkflowDbController {
           type,
           impact: type === 'INACTIVE' ? 'INACTIVE' : 'WORKFLOW_UPDATE',
           initiatorId,
-          data: requestData,
+          data: requestData as any,
+          oldData: oldData as any,
           alias: newData.alias,
           approvalRemark: remarks || null,
           eligibleApprovers: [],
@@ -457,8 +467,8 @@ export class WorkflowDbController {
     remark?: string | null,
   ) {
     const requestData = request.data as any;
-    const oldData = requestData.oldData as any;
-    if (!oldData) {
+    const requestedTarget = requestData.target;
+    if (!requestedTarget) {
       throw new AppError(
         'Target workflow is missing from modification request',
         400,
@@ -468,7 +478,7 @@ export class WorkflowDbController {
     const originalNode = await tx.orgStructure.findFirst({
       where: {
         companyId: request.companyId,
-        nodePath: oldData.nodePath,
+        nodePath: requestedTarget.nodePath,
       },
       select: { id: true },
     });
@@ -477,11 +487,12 @@ export class WorkflowDbController {
           where: {
             companyId: request.companyId,
             nodeId: originalNode.id,
-            module: oldData.module,
-            subModule: oldData.subModule,
-            levelsHash: oldData.levelsHash,
+            module: requestedTarget.module,
+            subModule: requestedTarget.subModule,
+            levelsHash: requestedTarget.levelsHash,
             status: 'ACTIVE',
           },
+          include: { levels: { orderBy: { level: 'asc' } } },
         })
       : null;
     if (!target) {
@@ -510,7 +521,19 @@ export class WorkflowDbController {
         },
       });
     } else {
-      const nextData = (requestData.newData || requestData) as any;
+      const currentLevels = WorkflowDbController.toLevelsPayload(target.levels);
+      const proposedLevels = requestData?.levels || currentLevels;
+      const proposedNodePath =
+        requestData?.nodePath || requestedTarget.nodePath;
+      const nextData = {
+        name: requestData?.name || target.name,
+        module: requestData?.module || target.module,
+        subModule: requestData?.subModule || target.subModule,
+        nodePath: proposedNodePath,
+        levels: proposedLevels,
+        levelsHash: WorkflowDbController.buildLevelsHash(proposedLevels),
+        alias: WorkflowDbController.buildAlias(proposedLevels),
+      };
       const node = await tx.orgStructure.findFirst({
         where: {
           companyId: request.companyId,
@@ -1416,6 +1439,9 @@ export class WorkflowDbController {
               resultList.push({
                 workflowReqId: h.workflowReqId,
                 workflowId: h.workflowReq?.workflowId || null,
+                oldData:
+                  h.workflowReq?.oldData ||
+                  ((h.workflowReq?.data as any)?.oldData ?? null),
                 nodeId: h.workflowReq?.nodeId || null,
                 workflowName: (h.workflowReq?.data as any)?.name || null,
                 module: h.workflowReq?.module || null,
@@ -1441,6 +1467,9 @@ export class WorkflowDbController {
         return {
           workflowReqId: h.workflowReqId,
           workflowId: h.workflowReq?.workflowId || null,
+          oldData:
+            h.workflowReq?.oldData ||
+            ((h.workflowReq?.data as any)?.oldData ?? null),
           nodeId: h.workflowReq?.nodeId || null,
           workflowName: (h.workflowReq?.data as any)?.name || null,
           module: h.workflowReq?.module || null,
@@ -1595,6 +1624,8 @@ export class WorkflowDbController {
         nodeId: true,
         workflowId: true,
         data: true,
+        oldData: true,
+        type: true,
         status: true,
         alias: true,
         approvalRemark: true,
@@ -1740,6 +1771,7 @@ export class WorkflowDbController {
         delete rest.workflowHistories;
         return {
           ...rest,
+          oldData: req.oldData || ((req.data as any)?.oldData ?? null),
           initiator,
           initiatorTimestamp,
           nodeType,

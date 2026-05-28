@@ -8,7 +8,7 @@ export type OrgNodeType =
 
 export type OrgActiveNode = {
   nodeName: string;
-  nodeType: OrgNodeType;
+  nodeType: OrgNodeType | null;
   nodePath: string;
 };
 
@@ -38,6 +38,8 @@ export type OrgPendingInitiator = {
 
 export type OrgPendingInternalItem = {
   id: string;
+  type?: 'INITIATE' | 'UPDATE';
+  oldData?: unknown | null;
   data: OrgPendingRequestData;
   createdAt: string;
   initiator?: OrgPendingInitiator | null;
@@ -47,8 +49,11 @@ export type OrgPendingInternalItem = {
 
 export type OrgPendingItem = {
   id: string;
+  type?: 'INITIATE' | 'UPDATE';
+  oldData?: unknown | null;
   newNodeName: string;
   nodeType: OrgNodeType;
+  status?: 'ACTIVE' | 'INACTIVE' | null;
   parentNode: OrgParentNode;
   initiatorName: string | null;
   initiatorEmail: string | null;
@@ -107,6 +112,7 @@ export type OrgStructureRequestInternal = {
     companyCode: string;
   };
   data: OrgPendingRequestData;
+  oldData?: unknown | null;
   eligibleApprovers?: string[];
   message?: string;
   error?: string;
@@ -165,6 +171,7 @@ export type OrgHistoryBaseItem = {
   newNodeName: string | null;
   nodeType: OrgNodeType | null;
   parentNodeName: string;
+  oldData?: unknown | null;
 };
 
 export type OrgHistoryActionItem = OrgHistoryBaseItem & {
