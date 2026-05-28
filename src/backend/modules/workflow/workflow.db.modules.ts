@@ -1582,6 +1582,7 @@ export class WorkflowDbController {
       const pendingWhere: any = {
         companyId: resolvedCompanyId,
         status: 'PENDING',
+        type: 'INITIATE',
         ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
       };
       const listWhere = type === 'active' ? activeWhere : pendingWhere;
