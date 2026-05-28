@@ -736,6 +736,26 @@ export class UserDbController {
       : [{ createdAt: 'desc' }, { id: 'desc' }];
   }
 
+  private static async getCurrentApproverRequestIds(
+    reqTable: string,
+    userId?: string | null,
+  ) {
+    if (!userId) return [];
+
+    const approverRows = await prisma.workflowApprover.findMany({
+      where: { reqTable, status: 'PENDING' },
+      select: { reqId: true, approversList: true },
+    });
+
+    return approverRows
+      .filter(
+        (row) =>
+          Array.isArray(row.approversList) &&
+          row.approversList.includes(userId),
+      )
+      .map((row) => row.reqId);
+  }
+
   private static formatProductionUser(u: any, pendingRequest?: any) {
     const mapping = u.userMappings[0];
 
@@ -846,6 +866,7 @@ export class UserDbController {
     requestedTopCursor?: string | null;
     direction?: 'next' | 'prev';
     query?: string | null;
+    viewerUserId?: string | null;
   }) {
     const {
       resolvedCompanyId,
@@ -861,14 +882,29 @@ export class UserDbController {
       requestedTopCursor = null,
       direction = 'next',
       query = null,
+      viewerUserId = null,
     } = params;
     const effectiveDirection = cursor ? direction : 'next';
+    const approverRequestIds =
+      await UserDbController.getCurrentApproverRequestIds(
+        'user_onboarding',
+        viewerUserId,
+      );
+    const pendingVisibleTypeWhere =
+      approverRequestIds.length > 0
+        ? {
+            OR: [
+              { type: 'INITIATE' as const },
+              { id: { in: approverRequestIds } },
+            ],
+          }
+        : { type: 'INITIATE' as const };
 
     if (isGlobal && !query) {
       const where = {
         status: 'PENDING' as const,
         companyId: resolvedCompanyId,
-        type: 'INITIATE' as const,
+        ...pendingVisibleTypeWhere,
       };
       const pageWhere =
         applyPagination && cursor
@@ -926,7 +962,11 @@ export class UserDbController {
       return { pendingCount, pendingOnboardings: pageRows, pageInfo };
     }
 
-    if (!isGlobal && visibleNodePaths.length === 0) {
+    if (
+      !isGlobal &&
+      visibleNodePaths.length === 0 &&
+      approverRequestIds.length === 0
+    ) {
       return {
         pendingCount: 0,
         pendingOnboardings: [],
@@ -944,11 +984,12 @@ export class UserDbController {
     }
 
     const visibleNodePathSet = new Set(visibleNodePaths);
+    const approverRequestIdSet = new Set(approverRequestIds);
 
     const where = {
       status: 'PENDING' as const,
       companyId: resolvedCompanyId,
-      type: 'INITIATE' as const,
+      ...pendingVisibleTypeWhere,
     };
 
     const allPendingOnboardings = await prisma.userOnboarding.findMany({
@@ -959,6 +1000,7 @@ export class UserDbController {
     const visiblePendingOnboardings = allPendingOnboardings.filter(
       (onb) =>
         (isGlobal ||
+          approverRequestIdSet.has(onb.id) ||
           UserDbController.isPendingOnboardingVisibleToNodePaths(
             onb,
             visibleNodePathSet,
@@ -1407,6 +1449,7 @@ export class UserDbController {
                 requestedTopCursor,
                 direction: effectiveDirection,
                 query,
+                viewerUserId: userId,
               }),
           activeNewWhere
             ? prisma.user.count({ where: activeNewWhere })
@@ -1446,12 +1489,18 @@ export class UserDbController {
       const activeEmails = activePage.pageRows
         .map((user: any) => user.email)
         .filter(Boolean);
+      const activeApproverRequestIds =
+        await UserDbController.getCurrentApproverRequestIds(
+          'user_onboarding',
+          userId,
+        );
       const activePendingRequests =
-        activeEmails.length > 0
+        activeEmails.length > 0 && activeApproverRequestIds.length > 0
           ? await prisma.userOnboarding.findMany({
               where: {
                 companyId: resolvedCompanyId,
                 status: 'PENDING',
+                id: { in: activeApproverRequestIds },
                 OR: activeEmails.flatMap((email: string) => [
                   {
                     data: {
@@ -1508,6 +1557,7 @@ export class UserDbController {
                 page,
                 isPagePagination,
                 query,
+                viewerUserId: userId,
               })
             ).pendingCount
           : pendingResult.pendingCount;

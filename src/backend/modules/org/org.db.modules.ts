@@ -38,6 +38,26 @@ export class OrgStructureDbController {
     );
   }
 
+  private static async getCurrentApproverRequestIds(
+    reqTable: string,
+    userId?: string | null,
+  ) {
+    if (!userId) return [];
+
+    const approverRows = await prisma.workflowApprover.findMany({
+      where: { reqTable, status: 'PENDING' },
+      select: { reqId: true, approversList: true },
+    });
+
+    return approverRows
+      .filter(
+        (row) =>
+          Array.isArray(row.approversList) &&
+          row.approversList.includes(userId),
+      )
+      .map((row) => row.reqId);
+  }
+
   private static toNodeSnapshot(node: any): OrgNodeSnapshot {
     return {
       newNodeName: node.nodeName,
@@ -1298,7 +1318,7 @@ export class OrgStructureDbController {
    */
   static async fetchStructure(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode, companyId } = req.body;
+      const { companyCode, companyId, userId } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -1364,8 +1384,15 @@ export class OrgStructureDbController {
           alias: w?.alias || 'N/A',
         };
       });
+      const approverRequestIds = new Set(
+        await OrgStructureDbController.getCurrentApproverRequestIds(
+          'org_structure_req',
+          userId,
+        ),
+      );
       const pendingByNodePath = new Map<string, any>();
       pendingWithDetails.forEach((request: any) => {
+        if (!approverRequestIds.has(request.id)) return;
         const requestData = request.data as any;
         const targetPath =
           requestData?.targetNodePath ||
@@ -1375,8 +1402,9 @@ export class OrgStructureDbController {
           pendingByNodePath.set(targetPath, request);
         }
       });
-      const initiatePendingWithDetails = pendingWithDetails.filter(
-        (request: any) => request.type === 'INITIATE',
+      const visiblePendingWithDetails = pendingWithDetails.filter(
+        (request: any) =>
+          request.type === 'INITIATE' || approverRequestIds.has(request.id),
       );
 
       // 4. Remove internal UUIDs and format for the tree UI
@@ -1403,7 +1431,7 @@ export class OrgStructureDbController {
         code: 200,
         data: {
           nodes: safeNodes,
-          pending: initiatePendingWithDetails,
+          pending: visiblePendingWithDetails,
         },
       });
     } catch (error) {

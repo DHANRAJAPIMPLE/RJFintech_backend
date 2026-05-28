@@ -1582,10 +1582,33 @@ export class WorkflowDbController {
       const pendingWhere: any = {
         companyId: resolvedCompanyId,
         status: 'PENDING',
-        type: 'INITIATE',
         ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
       };
-      const listWhere = type === 'active' ? activeWhere : pendingWhere;
+      const approverRows = userId
+        ? await prisma.workflowApprover.findMany({
+            where: { reqTable: 'workflow_req', status: 'PENDING' },
+            select: { reqId: true, approversList: true },
+          })
+        : [];
+      const approverRequestIds = approverRows
+        .filter(
+          (row) =>
+            Array.isArray(row.approversList) &&
+            row.approversList.includes(userId),
+        )
+        .map((row) => row.reqId);
+      const pendingListWhere: any = {
+        ...pendingWhere,
+        ...(approverRequestIds.length > 0
+          ? {
+              OR: [
+                { type: 'INITIATE' },
+                { id: { in: approverRequestIds } },
+              ],
+            }
+          : { type: 'INITIATE' }),
+      };
+      const listWhere = type === 'active' ? activeWhere : pendingListWhere;
       const pageWhere = pagination.cursor
         ? appendCursorWhere(
             listWhere,
@@ -1644,7 +1667,7 @@ export class WorkflowDbController {
       const filteredPendingRows = normalizedQuery
         ? (
             await prisma.workflowReq.findMany({
-              where: pendingWhere,
+              where: pendingListWhere,
               select: pendingSelect,
             })
           ).filter((request) => {
@@ -1661,7 +1684,7 @@ export class WorkflowDbController {
           prisma.workflow.count({ where: activeWhere }),
           filteredPendingRows
             ? Promise.resolve(filteredPendingRows.length)
-            : prisma.workflowReq.count({ where: pendingWhere }),
+            : prisma.workflowReq.count({ where: pendingListWhere }),
           type === 'active'
             ? prisma.workflow.findMany({
                 where: pageWhere,
@@ -1726,12 +1749,13 @@ export class WorkflowDbController {
           ),
         );
         const pendingModifications =
-          activeIds.length > 0
+          activeIds.length > 0 && approverRequestIds.length > 0
             ? await prisma.workflowReq.findMany({
                 where: {
                   companyId: resolvedCompanyId,
                   status: 'PENDING',
                   type: { in: ['UPDATE', 'INACTIVE'] },
+                  id: { in: approverRequestIds },
                 },
                 select: pendingSelect,
                 orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
