@@ -1375,6 +1375,9 @@ export class OrgStructureDbController {
           pendingByNodePath.set(targetPath, request);
         }
       });
+      const initiatePendingWithDetails = pendingWithDetails.filter(
+        (request: any) => request.type === 'INITIATE',
+      );
 
       // 4. Remove internal UUIDs and format for the tree UI
       const safeNodes = nodes.map((node) => ({
@@ -1400,7 +1403,7 @@ export class OrgStructureDbController {
         code: 200,
         data: {
           nodes: safeNodes,
-          pending: pendingWithDetails,
+          pending: initiatePendingWithDetails,
         },
       });
     } catch (error) {

@@ -868,6 +868,7 @@ export class UserDbController {
       const where = {
         status: 'PENDING' as const,
         companyId: resolvedCompanyId,
+        type: 'INITIATE' as const,
       };
       const pageWhere =
         applyPagination && cursor
@@ -947,6 +948,7 @@ export class UserDbController {
     const where = {
       status: 'PENDING' as const,
       companyId: resolvedCompanyId,
+      type: 'INITIATE' as const,
     };
 
     const allPendingOnboardings = await prisma.userOnboarding.findMany({
