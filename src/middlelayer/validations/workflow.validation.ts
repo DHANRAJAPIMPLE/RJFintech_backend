@@ -61,13 +61,13 @@ export const workflowModificationSchema = z
   .object({
     type: z.preprocess(normalizeRequestType, z.enum(['update', 'inactive'])),
     target: z
-      .object({
-        module: z.string().trim().min(1, 'Target module is required'),
-        subModule: z.string().trim().min(1, 'Target sub-module is required'),
-        nodePath: z.string().trim().min(1, 'Target node path is required'),
-        levelsHash: z.string().trim().min(1, 'Target levels hash is required'),
-      })
-      .strict(),
+        .object({
+          module: z.string().trim().min(1, 'Target module is required'),
+          subModule: z.string().trim().min(1, 'Target sub-module is required'),
+          nodePath: z.string().trim().min(1, 'Target node path is required'),
+          levelsHash: z.string().trim().min(1, 'Target levels hash is required'),
+        })
+        .strict(),
     name: nameSchema('Workflow name')
       .min(2, 'Workflow name must be at least 2 characters')
       .max(100, 'Workflow name too long')

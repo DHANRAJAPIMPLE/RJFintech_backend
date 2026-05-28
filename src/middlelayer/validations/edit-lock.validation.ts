@@ -28,14 +28,27 @@ export const editLockSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('WORKFLOW'),
-      target: z
-        .object({
-          nodePath: targetKeySchema('Node path'),
-          module: targetKeySchema('Module'),
-          subModule: targetKeySchema('Sub-module'),
-          levelsHash: targetKeySchema('Levels hash'),
-        })
-        .strict(),
+      target: z.preprocess(
+        (val: any) => {
+          if (val && typeof val === 'object') {
+            const newVal = { ...val };
+            if ('submodule' in val && val.submodule !== undefined && val.subModule === undefined) {
+              newVal.subModule = val.submodule;
+              delete newVal.submodule;
+            }
+            return newVal;
+          }
+          return val;
+        },
+        z
+          .object({
+            nodePath: targetKeySchema('Node path'),
+            module: targetKeySchema('Module'),
+            subModule: targetKeySchema('Sub-module'),
+            levelsHash: targetKeySchema('Levels hash'),
+          })
+          .strict(),
+      ),
     })
     .strict(),
 ]);
