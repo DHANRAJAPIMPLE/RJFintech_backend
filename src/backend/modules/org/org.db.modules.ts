@@ -35,13 +35,24 @@ export class OrgStructureDbController {
     message: string,
     referenceName: string,
   ) {
-    const signatories = await prisma.userAccess.findMany({
-      where: { companyId, isGlobalAccess: true },
+    const notificationUsers = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+        OR: [
+          { isGlobalAccess: true },
+          { roleCode: { in: ['SAAS_ADMIN', 'CORP_ADMIN'] } },
+        ],
+      },
       select: { userId: true },
     });
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
-      signatories.map((row) => row.userId),
+      notificationUsers.map((row) => row.userId),
     );
     await NotificationService.createRequestNotification({
       companyId,
@@ -107,6 +118,33 @@ export class OrgStructureDbController {
     ).map((row) => row.id);
 
     return Array.from(new Set([...approverReqIds, ...initiatedReqIds]));
+  }
+
+  private static async filterEffectivelyPendingRequestIds(
+    reqTable: string,
+    requestIds: string[],
+  ) {
+    if (requestIds.length === 0) return new Set<string>();
+    const approverRows = await prisma.workflowApprover.findMany({
+      where: { reqTable, reqId: { in: requestIds } },
+      select: { reqId: true, status: true },
+    });
+    const summary = new Map<string, { total: number; pending: number }>();
+    requestIds.forEach((id) => summary.set(id, { total: 0, pending: 0 }));
+    approverRows.forEach((row) => {
+      const current = summary.get(row.reqId) || { total: 0, pending: 0 };
+      current.total += 1;
+      if (row.status === 'PENDING') current.pending += 1;
+      summary.set(row.reqId, current);
+    });
+
+    const effective = new Set<string>();
+    summary.forEach((value, id) => {
+      if (value.total === 0 || value.pending > 0) {
+        effective.add(id);
+      }
+    });
+    return effective;
   }
 
   private static toNodeSnapshot(node: any): OrgNodeSnapshot {
@@ -189,7 +227,7 @@ export class OrgStructureDbController {
         const pendingTitle =
           data?.newNodeName || data?.targetNodePath || request.id;
         throw new AppError(
-          `Cannot inactivate node '${node.nodeName || node.nodePath}'. There is an active pending approval request '${pendingTitle}' initiated by ${initiator?.name || 'Unknown'} (${initiator?.email || 'unknown'}) on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
+          `Cannot inactivate node '${node.nodeName || node.nodePath}'. There is an active pending approval request '${pendingTitle}' initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
           400,
         );
       }
@@ -229,7 +267,12 @@ export class OrgStructureDbController {
         },
       },
     });
+    const effectiveIds = await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+      'workflow_req',
+      pendingRequests.map((request) => request.id),
+    );
     const blocking = pendingRequests.find((request: any) => {
+      if (!effectiveIds.has(request.id)) return false;
       const target = (request.data as any)?.target || {};
       return (
         target?.module === selectedWorkflow.module &&
@@ -242,7 +285,7 @@ export class OrgStructureDbController {
 
     const h = blocking.workflowHistories?.[0];
     throw new AppError(
-      `Selected approval workflow '${selectedWorkflow.name}' has a pending ${blocking.type} request initiated by ${h?.user?.name || 'Unknown'} (${h?.user?.email || 'unknown'}) on ${OrgStructureDbController.formatConflictDate(h?.createdAt || blocking.createdAt)}. Please resolve that workflow request first.`,
+      `Selected approval workflow '${selectedWorkflow.name}' has a pending ${blocking.type} request initiated by ${h?.user?.name || 'Unknown'} - ${h?.user?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(h?.createdAt || blocking.createdAt)}. Please resolve that workflow request first.`,
       409,
     );
   }
@@ -1550,7 +1593,7 @@ export class OrgStructureDbController {
       });
 
       // 2. Fetch pending requests for parallel tracking
-      const pendingRequests = await prisma.orgStructureReq.findMany({
+      const pendingRequestsRaw = await prisma.orgStructureReq.findMany({
         where: {
           companyId: resolvedCompanyId,
           status: 'PENDING',
@@ -1562,6 +1605,14 @@ export class OrgStructureDbController {
           },
         },
       });
+      const effectivePendingIds =
+        await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+          'org_structure_req',
+          pendingRequestsRaw.map((request) => request.id),
+        );
+      const pendingRequests = pendingRequestsRaw.filter((request) =>
+        effectivePendingIds.has(request.id),
+      );
 
       // 3. Resolve workflow names and aliases for pending requests
       const workflowIds = Array.from(

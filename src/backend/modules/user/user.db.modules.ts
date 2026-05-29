@@ -99,13 +99,24 @@ export class UserDbController {
     message: string,
     referenceName: string,
   ) {
-    const signatories = await prisma.userAccess.findMany({
-      where: { companyId, isGlobalAccess: true },
+    const notificationUsers = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+        OR: [
+          { isGlobalAccess: true },
+          { roleCode: { in: ['SAAS_ADMIN', 'CORP_ADMIN'] } },
+        ],
+      },
       select: { userId: true },
     });
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
-      signatories.map((row) => row.userId),
+      notificationUsers.map((row) => row.userId),
     );
     await NotificationService.createRequestNotification({
       companyId,
@@ -589,7 +600,7 @@ export class UserDbController {
 
     if (!optionMap.has(key)) {
       optionMap.set(key, {
-        label: name ? `${name} (${email})` : email,
+        label: name ? `${name} - ${email}` : email,
         value: email,
         id,
         name,
@@ -824,6 +835,33 @@ export class UserDbController {
     return Array.from(new Set([...approverReqIds, ...initiatedReqIds]));
   }
 
+  private static async filterEffectivelyPendingRequestIds(
+    reqTable: string,
+    requestIds: string[],
+  ) {
+    if (requestIds.length === 0) return new Set<string>();
+    const approverRows = await prisma.workflowApprover.findMany({
+      where: { reqTable, reqId: { in: requestIds } },
+      select: { reqId: true, status: true },
+    });
+    const summary = new Map<string, { total: number; pending: number }>();
+    requestIds.forEach((id) => summary.set(id, { total: 0, pending: 0 }));
+    approverRows.forEach((row) => {
+      const current = summary.get(row.reqId) || { total: 0, pending: 0 };
+      current.total += 1;
+      if (row.status === 'PENDING') current.pending += 1;
+      summary.set(row.reqId, current);
+    });
+
+    const effective = new Set<string>();
+    summary.forEach((value, id) => {
+      if (value.total === 0 || value.pending > 0) {
+        effective.add(id);
+      }
+    });
+    return effective;
+  }
+
   private static async assertNoPendingOrgModificationForNode(
     companyId: string,
     nodePath: string,
@@ -842,8 +880,15 @@ export class UserDbController {
         },
       },
     });
+    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
+      'org_structure_req',
+      pendingOrgRequests.map((request) => request.id),
+    );
+    const effectivePendingOrgRequests = pendingOrgRequests.filter((request) =>
+      effectiveIds.has(request.id),
+    );
 
-    const blocking = pendingOrgRequests.find((request) => {
+    const blocking = effectivePendingOrgRequests.find((request) => {
       const data = request.data as any;
       const targetNodePath =
         data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
@@ -859,7 +904,7 @@ export class UserDbController {
     const targetNodePath =
       data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
     throw new AppError(
-      `User initiation is blocked because organization node '${targetNodePath}' has a pending inactivation request initiated by ${initiatorHistory?.user?.name || 'Unknown'} (${initiatorHistory?.user?.email || 'unknown'}) on ${UserDbController.formatConflictDate(initiatorHistory?.createdAt || blocking.createdAt)}. Resolve the organization request first.`,
+      `User initiation is blocked because organization node '${targetNodePath}' has a pending inactivation request initiated by ${initiatorHistory?.user?.name || 'Unknown'} - ${initiatorHistory?.user?.email || 'unknown'} on ${UserDbController.formatConflictDate(initiatorHistory?.createdAt || blocking.createdAt)}. Resolve the organization request first.`,
       400,
     );
   }
@@ -883,8 +928,15 @@ export class UserDbController {
         },
       },
     });
+    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
+      'workflow_req',
+      pendingWorkflowRequests.map((request) => request.id),
+    );
+    const effectivePendingWorkflowRequests = pendingWorkflowRequests.filter(
+      (request) => effectiveIds.has(request.id),
+    );
 
-    const blocking = pendingWorkflowRequests.find((request) => {
+    const blocking = effectivePendingWorkflowRequests.find((request) => {
       const data = request.data as any;
       const target = data?.target || {};
       const targetNodePath = target?.nodePath || data?.nodePath;
@@ -902,7 +954,9 @@ export class UserDbController {
         return false;
       }
 
-      const nodeConflict = UserDbController.pathsOverlap(targetNodePath, nodePath);
+      // Only block the same node's user initiation; ancestor/root workflow
+      // modifications should not freeze every descendant node initiation.
+      const nodeConflict = targetNodePath === nodePath;
       const workflowConflict = levelsHash
         ? targetLevelsHash === levelsHash
         : false;
@@ -917,7 +971,7 @@ export class UserDbController {
     const workflowName =
       data?.name || target?.levelsHash || blocking.levelsHash || blocking.id;
     throw new AppError(
-      `User initiation is blocked because workflow '${workflowName}' has a pending ${blocking.type} request initiated by ${history?.user?.name || 'Unknown'} (${history?.user?.email || 'unknown'}) on ${UserDbController.formatConflictDate(history?.createdAt || blocking.createdAt)}. Resolve the workflow request first.`,
+      `User initiation is blocked because workflow '${workflowName}' has a pending ${blocking.type} request initiated by ${history?.user?.name || 'Unknown'} - ${history?.user?.email || 'unknown'} on ${UserDbController.formatConflictDate(history?.createdAt || blocking.createdAt)}. Resolve the workflow request first.`,
       400,
     );
   }
@@ -941,7 +995,7 @@ export class UserDbController {
     });
     if (!selectedWorkflow) return;
 
-    const pendingModification = await prisma.workflowReq.findFirst({
+    const pendingModifications = await prisma.workflowReq.findMany({
       where: {
         companyId,
         status: 'PENDING',
@@ -955,18 +1009,25 @@ export class UserDbController {
         },
       },
     });
+    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
+      'workflow_req',
+      pendingModifications.map((request) => request.id),
+    );
+    const pendingModification = pendingModifications.find((request: any) => {
+      if (!effectiveIds.has(request.id)) return false;
+      const target = (request.data as any)?.target || {};
+      return (
+        target?.module === selectedWorkflow.module &&
+        target?.subModule === selectedWorkflow.subModule &&
+        target?.nodePath === selectedWorkflow.orgStructure?.nodePath &&
+        target?.levelsHash === selectedWorkflow.levelsHash
+      );
+    });
     if (!pendingModification) return;
-    const target = (pendingModification.data as any)?.target || {};
-    const match =
-      target?.module === selectedWorkflow.module &&
-      target?.subModule === selectedWorkflow.subModule &&
-      target?.nodePath === selectedWorkflow.orgStructure?.nodePath &&
-      target?.levelsHash === selectedWorkflow.levelsHash;
-    if (!match) return;
 
     const h = pendingModification.workflowHistories?.[0];
     throw new AppError(
-      `Selected approval workflow '${selectedWorkflow.name}' has a pending ${pendingModification.type} request initiated by ${h?.user?.name || 'Unknown'} (${h?.user?.email || 'unknown'}) on ${UserDbController.formatConflictDate(h?.createdAt || pendingModification.createdAt)}. Please resolve that workflow request first.`,
+      `Selected approval workflow '${selectedWorkflow.name}' has a pending ${pendingModification.type} request initiated by ${h?.user?.name || 'Unknown'} - ${h?.user?.email || 'unknown'} on ${UserDbController.formatConflictDate(h?.createdAt || pendingModification.createdAt)}. Please resolve that workflow request first.`,
       409,
     );
   }
@@ -2303,7 +2364,7 @@ export class UserDbController {
       const initiator = initiateHistory?.user;
       const initiatedAt = initiateHistory?.createdAt || pending.createdAt;
       throw new AppError(
-        `Cannot inactivate user '${current.user.email}'. There is an active pending ${pending.type || 'UPDATE'} request initiated by ${initiator?.name || 'Unknown'} (${initiator?.email || 'unknown'}) on ${UserDbController.formatConflictDate(initiatedAt)}. Please resolve this pending request first.`,
+        `Cannot inactivate user '${current.user.email}'. There is an active pending ${pending.type || 'UPDATE'} request initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${UserDbController.formatConflictDate(initiatedAt)}. Please resolve this pending request first.`,
         400,
       );
     }

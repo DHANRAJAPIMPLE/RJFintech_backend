@@ -27,6 +27,33 @@ type WorkflowTarget = {
  * and the retrieval of active workflows and their histories.
  */
 export class WorkflowDbController {
+  private static async filterEffectivelyPendingRequestIds(
+    reqTable: string,
+    requestIds: string[],
+  ) {
+    if (requestIds.length === 0) return new Set<string>();
+    const approverRows = await prisma.workflowApprover.findMany({
+      where: { reqTable, reqId: { in: requestIds } },
+      select: { reqId: true, status: true },
+    });
+    const summary = new Map<string, { total: number; pending: number }>();
+    requestIds.forEach((id) => summary.set(id, { total: 0, pending: 0 }));
+    approverRows.forEach((row) => {
+      const current = summary.get(row.reqId) || { total: 0, pending: 0 };
+      current.total += 1;
+      if (row.status === 'PENDING') current.pending += 1;
+      summary.set(row.reqId, current);
+    });
+
+    const effective = new Set<string>();
+    summary.forEach((value, id) => {
+      if (value.total === 0 || value.pending > 0) {
+        effective.add(id);
+      }
+    });
+    return effective;
+  }
+
   private static async notifyConflict(
     companyId: string,
     initiatorId: string,
@@ -34,13 +61,24 @@ export class WorkflowDbController {
     referenceName: string,
     referenceId?: string | null,
   ) {
-    const signatories = await prisma.userAccess.findMany({
-      where: { companyId, isGlobalAccess: true },
+    const notificationUsers = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+        OR: [
+          { isGlobalAccess: true },
+          { roleCode: { in: ['SAAS_ADMIN', 'CORP_ADMIN'] } },
+        ],
+      },
       select: { userId: true },
     });
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
-      signatories.map((row) => row.userId),
+      notificationUsers.map((row) => row.userId),
     );
     await NotificationService.createRequestNotification({
       companyId,
@@ -260,7 +298,12 @@ export class WorkflowDbController {
         initiatorId: true,
       },
     });
+    const effectiveIds = await WorkflowDbController.filterEffectivelyPendingRequestIds(
+      'workflow_req',
+      pendingRequests.map((request) => request.id),
+    );
     const pendingTargetRequest = pendingRequests.find((request: any) => {
+      if (!effectiveIds.has(request.id)) return false;
       const pendingTarget = (request.data as any)?.target;
       return (
         pendingTarget?.module === target.module &&
@@ -287,7 +330,7 @@ export class WorkflowDbController {
       const workflowName =
         (pendingTargetRequest.data as any)?.name || target.levelsHash;
       throw new AppError(
-        `Cannot modify or inactivate workflow '${workflowName}'. A matching workflow request '${pendingAlias}' is already pending approval. Initiated by ${initiator?.name || 'Unknown'} (${initiator?.email || 'unknown'}) on ${WorkflowDbController.formatConflictDate(pendingTargetRequest.createdAt)}. Please resolve or cancel that request first.`,
+        `Cannot modify or inactivate workflow '${workflowName}'. A matching workflow request '${pendingAlias}' is already pending approval. Initiated by  -  on ${WorkflowDbController.formatConflictDate(pendingTargetRequest.createdAt)}. Please resolve or cancel that request first.`,
         409,
       );
     }
@@ -311,8 +354,15 @@ export class WorkflowDbController {
         },
       },
     });
+    const effectiveIds = await WorkflowDbController.filterEffectivelyPendingRequestIds(
+      'org_structure_req',
+      pendingOrgRequests.map((request) => request.id),
+    );
+    const effectivePendingOrgRequests = pendingOrgRequests.filter((request) =>
+      effectiveIds.has(request.id),
+    );
 
-    const blocking = pendingOrgRequests.find((request) => {
+    const blocking = effectivePendingOrgRequests.find((request) => {
       const data = request.data as any;
       const targetNodePath =
         data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
@@ -328,7 +378,7 @@ export class WorkflowDbController {
     const targetNodePath =
       data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
     throw new AppError(
-      `Cannot initiate or modify workflow on node '${nodePath}' because organization node '${targetNodePath}' has a pending inactivation request initiated by ${initiated?.user?.name || 'Unknown'} (${initiated?.user?.email || 'unknown'}) on ${WorkflowDbController.formatConflictDate(initiated?.createdAt || blocking.createdAt)}. Please resolve the organization request first.`,
+      `Cannot initiate or modify workflow on node '${nodePath}' because organization node '${targetNodePath}' has a pending inactivation request initiated by ${initiated?.user?.name || 'Unknown'} - ${initiated?.user?.email || 'unknown'} on ${WorkflowDbController.formatConflictDate(initiated?.createdAt || blocking.createdAt)}. Please resolve the organization request first.`,
       409,
     );
   }
@@ -870,7 +920,7 @@ export class WorkflowDbController {
           });
           const recipients = NotificationService.mergeRecipientUserIds(
             initiatorId,
-            signatories.map((row) => row.userId),
+            notificationUsers.map((row) => row.userId),
           );
           await NotificationService.createRequestNotification({
             companyId: resolvedCompanyId,
@@ -2027,7 +2077,16 @@ export class WorkflowDbController {
         await Promise.all([
           prisma.workflow.count({ where: activeWhere }),
           filteredPendingRows
-            ? Promise.resolve(filteredPendingRows.length)
+            ? (async () => {
+                const effectiveIds =
+                  await WorkflowDbController.filterEffectivelyPendingRequestIds(
+                    'workflow_req',
+                    filteredPendingRows.map((row: any) => row.id),
+                  );
+                return filteredPendingRows.filter((row: any) =>
+                  effectiveIds.has(row.id),
+                ).length;
+              })()
             : prisma.workflowReq.count({ where: pendingListWhere }),
           prisma.workflow.count({ where: inactiveWhere }),
           type === 'active' || type === 'inactive'
@@ -2158,7 +2217,15 @@ export class WorkflowDbController {
         });
       }
 
-      const pendingRequestsRaw = pageData.pageRows as any[];
+      const pendingRequestsRawUnfiltered = pageData.pageRows as any[];
+      const effectivePendingIds =
+        await WorkflowDbController.filterEffectivelyPendingRequestIds(
+          'workflow_req',
+          pendingRequestsRawUnfiltered.map((row) => row.id),
+        );
+      const pendingRequestsRaw = pendingRequestsRawUnfiltered.filter((row) =>
+        effectivePendingIds.has(row.id),
+      );
       const workflowIds = Array.from(
         new Set(
           pendingRequestsRaw.map((req) => req.workflowId).filter(Boolean),
