@@ -1334,10 +1334,40 @@ export class UserDbController {
         : [];
     const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
 
+    const existingUsers =
+      pendingEmails.length > 0
+        ? await prisma.user.findMany({
+            where: { email: { in: pendingEmails } },
+            include: {
+              userAccesses: {
+                where: { companyId: resolvedCompanyId },
+                include: {
+                  role: {
+                    select: {
+                      roleName: true,
+                      category: true,
+                      subCategory: true,
+                    },
+                  },
+                  orgStructure: {
+                    select: {
+                      nodeName: true,
+                      nodePath: true,
+                      nodeType: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : [];
+    const existingAccessMap = new Map(
+      existingUsers.map((user) => [user.email, user.userAccesses]),
+    );
+
     return pendingOnboardings.map((onb: any) => {
       const dataBlob = onb.data as any;
       const basic = dataBlob?.basicDetails || {};
-      const permissions = dataBlob?.permissions || [];
       const email = basic.email || dataBlob?.targetUserEmail;
       const historyEmail = dataBlob?.targetUserEmail || email;
       const managerEmail = basic.reportingManager;
@@ -1349,7 +1379,25 @@ export class UserDbController {
       const primary: any[] = [];
       const secondary: any[] = [];
 
-      permissions.forEach((p: any) => {
+      const incomingPermissions = Array.isArray(dataBlob?.permissions)
+        ? dataBlob.permissions
+        : [];
+      const effectivePermissions =
+        incomingPermissions.length > 0
+          ? incomingPermissions
+          : (existingAccessMap.get(historyEmail) || []).map((access: any) => ({
+              roleCategory: access.role?.category || '',
+              roleSubCategory: access.role?.subCategory || '',
+              roleName: access.role?.roleName || access.roleCode,
+              nodeName: access.orgStructure?.nodeName || '',
+              nodePath: access.orgStructure?.nodePath || '',
+              nodeType: access.orgStructure?.nodeType || null,
+              accessCategory: access.accessCategory || null,
+              accessType: access.accessType || 'SECONDARY',
+              isGlobalAccess: access.isGlobalAccess || false,
+            }));
+
+      effectivePermissions.forEach((p: any) => {
         const access = {
           roleCategory: p.roleCategory,
           roleSubCategory: p.roleSubCategory,

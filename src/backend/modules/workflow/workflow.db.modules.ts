@@ -27,6 +27,14 @@ type WorkflowTarget = {
  * and the retrieval of active workflows and their histories.
  */
 export class WorkflowDbController {
+  private static pathsOverlap(left: string, right: string) {
+    return (
+      left === right ||
+      left.startsWith(`${right}.`) ||
+      right.startsWith(`${left}.`)
+    );
+  }
+
   private static formatConflictDate(value: Date | string | null | undefined) {
     if (!value) return 'N/A';
     const date = value instanceof Date ? value : new Date(value);
@@ -254,6 +262,46 @@ export class WorkflowDbController {
     }
   }
 
+  private static async assertNoPendingOrgModificationForNode(
+    companyId: string,
+    nodePath: string,
+  ) {
+    const pendingOrgRequests = await prisma.orgStructureReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: 'UPDATE',
+      },
+      include: {
+        orgHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          include: { user: true },
+        },
+      },
+    });
+
+    const blocking = pendingOrgRequests.find((request) => {
+      const data = request.data as any;
+      const targetNodePath =
+        data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
+      return (
+        typeof targetNodePath === 'string' &&
+        WorkflowDbController.pathsOverlap(targetNodePath, nodePath)
+      );
+    });
+
+    if (!blocking) return;
+    const data = blocking.data as any;
+    const initiated = blocking.orgHistories?.[0];
+    const targetNodePath =
+      data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
+    throw new AppError(
+      `Cannot initiate or modify workflow on node '${nodePath}' because organization node '${targetNodePath}' has a pending inactivation request initiated by ${initiated?.user?.name || 'Unknown'} (${initiated?.user?.email || 'unknown'}) on ${WorkflowDbController.formatConflictDate(initiated?.createdAt || blocking.createdAt)}. Please resolve the organization request first.`,
+      409,
+    );
+  }
+
   private static async createModificationRequest(input: {
     initiatorId: string;
     companyId: string;
@@ -299,6 +347,10 @@ export class WorkflowDbController {
     if (!target) {
       throw new AppError('Active workflow not found', 404);
     }
+    await WorkflowDbController.assertNoPendingOrgModificationForNode(
+      companyId,
+      requestedTarget.nodePath,
+    );
 
     if (target.alias === '1M_1C_D' || target.name.includes('DEFAULT')) {
       throw new AppError('Default workflow cannot be modified', 400);
@@ -340,6 +392,10 @@ export class WorkflowDbController {
         400,
       );
     }
+    await WorkflowDbController.assertNoPendingOrgModificationForNode(
+      companyId,
+      proposedNodePath,
+    );
 
     const proposedLevelsHash =
       WorkflowDbController.buildLevelsHash(proposedLevels);
@@ -804,6 +860,10 @@ export class WorkflowDbController {
       }
 
       const { module, subModule, nodePath, levels } = data;
+      await WorkflowDbController.assertNoPendingOrgModificationForNode(
+        resolvedCompanyId,
+        nodePath,
+      );
 
       // 1. Resolve Node ID
       const node = await prisma.orgStructure.findFirst({
