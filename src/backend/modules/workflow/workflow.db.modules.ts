@@ -27,6 +27,12 @@ type WorkflowTarget = {
  * and the retrieval of active workflows and their histories.
  */
 export class WorkflowDbController {
+  private static formatConflictDate(value: Date | string | null | undefined) {
+    if (!value) return 'N/A';
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? 'N/A' : date.toISOString();
+  }
+
   private static buildLevelsHash(levels: any): string {
     const normalized = Object.keys(levels || {})
       .filter((key) => Boolean(levels[key]))
@@ -79,18 +85,22 @@ export class WorkflowDbController {
   private static async assertWorkflowNotUsedInPendingApproval(
     client: any,
     workflowId: string,
+    workflowName?: string,
+    alias?: string,
     excludeWorkflowReqId?: string,
   ) {
-    const [userRequest, orgRequest, workflowRequest] = await Promise.all([
-      client.userOnboarding.findFirst({
+    const [userRequests, orgRequests, workflowRequests] = await Promise.all([
+      client.userOnboarding.findMany({
         where: { workflowId, status: 'PENDING' },
-        select: { id: true },
+        select: { id: true, type: true, initiator: { select: { email: true } } },
+        take: 11,
       }),
-      client.orgStructureReq.findFirst({
+      client.orgStructureReq.findMany({
         where: { workflowId, status: 'PENDING' },
-        select: { id: true },
+        select: { id: true, type: true, initiator: { select: { email: true } } },
+        take: 11,
       }),
-      client.workflowReq.findFirst({
+      client.workflowReq.findMany({
         where: {
           workflowId,
           status: 'PENDING',
@@ -98,13 +108,25 @@ export class WorkflowDbController {
             ? { id: { not: excludeWorkflowReqId } }
             : {}),
         },
-        select: { id: true },
+        select: { id: true, type: true, initiator: { select: { email: true } } },
+        take: 11,
       }),
     ]);
 
-    if (userRequest || orgRequest || workflowRequest) {
+    const combined = [...userRequests, ...orgRequests, ...workflowRequests];
+    if (combined.length > 0) {
+      const lines = combined
+        .slice(0, 10)
+        .map(
+          (request: any) =>
+            `- Request ID: #${request.id} | Type: ${request.type || 'N/A'} | Initiator: ${request.initiator?.email || 'unknown'}`,
+        )
+        .join('\n');
+      const remaining = Math.max(combined.length - 10, 0);
+      const remainingLine =
+        remaining > 0 ? `\nand ${remaining} other request(s)...` : '';
       throw new AppError(
-        'Workflow is currently used by a pending approval request',
+        `Cannot inactivate workflow '${workflowName || workflowId}' (Levels: ${alias || 'N/A'}) because it is currently protecting ${combined.length} pending approval request(s). Please process these pending requests or route them to a different workflow before inactivating:\n${lines}${remainingLine}`,
         409,
       );
     }
@@ -167,9 +189,15 @@ export class WorkflowDbController {
         status: 'PENDING',
         type: { in: ['UPDATE', 'INACTIVE'] },
       },
-      select: { data: true },
+      select: {
+        id: true,
+        alias: true,
+        data: true,
+        createdAt: true,
+        initiator: { select: { name: true, email: true } },
+      },
     });
-    const hasPendingTarget = pendingRequests.some((request: any) => {
+    const pendingTargetRequest = pendingRequests.find((request: any) => {
       const pendingTarget = (request.data as any)?.target;
       return (
         pendingTarget?.module === target.module &&
@@ -179,8 +207,21 @@ export class WorkflowDbController {
       );
     });
 
-    if (hasPendingTarget) {
-      throw new AppError(message, 409);
+    if (pendingTargetRequest) {
+      if (message !== 'Workflow already has a pending modification') {
+        throw new AppError(message, 409);
+      }
+      const pendingAlias =
+        pendingTargetRequest.alias ||
+        (pendingTargetRequest.data as any)?.alias ||
+        pendingTargetRequest.id;
+      const initiator = pendingTargetRequest.initiator;
+      const workflowName =
+        (pendingTargetRequest.data as any)?.name || target.levelsHash;
+      throw new AppError(
+        `Cannot modify or inactivate workflow '${workflowName}'. A matching workflow request '${pendingAlias}' is already pending approval. Initiated by ${initiator?.name || 'Unknown'} (${initiator?.email || 'unknown'}) on ${WorkflowDbController.formatConflictDate(pendingTargetRequest.createdAt)}. Please resolve or cancel that request first.`,
+        409,
+      );
     }
   }
 
@@ -244,6 +285,8 @@ export class WorkflowDbController {
       WorkflowDbController.assertWorkflowNotUsedInPendingApproval(
         prisma,
         target.id,
+        target.name,
+        target.alias,
       ),
       WorkflowDbController.assertSelectedWorkflowNotPendingModification(
         prisma,
@@ -512,6 +555,8 @@ export class WorkflowDbController {
       WorkflowDbController.assertWorkflowNotUsedInPendingApproval(
         tx,
         target.id,
+        target.name,
+        target.alias,
         request.id,
       ),
     ]);
@@ -703,14 +748,27 @@ export class WorkflowDbController {
           });
           return res.status(201).json(request);
         } catch (error) {
+          const signatories = await prisma.userAccess.findMany({
+            where: { companyId: resolvedCompanyId, isGlobalAccess: true },
+            select: { userId: true },
+          });
+          const recipients = NotificationService.mergeRecipientUserIds(
+            initiatorId,
+            signatories.map((row) => row.userId),
+          );
           await NotificationService.createRequestNotification({
             companyId: resolvedCompanyId,
-            type: 'REJECT',
+            type: 'INITIATE',
+            name: 'Workflow modification blocked',
+            message:
+              error instanceof Error
+                ? error.message
+                : 'Workflow modification request was blocked',
             referenceType: 'WORKFLOW',
             referenceId: target.levelsHash,
             referenceName: data?.name || 'workflow modification',
             createdBy: initiatorId,
-            recipientUserIds: [initiatorId],
+            recipientUserIds: recipients,
           }).catch(() => undefined);
           throw error;
         }
@@ -1443,9 +1501,12 @@ export class WorkflowDbController {
               resultList.push({
                 workflowReqId: h.workflowReqId,
                 workflowId: h.workflowReq?.workflowId || null,
+                type: h.workflowReq?.type || null,
+                impact: h.workflowReq?.impact || null,
                 oldData:
                   h.workflowReq?.oldData ||
                   ((h.workflowReq?.data as any)?.oldData ?? null),
+                newData: h.workflowReq?.data || null,
                 nodeId: h.workflowReq?.nodeId || null,
                 workflowName: (h.workflowReq?.data as any)?.name || null,
                 module: h.workflowReq?.module || null,
@@ -1471,9 +1532,12 @@ export class WorkflowDbController {
         return {
           workflowReqId: h.workflowReqId,
           workflowId: h.workflowReq?.workflowId || null,
+          type: h.workflowReq?.type || null,
+          impact: h.workflowReq?.impact || null,
           oldData:
             h.workflowReq?.oldData ||
             ((h.workflowReq?.data as any)?.oldData ?? null),
+          newData: h.workflowReq?.data || null,
           nodeId: h.workflowReq?.nodeId || null,
           workflowName: (h.workflowReq?.data as any)?.name || null,
           module: h.workflowReq?.module || null,
@@ -1582,6 +1646,21 @@ export class WorkflowDbController {
                     { name: { contains: query, mode: 'insensitive' } },
                     { alias: { contains: query, mode: 'insensitive' } },
                     { module: { contains: query, mode: 'insensitive' } },
+                    { subModule: { contains: query, mode: 'insensitive' } },
+                    {
+                      orgStructure: {
+                        is: {
+                          nodeName: { contains: query, mode: 'insensitive' },
+                        },
+                      },
+                    },
+                    {
+                      orgStructure: {
+                        is: {
+                          nodePath: { contains: query, mode: 'insensitive' },
+                        },
+                      },
+                    },
                   ],
                 },
               ]
@@ -1614,6 +1693,21 @@ export class WorkflowDbController {
                     { name: { contains: query, mode: 'insensitive' } },
                     { alias: { contains: query, mode: 'insensitive' } },
                     { module: { contains: query, mode: 'insensitive' } },
+                    { subModule: { contains: query, mode: 'insensitive' } },
+                    {
+                      orgStructure: {
+                        is: {
+                          nodeName: { contains: query, mode: 'insensitive' },
+                        },
+                      },
+                    },
+                    {
+                      orgStructure: {
+                        is: {
+                          nodePath: { contains: query, mode: 'insensitive' },
+                        },
+                      },
+                    },
                   ],
                 },
               ]
@@ -1722,19 +1816,44 @@ export class WorkflowDbController {
       } as const;
       const normalizedQuery = query?.toLowerCase() || null;
       const filteredPendingRows = normalizedQuery
-        ? (
-            await prisma.workflowReq.findMany({
+        ? await (async () => {
+            const requests = await prisma.workflowReq.findMany({
               where: pendingListWhere,
               select: pendingSelect,
-            })
-          ).filter((request) => {
-            const data = request.data as any;
-            return [data?.name, request.alias, data?.module].some(
-              (value) =>
-                typeof value === 'string' &&
-                value.toLowerCase().includes(normalizedQuery),
-            );
-          })
+            });
+            const nodeIds = Array.from(
+              new Set(requests.map((request) => request.nodeId).filter(Boolean)),
+            ) as string[];
+            const nodes =
+              nodeIds.length > 0
+                ? await prisma.orgStructure.findMany({
+                    where: { id: { in: nodeIds } },
+                    select: { id: true, nodeName: true, nodePath: true },
+                  })
+                : [];
+            const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+            return requests.filter((request) => {
+              const data = request.data as any;
+              const target = data?.target || {};
+              const node = nodeMap.get(request.nodeId);
+              return [
+                data?.name,
+                request.alias,
+                data?.module,
+                data?.subModule,
+                target?.module,
+                target?.subModule,
+                target?.nodePath,
+                data?.nodePath,
+                node?.nodeName,
+                node?.nodePath,
+              ].some(
+                (value) =>
+                  typeof value === 'string' &&
+                  value.toLowerCase().includes(normalizedQuery),
+              );
+            });
+          })()
         : null;
       const [activeCount, pendingCount, inactiveCount, selectedRows, newCount] =
         await Promise.all([
@@ -1950,3 +2069,5 @@ export class WorkflowDbController {
     }
   }
 }
+
+

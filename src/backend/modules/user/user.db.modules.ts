@@ -78,6 +78,37 @@ type UserPermissionDiff = {
  * Handles production user data and pending user requests.
  */
 export class UserDbController {
+  private static formatConflictDate(value: Date | string | null | undefined) {
+    if (!value) return 'N/A';
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? 'N/A' : date.toISOString();
+  }
+
+  private static async notifyConflict(
+    companyId: string,
+    initiatorId: string,
+    message: string,
+    referenceName: string,
+  ) {
+    const signatories = await prisma.userAccess.findMany({
+      where: { companyId, isGlobalAccess: true },
+      select: { userId: true },
+    });
+    const recipients = NotificationService.mergeRecipientUserIds(
+      initiatorId,
+      signatories.map((row) => row.userId),
+    );
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'INITIATE',
+      name: 'User modification blocked',
+      message,
+      referenceType: 'USER',
+      referenceName,
+      createdBy: initiatorId,
+      recipientUserIds: recipients,
+    });
+  }
   private static normalizeUserRequestType(value: unknown): UserRequestType {
     const type =
       typeof value === 'string' ? value.trim().toUpperCase() : 'INITIATE';
@@ -2036,8 +2067,15 @@ export class UserDbController {
       },
     });
     if (pending) {
+      const initiateHistory = await prisma.userHistory.findFirst({
+        where: { reqId: pending.id, event: 'INITIATE' },
+        include: { user: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      const initiator = initiateHistory?.user;
+      const initiatedAt = initiateHistory?.createdAt || pending.createdAt;
       throw new AppError(
-        'User already has a pending onboarding or modification request',
+        `Cannot inactivate user '${current.user.email}'. There is an active pending ${pending.type || 'UPDATE'} request initiated by ${initiator?.name || 'Unknown'} (${initiator?.email || 'unknown'}) on ${UserDbController.formatConflictDate(initiatedAt)}. Please resolve this pending request first.`,
         400,
       );
     }
@@ -2201,8 +2239,43 @@ export class UserDbController {
           row.approversList.includes(target.id),
       );
       if (blockingApproval) {
+        const blockingReqIds = pendingApprovalRows
+          .filter(
+            (row) =>
+              Array.isArray(row.approversList) &&
+              row.approversList.includes(target.id),
+          )
+          .map((row) => row.reqId);
+        const userReqs = await prisma.userOnboarding.findMany({
+          where: { id: { in: blockingReqIds } },
+          select: {
+            id: true,
+            type: true,
+            data: true,
+            initiator: { select: { email: true } },
+          },
+          take: 11,
+        });
+        const lines = userReqs
+          .slice(0, 10)
+          .map((req) => {
+            const data = req.data as any;
+            const targetName =
+              data?.targetUserEmail ||
+              data?.target?.nodePath ||
+              data?.targetNodePath ||
+              data?.basicDetails?.email ||
+              'N/A';
+            return `- Request ID: #${req.id} | Type: ${req.type || 'N/A'} | Target: ${targetName}`;
+          })
+          .join('\n');
+        const remaining = Math.max(blockingReqIds.length - 10, 0);
+        const remainingLine =
+          remaining > 0
+            ? `\nand ${remaining} other pending workflow(s)...`
+            : '';
         throw new AppError(
-          'User access cannot be reduced while the user is required on a pending approval workflow',
+          `Cannot inactivate user '${current.user.email}' because they are currently assigned as an active/eligible approver for ${blockingReqIds.length} pending approval request(s). Please reassign the approval tasks or wait for them to finish before disabling this user:\n${lines}${remainingLine}`,
           400,
         );
       }
@@ -2549,7 +2622,30 @@ export class UserDbController {
   static async createUserOnboarding(req: Request, res: Response) {
     const type = UserDbController.normalizeUserRequestType(req.body?.type);
     if (type !== 'INITIATE') {
-      return UserDbController.createUserModificationRequest(req, res, type);
+      try {
+        return await UserDbController.createUserModificationRequest(
+          req,
+          res,
+          type,
+        );
+      } catch (error) {
+        const initiatorId = req.body?.initiatorId;
+        const companyId = req.body?.companyId;
+        const targetEmail = req.body?.targetEmail || req.body?.targetUserEmail;
+        if (
+          error instanceof AppError &&
+          typeof initiatorId === 'string' &&
+          typeof companyId === 'string'
+        ) {
+          await UserDbController.notifyConflict(
+            companyId,
+            initiatorId,
+            error.message,
+            String(targetEmail || 'user'),
+          );
+        }
+        throw error;
+      }
     }
 
     const {
@@ -3328,7 +3424,7 @@ export class UserDbController {
         reqIds.length > 0
           ? prisma.userOnboarding.findMany({
               where: { id: { in: reqIds } },
-              select: { id: true, data: true, oldData: true },
+              select: { id: true, data: true, oldData: true, type: true, impact: true },
             })
           : Promise.resolve([]),
       ]);
@@ -3456,11 +3552,14 @@ export class UserDbController {
 
               resultList.push({
                 email: h.email,
+                type: requestSnapshotMap.get(h.reqId)?.type || null,
+                impact: requestSnapshotMap.get(h.reqId)?.impact || null,
                 companyCode: h.company.companyCode,
                 oldData:
                   requestSnapshotMap.get(h.reqId)?.oldData ||
                   ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ??
                     null),
+                newData: requestSnapshotMap.get(h.reqId)?.data || null,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -3514,11 +3613,14 @@ export class UserDbController {
 
         return {
           email: h.email,
+          type: h.reqId ? (requestSnapshotMap.get(h.reqId)?.type || null) : null,
+          impact: h.reqId ? (requestSnapshotMap.get(h.reqId)?.impact || null) : null,
           companyCode: h.company.companyCode,
           oldData: h.reqId
             ? requestSnapshotMap.get(h.reqId)?.oldData ||
               ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ?? null)
             : null,
+          newData: h.reqId ? (requestSnapshotMap.get(h.reqId)?.data || null) : null,
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,

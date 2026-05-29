@@ -23,6 +23,38 @@ type OrgNodeSnapshot = {
  * Handles the creation, approval, and retrieval of organization units (Roots, Groups, Locations, etc.)
  */
 export class OrgStructureDbController {
+  private static formatConflictDate(value: Date | string | null | undefined) {
+    if (!value) return 'N/A';
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? 'N/A' : date.toISOString();
+  }
+
+  private static async notifyConflict(
+    companyId: string,
+    initiatorId: string,
+    message: string,
+    referenceName: string,
+  ) {
+    const signatories = await prisma.userAccess.findMany({
+      where: { companyId, isGlobalAccess: true },
+      select: { userId: true },
+    });
+    const recipients = NotificationService.mergeRecipientUserIds(
+      initiatorId,
+      signatories.map((row) => row.userId),
+    );
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'INITIATE',
+      name: 'Organization modification blocked',
+      message,
+      referenceType: 'ORG',
+      referenceName,
+      createdBy: initiatorId,
+      recipientUserIds: recipients,
+    });
+  }
+
   private static pathSegment(value: string) {
     return value
       .trim()
@@ -141,14 +173,11 @@ export class OrgStructureDbController {
 
   private static async assertNoPendingHierarchyConflict(
     companyId: string,
-    node: { nodePath: string },
+    node: { nodePath: string; nodeName?: string },
   ) {
     const pendingRequests = await prisma.orgStructureReq.findMany({
       where: { companyId, status: 'PENDING' },
-      select: {
-        data: true,
-        oldData: true,
-      },
+      include: { orgHistories: { where: { event: 'INITIATE' }, include: { user: true } } },
     });
 
     for (const request of pendingRequests) {
@@ -169,8 +198,12 @@ export class OrgStructureDbController {
           OrgStructureDbController.pathsOverlap(path, node.nodePath),
         )
       ) {
+        const initiator = request.orgHistories?.[0]?.user;
+        const initiatedAt = request.orgHistories?.[0]?.createdAt || request.createdAt;
+        const pendingTitle =
+          data?.newNodeName || data?.targetNodePath || request.id;
         throw new AppError(
-          'A parent or child organization node has a pending approval request',
+          `Cannot inactivate node '${node.nodeName || node.nodePath}'. There is an active pending approval request '${pendingTitle}' initiated by ${initiator?.name || 'Unknown'} (${initiator?.email || 'unknown'}) on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
           400,
         );
       }
@@ -195,23 +228,68 @@ export class OrgStructureDbController {
     client: any,
     companyId: string,
     nodePath: string,
+    nodeName?: string,
   ) {
     const nodes = await OrgStructureDbController.getSubtreeNodes(
       client,
       companyId,
       nodePath,
     );
-    const primaryAccess = await client.userAccess.findFirst({
+    const primaryAccesses = await client.userAccess.findMany({
       where: {
         companyId,
         nodeId: { in: nodes.map((node: any) => node.id) },
         accessType: 'PRIMARY',
       },
+      include: { user: { select: { email: true } } },
     });
 
-    if (primaryAccess) {
+    if (primaryAccesses.length > 0) {
+      const emails = primaryAccesses
+        .map((row: any) => row.user?.email)
+        .filter((email: string | null | undefined): email is string =>
+          Boolean(email),
+        );
+      const top = emails
+        .slice(0, 10)
+        .map((email: string) => `- ${email}`)
+        .join('\n');
+      const remaining = Math.max(emails.length - 10, 0);
+      const remainingLine =
+        remaining > 0 ? `\nand ${remaining} other user(s)...` : '';
       throw new AppError(
-        'Node cannot be made inactive while it or a child node has PRIMARY user access',
+        `Cannot inactivate node '${nodeName || nodePath}' because it (or its sub-departments) currently has ${primaryAccesses.length} active primary users. Please reassign the following users to a different primary node before deactivating:\n${top}${remainingLine}`,
+        400,
+      );
+    }
+  }
+
+  private static async assertNoActiveChildNodes(
+    client: any,
+    companyId: string,
+    nodePath: string,
+    nodeName?: string,
+  ) {
+    const children = await client.orgStructure.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        nodePath: { startsWith: `${nodePath}.` },
+      },
+      select: { nodeName: true },
+      take: 6,
+    });
+    if (children.length > 0) {
+      const childCount = await client.orgStructure.count({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+          nodePath: { startsWith: `${nodePath}.` },
+        },
+      });
+      const names = children.slice(0, 5).map((child: any) => child.nodeName).join(', ');
+      throw new AppError(
+        `Cannot inactivate node '${nodeName || nodePath}' because it contains ${childCount} active sub-departments. You must first inactivate the following child nodes: ${names}.`,
         400,
       );
     }
@@ -271,7 +349,6 @@ export class OrgStructureDbController {
         companyId,
         node,
       );
-
       const oldData = {
         status: node.status || 'ACTIVE',
       };
@@ -280,6 +357,7 @@ export class OrgStructureDbController {
         prisma as any,
         companyId,
         node.nodePath,
+        node.nodeName,
       );
 
       const requestData = {
@@ -342,6 +420,21 @@ export class OrgStructureDbController {
       });
       res.status(201).json(request);
     } catch (error) {
+      const initiatorId = req.body?.initiatorId;
+      const companyId = req.body?.companyId;
+      const targetNodePath = req.body?.targetNodePath;
+      if (
+        error instanceof AppError &&
+        typeof initiatorId === 'string' &&
+        typeof companyId === 'string'
+      ) {
+        await OrgStructureDbController.notifyConflict(
+          companyId,
+          initiatorId,
+          error.message,
+          String(targetNodePath || 'organization node'),
+        );
+      }
       next(error);
     }
   }
@@ -1091,10 +1184,20 @@ export class OrgStructureDbController {
                   }
                 : parentPathForFilter
                   ? {
-                      data: {
-                        path: ['parentNode', 'nodePath'],
-                        equals: parentPathForFilter,
-                      },
+                      OR: [
+                        {
+                          data: {
+                            path: ['parentNode', 'nodePath'],
+                            equals: parentPathForFilter,
+                          },
+                        },
+                        {
+                          data: {
+                            path: ['targetNodePath'],
+                            equals: nodePath,
+                          },
+                        },
+                      ],
                     }
                   : {},
             ].filter((obj) => Object.keys(obj).length > 0) as any,
@@ -1248,10 +1351,13 @@ export class OrgStructureDbController {
               const data = h.orgReq?.data as any;
               resultList.push({
                 orgReqId: h.orgReqId,
+                type: h.orgReq?.type || null,
+                impact: h.orgReq?.impact || null,
                 companyCode: h.company.companyCode,
                 oldData:
                   h.orgReq?.oldData ||
                   ((h.orgReq?.data as any)?.oldData ?? null),
+                newData: h.orgReq?.data || null,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -1314,9 +1420,12 @@ export class OrgStructureDbController {
 
         return {
           orgReqId: h.orgReqId,
+          type: h.orgReq?.type || null,
+          impact: h.orgReq?.impact || null,
           companyCode: h.company.companyCode,
           oldData:
             h.orgReq?.oldData || ((h.orgReq?.data as any)?.oldData ?? null),
+          newData: h.orgReq?.data || null,
           event: h.event,
           level: h.level,
           createdAt: h.createdAt,

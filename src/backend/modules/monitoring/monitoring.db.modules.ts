@@ -356,6 +356,13 @@ export class MonitoringService {
                 },
               },
             },
+            {
+              user: {
+                is: {
+                  email: { contains: query, mode: 'insensitive' as const },
+                },
+              },
+            },
           ],
         }
       : {};
