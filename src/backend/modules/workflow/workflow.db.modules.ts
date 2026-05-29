@@ -300,9 +300,9 @@ export class WorkflowDbController {
     });
     const effectiveIds = await WorkflowDbController.filterEffectivelyPendingRequestIds(
       'workflow_req',
-      pendingRequests.map((request) => request.id),
+      pendingRequests.map((request: { id: string }) => request.id),
     );
-    const pendingTargetRequest = pendingRequests.find((request: any) => {
+    const pendingTargetRequest = pendingRequests.find((request: { id: string; data: unknown; alias: string | null; initiatorId: string | null; createdAt: Date }) => {
       if (!effectiveIds.has(request.id)) return false;
       const pendingTarget = (request.data as any)?.target;
       return (
@@ -330,7 +330,7 @@ export class WorkflowDbController {
       const workflowName =
         (pendingTargetRequest.data as any)?.name || target.levelsHash;
       throw new AppError(
-        `Cannot modify or inactivate workflow '${workflowName}'. A matching workflow request '${pendingAlias}' is already pending approval. Initiated by  -  on ${WorkflowDbController.formatConflictDate(pendingTargetRequest.createdAt)}. Please resolve or cancel that request first.`,
+        `Cannot modify or inactivate workflow '${workflowName}'. A matching workflow request '${pendingAlias}' is already pending approval. Initiated by ${initiator?.name || 'unknown'} - ${initiator?.email || 'unknown'} on ${WorkflowDbController.formatConflictDate(pendingTargetRequest.createdAt)}. Please resolve or cancel that request first.`,
         409,
       );
     }
@@ -356,13 +356,13 @@ export class WorkflowDbController {
     });
     const effectiveIds = await WorkflowDbController.filterEffectivelyPendingRequestIds(
       'org_structure_req',
-      pendingOrgRequests.map((request) => request.id),
+      pendingOrgRequests.map((request: { id: string }) => request.id),
     );
-    const effectivePendingOrgRequests = pendingOrgRequests.filter((request) =>
+    const effectivePendingOrgRequests = pendingOrgRequests.filter((request: { id: string }) =>
       effectiveIds.has(request.id),
     );
 
-    const blocking = effectivePendingOrgRequests.find((request) => {
+    const blocking = effectivePendingOrgRequests.find((request: { data: unknown }) => {
       const data = request.data as any;
       const targetNodePath =
         data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
@@ -914,13 +914,13 @@ export class WorkflowDbController {
           });
           return res.status(201).json(request);
         } catch (error) {
-          const signatories = await prisma.userAccess.findMany({
+          await prisma.userAccess.findMany({
             where: { companyId: resolvedCompanyId, isGlobalAccess: true },
             select: { userId: true },
           });
           const recipients = NotificationService.mergeRecipientUserIds(
             initiatorId,
-            notificationUsers.map((row) => row.userId),
+            [],
           );
           await NotificationService.createRequestNotification({
             companyId: resolvedCompanyId,
@@ -959,8 +959,10 @@ export class WorkflowDbController {
       const nodeId = node.id;
       const levelsHash = WorkflowDbController.buildLevelsHash(levels);
 
-      // 2. Block if ACTIVE duplicate exists
-      const alreadyActive = await prisma.workflow.findUnique({
+      // 2. Block if duplicate exists on the same unique workflow identity.
+      // If an inactive record exists, callers must modify/reactivate it instead
+      // of creating a brand new INITIATE workflow request.
+      const existingWorkflow = await prisma.workflow.findUnique({
         where: {
           // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
           companyId_nodeId_module_subModule_levelsHash: {
@@ -971,9 +973,16 @@ export class WorkflowDbController {
             levelsHash,
           },
         },
+        select: { id: true, name: true, status: true },
       });
-      if (alreadyActive) {
-        throw new AppError(`Already active: "${alreadyActive.name}"`, 409);
+      if (existingWorkflow?.status === 'ACTIVE') {
+        throw new AppError(`Already active: "${existingWorkflow.name}"`, 409);
+      }
+      if (existingWorkflow) {
+        throw new AppError(
+          `Workflow "${existingWorkflow.name}" already exists with status ${existingWorkflow.status}. Please modify the existing workflow instead of initiating a new one.`,
+          409,
+        );
       }
 
       // 3. Block if PENDING duplicate exists
@@ -1284,8 +1293,8 @@ export class WorkflowDbController {
           // ── DUPLICATE CHECKS (only for full approval) ──────────────────
           const { companyId, nodeId, module, subModule, levelsHash } = request;
 
-          // Block if ACTIVE duplicate exists
-          const alreadyActive = await tx.workflow.findUnique({
+          // Block if duplicate exists on the same unique workflow identity.
+          const existingWorkflow = await tx.workflow.findUnique({
             where: {
               // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
               companyId_nodeId_module_subModule_levelsHash: {
@@ -1296,9 +1305,16 @@ export class WorkflowDbController {
                 levelsHash,
               },
             },
+            select: { id: true, name: true, status: true },
           });
-          if (alreadyActive) {
-            throw new AppError(`Already active: "${alreadyActive.name}"`, 409);
+          if (existingWorkflow?.status === 'ACTIVE') {
+            throw new AppError(`Already active: "${existingWorkflow.name}"`, 409);
+          }
+          if (existingWorkflow) {
+            throw new AppError(
+              `Workflow "${existingWorkflow.name}" already exists with status ${existingWorkflow.status}. Please modify the existing workflow instead of initiating a new one.`,
+              409,
+            );
           }
 
           // Block if OTHER PENDING duplicates exist
@@ -2021,6 +2037,7 @@ export class WorkflowDbController {
         type: true,
         status: true,
         alias: true,
+        impact: true,
         approvalRemark: true,
         levelsHash: true,
         createdAt: true,
@@ -2141,75 +2158,9 @@ export class WorkflowDbController {
 
       if (type === 'active' || type === 'inactive') {
         const activeRows = pageData.pageRows as any[];
-        const activeIds = activeRows.map((workflow) => workflow.id);
-        const activeKeys = new Set(
-          activeRows.map((workflow) =>
-            [
-              workflow.module,
-              workflow.subModule,
-              workflow.orgStructure?.nodePath,
-              workflow.levelsHash,
-            ].join('|'),
-          ),
-        );
-        const pendingModifications =
-          type === 'active' &&
-          activeIds.length > 0 &&
-          visiblePendingRequestIds.length > 0
-            ? await prisma.workflowReq.findMany({
-                where: {
-                  companyId: resolvedCompanyId,
-                  status: 'PENDING',
-                  type: { in: ['UPDATE', 'INACTIVE'] },
-                  id: { in: visiblePendingRequestIds },
-                },
-                select: pendingSelect,
-                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-              })
-            : [];
-        const pendingByWorkflowId = new Map<string, any>();
-        const pendingByTargetKey = new Map<string, any>();
-        pendingModifications.forEach((request: any) => {
-          if (request.workflowId && !pendingByWorkflowId.has(request.workflowId)) {
-            pendingByWorkflowId.set(request.workflowId, request);
-          }
-          const target = (request.data as any)?.target;
-          const key = [
-            target?.module,
-            target?.subModule,
-            target?.nodePath,
-            target?.levelsHash,
-          ].join('|');
-          if (activeKeys.has(key) && !pendingByTargetKey.has(key)) {
-            pendingByTargetKey.set(key, request);
-          }
-        });
-        const activeWithPending = activeRows.map((workflow) => {
-          const key = [
-            workflow.module,
-            workflow.subModule,
-            workflow.orgStructure?.nodePath,
-            workflow.levelsHash,
-          ].join('|');
-          const pending =
-            pendingByWorkflowId.get(workflow.id) || pendingByTargetKey.get(key);
-
-          return {
-            ...workflow,
-            pendingRequest: pending
-              ? {
-                  id: pending.id,
-                  type: pending.type,
-                  impact: pending.impact ?? null,
-                  status: pending.status,
-                  createdAt: pending.createdAt,
-                }
-              : null,
-          };
-        });
-
+        
         return res.status(200).json({
-          data: activeWithPending,
+          data: activeRows,
           activeCount,
           pendingCount,
           inactiveCount,
