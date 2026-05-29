@@ -250,6 +250,7 @@ export class WorkflowDbController {
       },
       orderBy: parentLevelsHash ? undefined : { createdAt: 'desc' },
       select: {
+        name: true,
         module: true,
         subModule: true,
         levelsHash: true,
@@ -269,12 +270,14 @@ export class WorkflowDbController {
       client,
       companyId,
       {
+        name: selectedWorkflow.name,
         module: selectedWorkflow.module,
         subModule: selectedWorkflow.subModule,
         nodePath: selectedWorkflow.orgStructure.nodePath,
         levelsHash: selectedWorkflow.levelsHash,
       },
       'Selected approval workflow has a pending modification',
+      selectedWorkflow.name,
     );
   }
 
@@ -283,6 +286,7 @@ export class WorkflowDbController {
     companyId: string,
     target: WorkflowTarget,
     message = 'Workflow already has a pending modification',
+    workflowDisplayName?: string | null,
   ) {
     const pendingRequests = await client.workflowReq.findMany({
       where: {
@@ -305,6 +309,8 @@ export class WorkflowDbController {
     const pendingTargetRequest = pendingRequests.find((request: { id: string; data: unknown; alias: string | null; initiatorId: string | null; createdAt: Date }) => {
       if (!effectiveIds.has(request.id)) return false;
       const pendingTarget = (request.data as any)?.target;
+      // Conflict matching is based on the actual target workflow identity,
+      // not alias. Alias can be the same across unrelated workflows.
       return (
         pendingTarget?.module === target.module &&
         pendingTarget?.subModule === target.subModule &&
@@ -327,10 +333,14 @@ export class WorkflowDbController {
             select: { name: true, email: true },
           })
         : null;
+      const pendingTarget = (pendingTargetRequest.data as any)?.target || {};
       const workflowName =
-        (pendingTargetRequest.data as any)?.name || target.levelsHash;
+        workflowDisplayName ||
+        (pendingTargetRequest.data as any)?.currentData?.name ||
+        (pendingTargetRequest.data as any)?.name ||
+        target.levelsHash;
       throw new AppError(
-        `Cannot modify or inactivate workflow '${workflowName}'. A matching workflow request '${pendingAlias}' is already pending approval. Initiated by ${initiator?.name || 'unknown'} - ${initiator?.email || 'unknown'} on ${WorkflowDbController.formatConflictDate(pendingTargetRequest.createdAt)}. Please resolve or cancel that request first.`,
+        `Cannot modify or inactivate workflow '${workflowName}'. A matching workflow request '${pendingAlias}' is already pending approval for the same target: module '${pendingTarget?.module || target.module}', subModule '${pendingTarget?.subModule || target.subModule}', nodePath '${pendingTarget?.nodePath || target.nodePath}', levelsHash '${pendingTarget?.levelsHash || target.levelsHash}'. Initiated by ${initiator?.name || 'unknown'} - ${initiator?.email || 'unknown'} on ${WorkflowDbController.formatConflictDate(pendingTargetRequest.createdAt)}. Please resolve or cancel that request first.`,
         409,
       );
     }
@@ -446,6 +456,8 @@ export class WorkflowDbController {
       prisma,
       companyId,
       requestedTarget,
+      'Workflow already has a pending modification',
+      target.name,
     );
 
     await Promise.all([
