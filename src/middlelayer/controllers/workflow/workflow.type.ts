@@ -95,7 +95,7 @@ export type WorkflowInitiator = {
 
 export type WorkflowPendingItem = {
   data: WorkflowPendingRequestData;
-  type?: 'INITIATE' | 'UPDATE' | 'INACTIVE';
+  type?: 'INITIATE' | 'UPDATE' | 'INACTIVE' | 'ACTIVE';
   impact?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
@@ -114,7 +114,7 @@ export type WorkflowPendingItem = {
 
 export type WorkflowPendingRequestSnapshot = {
   id: string;
-  type?: 'INITIATE' | 'UPDATE' | 'INACTIVE';
+  type?: 'INITIATE' | 'UPDATE' | 'INACTIVE' | 'ACTIVE';
   impact?: string | null;
   status?: string | null;
   oldData?: unknown | null;

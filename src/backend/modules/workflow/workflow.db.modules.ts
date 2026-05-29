@@ -386,7 +386,7 @@ export class WorkflowDbController {
   private static async createModificationRequest(input: {
     initiatorId: string;
     companyId: string;
-    type: 'UPDATE' | 'INACTIVE';
+    type: 'UPDATE' | 'INACTIVE' | 'ACTIVE';
     target: WorkflowTarget;
     data: any;
     parentLevelsHash?: string | null;
@@ -416,7 +416,6 @@ export class WorkflowDbController {
             module: requestedTarget.module,
             subModule: requestedTarget.subModule,
             levelsHash: requestedTarget.levelsHash,
-            status: 'ACTIVE',
           },
           include: {
             orgStructure: true,
@@ -426,7 +425,13 @@ export class WorkflowDbController {
       : null;
 
     if (!target) {
+      throw new AppError('Workflow not found', 404);
+    }
+    if ((type === 'UPDATE' || type === 'INACTIVE') && target.status !== 'ACTIVE') {
       throw new AppError('Active workflow not found', 404);
+    }
+    if (type === 'ACTIVE' && target.status !== 'INACTIVE') {
+      throw new AppError(`Workflow "${target.name}" is already active`, 409);
     }
     await WorkflowDbController.assertNoPendingOrgModificationForNode(
       companyId,
@@ -499,7 +504,12 @@ export class WorkflowDbController {
       levels: proposedLevels,
       levelsHash: proposedLevelsHash,
       alias: WorkflowDbController.buildAlias(proposedLevels),
-      status: type === 'INACTIVE' ? 'INACTIVE' : currentData.status,
+      status:
+        type === 'INACTIVE'
+          ? 'INACTIVE'
+          : type === 'ACTIVE'
+            ? 'ACTIVE'
+            : currentData.status,
     };
 
     if (
@@ -556,8 +566,13 @@ export class WorkflowDbController {
     const requestData = {
       target: requestedTarget,
       ...(data || {}),
-      ...(type === 'INACTIVE' ? { status: 'INACTIVE' } : {}),
+      ...(type === 'INACTIVE'
+        ? { status: 'INACTIVE' }
+        : type === 'ACTIVE'
+          ? { status: 'ACTIVE' }
+          : {}),
     };
+    const persistedType = type === 'ACTIVE' ? 'UPDATE' : type;
     let notificationRecipients: string[] = [];
     const request = await prisma.$transaction(async (tx) => {
       const created = await tx.workflowReq.create({
@@ -567,8 +582,13 @@ export class WorkflowDbController {
           module: newData.module,
           subModule: newData.subModule,
           levelsHash: newData.levelsHash,
-          type,
-          impact: type === 'INACTIVE' ? 'INACTIVE' : 'WORKFLOW_UPDATE',
+          type: persistedType,
+          impact:
+            type === 'INACTIVE'
+              ? 'INACTIVE'
+              : type === 'ACTIVE'
+                ? 'ACTIVE'
+                : 'WORKFLOW_UPDATE',
           initiatorId,
           data: requestData as any,
           oldData: oldData as any,
@@ -703,12 +723,21 @@ export class WorkflowDbController {
             module: requestedTarget.module,
             subModule: requestedTarget.subModule,
             levelsHash: requestedTarget.levelsHash,
-            status: 'ACTIVE',
           },
           include: { levels: { orderBy: { level: 'asc' } } },
         })
       : null;
     if (!target) {
+      throw new AppError('Target workflow no longer exists', 409);
+    }
+    const requestedStatus = requestData?.status;
+    const isActivation = requestedStatus === 'ACTIVE';
+    const isInactivation =
+      request.type === 'INACTIVE' || requestedStatus === 'INACTIVE';
+    if (isActivation && target.status !== 'INACTIVE') {
+      throw new AppError(`Workflow "${target.name}" is already active`, 409);
+    }
+    if (!isActivation && target.status !== 'ACTIVE') {
       throw new AppError('Active target workflow no longer exists', 409);
     }
 
@@ -727,11 +756,19 @@ export class WorkflowDbController {
       ),
     ]);
 
-    if (request.type === 'INACTIVE') {
+    if (isInactivation) {
       await tx.workflow.update({
         where: { id: target.id },
         data: {
           status: 'INACTIVE',
+          workflowReqIds: { push: request.id },
+        },
+      });
+    } else if (isActivation) {
+      await tx.workflow.update({
+        where: { id: target.id },
+        data: {
+          status: 'ACTIVE',
           workflowReqIds: { push: request.id },
         },
       });
@@ -897,7 +934,7 @@ export class WorkflowDbController {
         resolvedCompanyId = company.id;
       }
 
-      if (type === 'UPDATE' || type === 'INACTIVE') {
+      if (type === 'UPDATE' || type === 'INACTIVE' || type === 'ACTIVE') {
         if (!target) {
           throw new AppError('Workflow target details are required', 400);
         }
@@ -1437,7 +1474,14 @@ export class WorkflowDbController {
             ? 'Workflow initiate request approved and activated'
             : requestType === 'UPDATE'
               ? 'Workflow update request approved'
-              : 'Workflow inactivation request approved';
+            : (requestType === 'INACTIVE' ||
+                ((request.data as any)?.status === 'INACTIVE' &&
+                  requestType === 'UPDATE'))
+                ? 'Workflow inactivation request approved'
+                : (requestType === 'UPDATE' &&
+                     (request.data as any)?.status === 'ACTIVE')
+                  ? 'Workflow activation request approved'
+                  : 'Workflow update request approved';
       } else if (result && result.status === 'REJECTED') {
         message = `Workflow ${requestType.toLowerCase()} request rejected`;
       }

@@ -155,7 +155,8 @@ export class WorkflowController {
         typeof req.body?.type === 'string'
           ? req.body.type.trim().toLowerCase()
           : 'initiate';
-      const isModification = type === 'update' || type === 'inactive';
+      const isModification =
+        type === 'update' || type === 'inactive' || type === 'active';
       const validatedData = isModification
         ? zodParse(workflowModificationSchema, req.body)
         : zodParse(workflowOnboardingSchema, req.body);

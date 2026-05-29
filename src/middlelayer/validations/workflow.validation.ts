@@ -59,7 +59,7 @@ export const workflowOnboardingSchema = z
 
 export const workflowModificationSchema = z
   .object({
-    type: z.preprocess(normalizeRequestType, z.enum(['update', 'inactive'])),
+    type: z.preprocess(normalizeRequestType, z.enum(['update', 'inactive', 'active'])),
     target: z
         .object({
           module: z.string().trim().min(1, 'Target module is required'),
