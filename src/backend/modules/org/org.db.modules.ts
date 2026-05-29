@@ -210,6 +210,57 @@ export class OrgStructureDbController {
     }
   }
 
+  private static async assertSelectedApprovalWorkflowNotPendingModification(
+    companyId: string,
+    levelsHash?: string | null,
+  ) {
+    const selectedWorkflow = await prisma.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'ORG_STR',
+        status: 'ACTIVE',
+        ...(levelsHash
+          ? { levelsHash }
+          : { name: { contains: 'DEFAULT' } }),
+      },
+      orderBy: levelsHash ? undefined : { createdAt: 'desc' },
+      include: { orgStructure: { select: { nodePath: true } } },
+    });
+    if (!selectedWorkflow) return;
+
+    const pendingRequests = await prisma.workflowReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: ['UPDATE', 'INACTIVE'] },
+      },
+      include: {
+        workflowHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          include: { user: true },
+        },
+      },
+    });
+    const blocking = pendingRequests.find((request: any) => {
+      const target = (request.data as any)?.target || {};
+      return (
+        target?.module === selectedWorkflow.module &&
+        target?.subModule === selectedWorkflow.subModule &&
+        target?.nodePath === selectedWorkflow.orgStructure?.nodePath &&
+        target?.levelsHash === selectedWorkflow.levelsHash
+      );
+    });
+    if (!blocking) return;
+
+    const h = blocking.workflowHistories?.[0];
+    throw new AppError(
+      `Selected approval workflow '${selectedWorkflow.name}' has a pending ${blocking.type} request initiated by ${h?.user?.name || 'Unknown'} (${h?.user?.email || 'unknown'}) on ${OrgStructureDbController.formatConflictDate(h?.createdAt || blocking.createdAt)}. Please resolve that workflow request first.`,
+      409,
+    );
+  }
+
   private static async getSubtreeNodes(
     client: any,
     companyId: string,
@@ -316,6 +367,10 @@ export class OrgStructureDbController {
       await OrgStructureDbController.validateModificationPermission(
         initiatorId,
         companyId,
+      );
+      await OrgStructureDbController.assertSelectedApprovalWorkflowNotPendingModification(
+        companyId,
+        levelsHash || null,
       );
 
       if (!targetNodePath) {
@@ -864,7 +919,7 @@ export class OrgStructureDbController {
           type:
             result?.status === 'REJECTED'
               ? 'REJECT'
-              : result?.status === 'APPROVED'
+              : result?.status === 'APPROVED' && result?.type !== 'UPDATE'
                 ? 'ONBOARDED'
                 : 'APPROVE',
           referenceType: 'ORG',
@@ -1378,6 +1433,12 @@ export class OrgStructureDbController {
       // 4. Format history for easy display
       const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;
+        const displayEvent =
+          h.event === 'INITIATE' &&
+          h.orgReq?.type &&
+          h.orgReq.type !== 'INITIATE'
+            ? 'MODIFY'
+            : h.event;
 
         const levels = h.orgReqId ? workflowMap.get(h.orgReqId) : null;
         let workflowStatus = null;
@@ -1426,7 +1487,7 @@ export class OrgStructureDbController {
           oldData:
             h.orgReq?.oldData || ((h.orgReq?.data as any)?.oldData ?? null),
           newData: h.orgReq?.data || null,
-          event: h.event,
+          event: displayEvent,
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,

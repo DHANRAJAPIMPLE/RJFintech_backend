@@ -78,6 +78,14 @@ type UserPermissionDiff = {
  * Handles production user data and pending user requests.
  */
 export class UserDbController {
+  private static pathsOverlap(left: string, right: string) {
+    return (
+      left === right ||
+      left.startsWith(`${right}.`) ||
+      right.startsWith(`${left}.`)
+    );
+  }
+
   private static formatConflictDate(value: Date | string | null | undefined) {
     if (!value) return 'N/A';
     const date = value instanceof Date ? value : new Date(value);
@@ -813,6 +821,153 @@ export class UserDbController {
     return Array.from(new Set([...approverReqIds, ...initiatedReqIds]));
   }
 
+  private static async assertNoPendingOrgModificationForNode(
+    companyId: string,
+    nodePath: string,
+  ) {
+    const pendingOrgRequests = await prisma.orgStructureReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: 'UPDATE',
+      },
+      include: {
+        orgHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          include: { user: true },
+        },
+      },
+    });
+
+    const blocking = pendingOrgRequests.find((request) => {
+      const data = request.data as any;
+      const targetNodePath =
+        data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
+      return (
+        typeof targetNodePath === 'string' &&
+        UserDbController.pathsOverlap(targetNodePath, nodePath)
+      );
+    });
+
+    if (!blocking) return;
+    const data = blocking.data as any;
+    const initiatorHistory = blocking.orgHistories?.[0];
+    const targetNodePath =
+      data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
+    throw new AppError(
+      `User initiation is blocked because organization node '${targetNodePath}' has a pending inactivation request initiated by ${initiatorHistory?.user?.name || 'Unknown'} (${initiatorHistory?.user?.email || 'unknown'}) on ${UserDbController.formatConflictDate(initiatorHistory?.createdAt || blocking.createdAt)}. Resolve the organization request first.`,
+      400,
+    );
+  }
+
+  private static async assertNoPendingWorkflowModificationForNode(
+    companyId: string,
+    nodePath: string,
+    levelsHash?: string | null,
+  ) {
+    const pendingWorkflowRequests = await prisma.workflowReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: ['UPDATE', 'INACTIVE'] },
+      },
+      include: {
+        workflowHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          include: { user: true },
+        },
+      },
+    });
+
+    const blocking = pendingWorkflowRequests.find((request) => {
+      const data = request.data as any;
+      const target = data?.target || {};
+      const targetNodePath = target?.nodePath || data?.nodePath;
+      const targetModule = target?.module || data?.module || request.module;
+      const targetSubModule =
+        target?.subModule || data?.subModule || request.subModule;
+      const targetLevelsHash =
+        target?.levelsHash || data?.levelsHash || request.levelsHash;
+
+      if (
+        targetModule !== 'SYSTEM_ACCESS' ||
+        targetSubModule !== 'USER_ACC' ||
+        typeof targetNodePath !== 'string'
+      ) {
+        return false;
+      }
+
+      const nodeConflict = UserDbController.pathsOverlap(targetNodePath, nodePath);
+      const workflowConflict = levelsHash
+        ? targetLevelsHash === levelsHash
+        : false;
+
+      return nodeConflict || workflowConflict;
+    });
+
+    if (!blocking) return;
+    const data = blocking.data as any;
+    const target = data?.target || {};
+    const history = blocking.workflowHistories?.[0];
+    const workflowName =
+      data?.name || target?.levelsHash || blocking.levelsHash || blocking.id;
+    throw new AppError(
+      `User initiation is blocked because workflow '${workflowName}' has a pending ${blocking.type} request initiated by ${history?.user?.name || 'Unknown'} (${history?.user?.email || 'unknown'}) on ${UserDbController.formatConflictDate(history?.createdAt || blocking.createdAt)}. Resolve the workflow request first.`,
+      400,
+    );
+  }
+
+  private static async assertSelectedApprovalWorkflowNotPendingModification(
+    companyId: string,
+    levelsHash?: string | null,
+  ) {
+    const selectedWorkflow = await prisma.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'USER_ACC',
+        status: 'ACTIVE',
+        ...(levelsHash
+          ? { levelsHash }
+          : { name: { contains: 'DEFAULT' } }),
+      },
+      orderBy: levelsHash ? undefined : { createdAt: 'desc' },
+      include: { orgStructure: { select: { nodePath: true } } },
+    });
+    if (!selectedWorkflow) return;
+
+    const pendingModification = await prisma.workflowReq.findFirst({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: ['UPDATE', 'INACTIVE'] },
+      },
+      include: {
+        workflowHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          include: { user: true },
+        },
+      },
+    });
+    if (!pendingModification) return;
+    const target = (pendingModification.data as any)?.target || {};
+    const match =
+      target?.module === selectedWorkflow.module &&
+      target?.subModule === selectedWorkflow.subModule &&
+      target?.nodePath === selectedWorkflow.orgStructure?.nodePath &&
+      target?.levelsHash === selectedWorkflow.levelsHash;
+    if (!match) return;
+
+    const h = pendingModification.workflowHistories?.[0];
+    throw new AppError(
+      `Selected approval workflow '${selectedWorkflow.name}' has a pending ${pendingModification.type} request initiated by ${h?.user?.name || 'Unknown'} (${h?.user?.email || 'unknown'}) on ${UserDbController.formatConflictDate(h?.createdAt || pendingModification.createdAt)}. Please resolve that workflow request first.`,
+      409,
+    );
+  }
+
   private static formatProductionUser(u: any, pendingRequest?: any) {
     const mapping = u.userMappings[0];
 
@@ -823,10 +978,6 @@ export class UserDbController {
             type: pendingRequest.type,
             impact: pendingRequest.impact ?? null,
             status: pendingRequest.status,
-            oldData:
-              pendingRequest.oldData ||
-              ((pendingRequest.data as any)?.oldData ?? null),
-            newData: pendingRequest.data || null,
             createdAt: pendingRequest.createdAt,
           }
         : null,
@@ -2673,6 +2824,13 @@ export class UserDbController {
 
     const email = onboardingData.data?.basicDetails?.email;
     const permissions = onboardingData.data?.permissions || [];
+    const requestedNodePaths = Array.from(
+      new Set(
+        (Array.isArray(permissions) ? permissions : [])
+          .map((permission: any) => permission?.nodePath)
+          .filter((value: any): value is string => typeof value === 'string' && value.trim().length > 0),
+      ),
+    );
     const hasCorpAdminRole =
       Array.isArray(permissions) &&
       permissions.some((p: any) => p.roleName === 'Corp Admin');
@@ -2693,6 +2851,22 @@ export class UserDbController {
         );
       }
     }
+
+    for (const nodePath of requestedNodePaths) {
+      await UserDbController.assertNoPendingOrgModificationForNode(
+        resolvedCompanyId,
+        nodePath,
+      );
+      await UserDbController.assertNoPendingWorkflowModificationForNode(
+        resolvedCompanyId,
+        nodePath,
+        levelsHash || null,
+      );
+    }
+    await UserDbController.assertSelectedApprovalWorkflowNotPendingModification(
+      resolvedCompanyId,
+      levelsHash || null,
+    );
 
     // Fetch all global access users for this company to ensure they are in the master eligible list
     const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
@@ -3352,7 +3526,7 @@ export class UserDbController {
         type:
           result?.status === 'REJECTED'
             ? 'REJECT'
-            : result?.status === 'APPROVED'
+            : result?.status === 'APPROVED' && onboarding.type === 'INITIATE'
               ? 'ONBOARDED'
               : 'APPROVE',
         referenceType: 'USER',
@@ -3572,6 +3746,15 @@ export class UserDbController {
 
       // 4. Add actual history entries
       const formattedHistory = activeHistory.map((h) => {
+        const requestType = h.reqId
+          ? (requestSnapshotMap.get(h.reqId)?.type || null)
+          : null;
+        const displayEvent =
+          h.event === 'INITIATE' &&
+          requestType &&
+          requestType !== 'INITIATE'
+            ? 'MODIFY'
+            : h.event;
         const levels = h.reqId ? workflowMap.get(h.reqId) : null;
         let workflowStatus = null;
 
@@ -3613,7 +3796,7 @@ export class UserDbController {
 
         return {
           email: h.email,
-          type: h.reqId ? (requestSnapshotMap.get(h.reqId)?.type || null) : null,
+          type: requestType,
           impact: h.reqId ? (requestSnapshotMap.get(h.reqId)?.impact || null) : null,
           companyCode: h.company.companyCode,
           oldData: h.reqId
@@ -3621,7 +3804,7 @@ export class UserDbController {
               ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ?? null)
             : null,
           newData: h.reqId ? (requestSnapshotMap.get(h.reqId)?.data || null) : null,
-          event: h.event,
+          event: displayEvent,
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,

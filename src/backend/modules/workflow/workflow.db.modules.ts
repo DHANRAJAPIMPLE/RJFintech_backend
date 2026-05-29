@@ -108,12 +108,36 @@ export class WorkflowDbController {
             ? { id: { not: excludeWorkflowReqId } }
             : {}),
         },
-        select: { id: true, type: true, initiator: { select: { email: true } } },
+        select: { id: true, type: true, initiatorId: true },
         take: 11,
       }),
     ]);
 
-    const combined = [...userRequests, ...orgRequests, ...workflowRequests];
+    const initiatorIds = Array.from(
+      new Set(
+        workflowRequests
+          .map((request: any) => request.initiatorId)
+          .filter((id: any): id is string => typeof id === 'string'),
+      ),
+    );
+    const workflowInitiators =
+      initiatorIds.length > 0
+        ? await client.user.findMany({
+            where: { id: { in: initiatorIds } },
+            select: { id: true, email: true },
+          })
+        : [];
+    const workflowInitiatorMap = new Map(
+      workflowInitiators.map((user: any) => [user.id, user.email]),
+    );
+    const normalizedWorkflowRequests = workflowRequests.map((request: any) => ({
+      ...request,
+      initiator: {
+        email: workflowInitiatorMap.get(request.initiatorId) || 'unknown',
+      },
+    }));
+
+    const combined = [...userRequests, ...orgRequests, ...normalizedWorkflowRequests];
     if (combined.length > 0) {
       const lines = combined
         .slice(0, 10)
@@ -194,7 +218,7 @@ export class WorkflowDbController {
         alias: true,
         data: true,
         createdAt: true,
-        initiator: { select: { name: true, email: true } },
+        initiatorId: true,
       },
     });
     const pendingTargetRequest = pendingRequests.find((request: any) => {
@@ -215,7 +239,12 @@ export class WorkflowDbController {
         pendingTargetRequest.alias ||
         (pendingTargetRequest.data as any)?.alias ||
         pendingTargetRequest.id;
-      const initiator = pendingTargetRequest.initiator;
+      const initiator = pendingTargetRequest.initiatorId
+        ? await client.user.findUnique({
+            where: { id: pendingTargetRequest.initiatorId },
+            select: { name: true, email: true },
+          })
+        : null;
       const workflowName =
         (pendingTargetRequest.data as any)?.name || target.levelsHash;
       throw new AppError(
@@ -1248,7 +1277,7 @@ export class WorkflowDbController {
         type:
           result?.status === 'REJECTED'
             ? 'REJECT'
-            : result?.status === 'APPROVED'
+            : result?.status === 'APPROVED' && request.type === 'INITIATE'
               ? 'ONBOARDED'
               : 'APPROVE',
         referenceType: 'WORKFLOW',
@@ -1529,6 +1558,12 @@ export class WorkflowDbController {
 
       // 4. Format the output for the UI
       const formattedHistories = histories.map((h) => {
+        const displayEvent =
+          h.event === 'INITIATE' &&
+          h.workflowReq?.type &&
+          h.workflowReq.type !== 'INITIATE'
+            ? 'MODIFY'
+            : h.event;
         return {
           workflowReqId: h.workflowReqId,
           workflowId: h.workflowReq?.workflowId || null,
@@ -1548,7 +1583,7 @@ export class WorkflowDbController {
           nodeName: (h.workflowReq?.data as any)?.nodeName || null,
           nodeType: (h.workflowReq?.data as any)?.nodeType || null,
           companyCode: h.company.companyCode,
-          event: h.event,
+          event: displayEvent,
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
@@ -1975,9 +2010,6 @@ export class WorkflowDbController {
                   type: pending.type,
                   impact: pending.impact ?? null,
                   status: pending.status,
-                  oldData:
-                    pending.oldData || ((pending.data as any)?.oldData ?? null),
-                  newData: pending.data || null,
                   createdAt: pending.createdAt,
                 }
               : null,
