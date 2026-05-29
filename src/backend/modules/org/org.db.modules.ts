@@ -155,20 +155,6 @@ export class OrgStructureDbController {
       );
     }
 
-    const adminAccess = await prisma.userAccess.findFirst({
-      where: {
-        userId: initiatorId,
-        companyId,
-        OR: [{ roleCode: 'SAAS_ADMIN' }, { roleCode: 'CORP_ADMIN' }],
-      },
-    });
-
-    if (adminAccess) {
-      throw new AppError(
-        'SAAS Admin and Corp Admin cannot modify organization structures',
-        403,
-      );
-    }
   }
 
   private static async assertNoPendingHierarchyConflict(
@@ -403,6 +389,12 @@ export class OrgStructureDbController {
       await OrgStructureDbController.assertNoPendingHierarchyConflict(
         companyId,
         node,
+      );
+      await OrgStructureDbController.assertNoActiveChildNodes(
+        prisma as any,
+        companyId,
+        node.nodePath,
+        node.nodeName,
       );
       const oldData = {
         status: node.status || 'ACTIVE',
@@ -884,6 +876,7 @@ export class OrgStructureDbController {
         throw new Error('Invalid status value');
       });
 
+      const requestType = String((result as any)?.type || 'INITIATE').toUpperCase();
       let message = 'Org structure request processed';
       if (result && result.status === 'PARTIAL_APPROVED') {
         message = `Org structure request approved at Level ${result.level}, pending remaining approval`;
@@ -895,11 +888,11 @@ export class OrgStructureDbController {
           );
       } else if (result && result.status === 'APPROVED') {
         message =
-          result.type === 'UPDATE'
+          requestType === 'UPDATE'
             ? 'Org structure modification approved'
             : 'Org structure request approved and node created';
       } else if (result && result.status === 'REJECTED') {
-        message = 'Org structure request rejected';
+        message = `Org structure ${requestType.toLowerCase()} request rejected`;
       }
 
       if (notificationCompanyId) {
@@ -936,6 +929,27 @@ export class OrgStructureDbController {
         data: result,
       });
     } catch (error) {
+      const initiatorId = req.body?.initiatorId;
+      let resolvedCompanyId = req.body?.companyId as string | undefined;
+      if (!resolvedCompanyId && typeof req.body?.companyCode === 'string') {
+        const company = await prisma.company.findUnique({
+          where: { companyCode: req.body.companyCode },
+          select: { id: true },
+        });
+        resolvedCompanyId = company?.id;
+      }
+      if (
+        error instanceof AppError &&
+        typeof initiatorId === 'string' &&
+        typeof resolvedCompanyId === 'string'
+      ) {
+        await OrgStructureDbController.notifyConflict(
+          resolvedCompanyId,
+          initiatorId,
+          error.message,
+          String(req.body?.targetNodePath || req.body?.data?.newNodeName || 'organization'),
+        );
+      }
       next(error);
     }
   }
@@ -1181,83 +1195,34 @@ export class OrgStructureDbController {
       let whereCondition: any = { companyId: resolvedCompanyId };
 
       if (nodeName || nodePath) {
-        // 1. Resolve parent path if nodePath is likely the node's own path
-        let parentPathForFilter = nodePath;
-        let isRootSearch = false;
-
-        if (nodePath) {
-          const targetNode = await prisma.orgStructure.findFirst({
-            where: {
-              companyId: resolvedCompanyId,
-              nodePath,
-            },
-            select: { nodeType: true },
-          });
-
-          if (targetNode?.nodeType === 'ROOT') {
-            parentPathForFilter = undefined;
-            isRootSearch = true;
-          }
-        }
-
-        if (!isRootSearch && nodeName && nodePath) {
-          const safeName = nodeName
-            .trim()
-            .replace(/[^a-zA-Z0-9_]/g, '_')
-            .toUpperCase();
-          if (nodePath.endsWith(safeName)) {
-            const parts = nodePath.split('.');
-            if (parts.length > 1) {
-              parentPathForFilter = parts.slice(0, -1).join('.');
-            } else {
-              // If it's a single part path and matches safeName, it's a ROOT node request
-              parentPathForFilter = undefined;
-              isRootSearch = true;
-            }
-          }
-        }
-
-        // 2. Find all matching OrgStructureReq IDs first
-        const matchingReqs = await prisma.orgStructureReq.findMany({
-          where: {
-            companyId: resolvedCompanyId,
-            AND: [
-              nodeName
-                ? {
-                    data: {
-                      path: ['newNodeName'],
-                      equals: nodeName,
-                    },
-                  }
-                : {},
-              isRootSearch
-                ? {
-                    data: {
-                      path: ['nodeType'],
-                      equals: 'ROOT',
-                    },
-                  }
-                : parentPathForFilter
-                  ? {
-                      OR: [
-                        {
-                          data: {
-                            path: ['parentNode', 'nodePath'],
-                            equals: parentPathForFilter,
-                          },
-                        },
-                        {
-                          data: {
-                            path: ['targetNodePath'],
-                            equals: nodePath,
-                          },
-                        },
-                      ],
-                    }
-                  : {},
-            ].filter((obj) => Object.keys(obj).length > 0) as any,
-          },
-          select: { id: true },
+        const normalizedNodeName = nodeName?.trim().toLowerCase() || null;
+        const matchingReqs = (
+          await prisma.orgStructureReq.findMany({
+            where: { companyId: resolvedCompanyId },
+            select: { id: true, data: true, type: true },
+          })
+        ).filter((req) => {
+          const data = req.data as any;
+          const candidateNodeName = String(
+            data?.newNodeName ||
+              data?.currentData?.nodeName ||
+              data?.parentNode?.nodeName ||
+              '',
+          ).toLowerCase();
+          const targetNodePath = String(
+            data?.targetNodePath ||
+              data?.currentData?.nodePath ||
+              data?.nodePath ||
+              '',
+          );
+          const parentNodePath = String(data?.parentNode?.nodePath || '');
+          const nodeNameMatches = normalizedNodeName
+            ? candidateNodeName === normalizedNodeName
+            : true;
+          const nodePathMatches = nodePath
+            ? targetNodePath === nodePath || parentNodePath === nodePath
+            : true;
+          return nodeNameMatches && nodePathMatches;
         });
 
         const reqIds = matchingReqs.map((r) => r.id);

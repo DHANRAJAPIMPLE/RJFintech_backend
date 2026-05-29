@@ -27,6 +27,34 @@ type WorkflowTarget = {
  * and the retrieval of active workflows and their histories.
  */
 export class WorkflowDbController {
+  private static async notifyConflict(
+    companyId: string,
+    initiatorId: string,
+    message: string,
+    referenceName: string,
+    referenceId?: string | null,
+  ) {
+    const signatories = await prisma.userAccess.findMany({
+      where: { companyId, isGlobalAccess: true },
+      select: { userId: true },
+    });
+    const recipients = NotificationService.mergeRecipientUserIds(
+      initiatorId,
+      signatories.map((row) => row.userId),
+    );
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'INITIATE',
+      name: 'Workflow request blocked',
+      message,
+      referenceType: 'WORKFLOW',
+      referenceId: referenceId || null,
+      referenceName,
+      createdBy: initiatorId,
+      recipientUserIds: recipients,
+    }).catch(() => undefined);
+  }
+
   private static pathsOverlap(left: string, right: string) {
     return (
       left === right ||
@@ -1003,6 +1031,30 @@ export class WorkflowDbController {
 
       res.status(201).json(result);
     } catch (error) {
+      const initiatorId = req.body?.initiatorId;
+      const refName =
+        req.body?.data?.name || req.body?.target?.levelsHash || 'workflow';
+      let resolvedCompanyId = req.body?.companyId as string | undefined;
+      if (!resolvedCompanyId && typeof req.body?.companyCode === 'string') {
+        const company = await prisma.company.findUnique({
+          where: { companyCode: req.body.companyCode },
+          select: { id: true },
+        });
+        resolvedCompanyId = company?.id;
+      }
+      if (
+        error instanceof AppError &&
+        typeof initiatorId === 'string' &&
+        typeof resolvedCompanyId === 'string'
+      ) {
+        await WorkflowDbController.notifyConflict(
+          resolvedCompanyId,
+          initiatorId,
+          error.message,
+          String(refName),
+          req.body?.target?.levelsHash || null,
+        );
+      }
       next(error);
     }
   }
@@ -1306,13 +1358,19 @@ export class WorkflowDbController {
         throw new Error('Invalid status');
       });
 
+      const requestType = String(request.type || 'INITIATE').toUpperCase();
       let message = `Workflow request ${status.toLowerCase()}ed successfully`;
       if (result && result.status === 'PARTIAL_APPROVED') {
         message = `Workflow request approved at Level ${result.level}, pending remaining approval`;
       } else if (result && result.status === 'APPROVED') {
-        message = 'Workflow request approved successfully';
+        message =
+          requestType === 'INITIATE'
+            ? 'Workflow initiate request approved and activated'
+            : requestType === 'UPDATE'
+              ? 'Workflow update request approved'
+              : 'Workflow inactivation request approved';
       } else if (result && result.status === 'REJECTED') {
-        message = 'Workflow request rejected successfully';
+        message = `Workflow ${requestType.toLowerCase()} request rejected`;
       }
 
       if (result?.status === 'PARTIAL_APPROVED') {

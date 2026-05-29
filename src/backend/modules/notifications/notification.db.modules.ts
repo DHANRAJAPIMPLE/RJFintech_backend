@@ -372,6 +372,28 @@ export class NotificationService {
       input,
       actorName,
     );
+    const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);
+    const existingNotification = await prisma.notification.findFirst({
+      where: {
+        companyId: input.companyId,
+        type: input.type,
+        referenceType: input.referenceType || null,
+        referenceId: input.referenceId || null,
+        createdBy: input.createdBy,
+        name: content.name,
+        message: content.message,
+        createdAt: { gte: duplicateWindowStart },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        createdByUser: {
+          select: { name: true, email: true },
+        },
+      },
+    });
+    if (existingNotification) {
+      return existingNotification;
+    }
     const requestedRecipients = NotificationService.unique(
       input.recipientUserIds || [],
     ).filter((userId) => userId !== input.createdBy);

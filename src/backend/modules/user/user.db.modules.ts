@@ -2819,72 +2819,73 @@ export class UserDbController {
    * 4. Log the INITIATE event in UserHistory with the reqId.
    */
   static async createUserOnboarding(req: Request, res: Response) {
-    const type = UserDbController.normalizeUserRequestType(req.body?.type);
-    if (type !== 'INITIATE') {
-      try {
-        return await UserDbController.createUserModificationRequest(
-          req,
-          res,
-          type,
-        );
-      } catch (error) {
-        const initiatorId = req.body?.initiatorId;
-        const companyId = req.body?.companyId;
-        const targetEmail = req.body?.targetEmail || req.body?.targetUserEmail;
-        if (
-          error instanceof AppError &&
-          typeof initiatorId === 'string' &&
-          typeof companyId === 'string'
-        ) {
-          await UserDbController.notifyConflict(
-            companyId,
-            initiatorId,
-            error.message,
-            String(targetEmail || 'user'),
+    try {
+      const type = UserDbController.normalizeUserRequestType(req.body?.type);
+      if (type !== 'INITIATE') {
+        try {
+          return await UserDbController.createUserModificationRequest(
+            req,
+            res,
+            type,
           );
+        } catch (error) {
+          const initiatorId = req.body?.initiatorId;
+          const companyId = req.body?.companyId;
+          const targetEmail = req.body?.targetEmail || req.body?.targetUserEmail;
+          if (
+            error instanceof AppError &&
+            typeof initiatorId === 'string' &&
+            typeof companyId === 'string'
+          ) {
+            await UserDbController.notifyConflict(
+              companyId,
+              initiatorId,
+              error.message,
+              String(targetEmail || 'user'),
+            );
+          }
+          throw error;
         }
-        throw error;
       }
-    }
 
-    const {
-      initiatorId,
-      companyCode,
-      companyId,
-      groupCode,
-      levelsHash,
-      ...onboardingData
-    } = req.body;
-    let resolvedCompanyId = companyId;
+      const {
+        initiatorId,
+        companyCode,
+        companyId,
+        groupCode,
+        levelsHash,
+        ...onboardingData
+      } = req.body;
+      let resolvedCompanyId = companyId;
 
-    if (!resolvedCompanyId) {
-      if (!companyCode) {
-        throw new AppError('companyCode or companyId is required', 400);
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+        });
+        if (!company) {
+          throw new AppError('Company not found', 404);
+        }
+        resolvedCompanyId = company.id;
       }
-      const company = await prisma.company.findUnique({
-        where: { companyCode },
-      });
-      if (!company) {
-        throw new AppError('Company not found', 404);
-      }
-      resolvedCompanyId = company.id;
-    }
 
-    const email = onboardingData.data?.basicDetails?.email;
-    const permissions = onboardingData.data?.permissions || [];
-    const requestedNodePaths = Array.from(
+      const email = onboardingData.data?.basicDetails?.email;
+      const permissions = onboardingData.data?.permissions || [];
+      const requestedNodePaths = Array.from(
       new Set(
         (Array.isArray(permissions) ? permissions : [])
           .map((permission: any) => permission?.nodePath)
           .filter((value: any): value is string => typeof value === 'string' && value.trim().length > 0),
       ),
     );
-    const hasCorpAdminRole =
+      const hasCorpAdminRole =
       Array.isArray(permissions) &&
       permissions.some((p: any) => p.roleName === 'Corp Admin');
 
     // ── Initiator Restriction for Corp Admin ──
-    if (hasCorpAdminRole) {
+      if (hasCorpAdminRole) {
       const initiatorAccess = await prisma.userAccess.findFirst({
         where: {
           userId: initiatorId,
@@ -2900,7 +2901,7 @@ export class UserDbController {
       }
     }
 
-    for (const nodePath of requestedNodePaths) {
+      for (const nodePath of requestedNodePaths) {
       await UserDbController.assertNoPendingOrgModificationForNode(
         resolvedCompanyId,
         nodePath,
@@ -2911,13 +2912,13 @@ export class UserDbController {
         levelsHash || null,
       );
     }
-    await UserDbController.assertSelectedApprovalWorkflowNotPendingModification(
+      await UserDbController.assertSelectedApprovalWorkflowNotPendingModification(
       resolvedCompanyId,
       levelsHash || null,
     );
 
     // Fetch all global access users for this company to ensure they are in the master eligible list
-    const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
+      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
       prisma as any,
       resolvedCompanyId,
       'USER_ACC',
@@ -2925,16 +2926,16 @@ export class UserDbController {
 
     // Master eligible list includes both configured and global approvers.
     // Initiator is excluded from all active approval lists.
-    const masterEligible = new Set([
+      const masterEligible = new Set([
       ...(onboardingData.eligibleApprovers || []),
       ...globalUsers,
     ]);
-    onboardingData.eligibleApprovers = Array.from(masterEligible).filter(
+      onboardingData.eligibleApprovers = Array.from(masterEligible).filter(
       (id) => id !== initiatorId,
     );
-    let notificationRecipients = onboardingData.eligibleApprovers;
+      let notificationRecipients = onboardingData.eligibleApprovers;
 
-    const onboarding = await prisma.$transaction(async (tx) => {
+      const onboarding = await prisma.$transaction(async (tx) => {
       let groupId: string | null = null;
       if (groupCode) {
         const group = await tx.groupCompany.findUnique({
@@ -3015,7 +3016,7 @@ export class UserDbController {
       }
       return onb;
     });
-    await NotificationService.createRequestNotification({
+      await NotificationService.createRequestNotification({
       companyId: resolvedCompanyId,
       type: 'INITIATE',
       referenceType: 'USER',
@@ -3024,7 +3025,35 @@ export class UserDbController {
       createdBy: initiatorId,
       recipientUserIds: notificationRecipients,
     });
-    res.status(201).json(onboarding);
+      res.status(201).json(onboarding);
+    } catch (error) {
+      const initiatorId = req.body?.initiatorId;
+      let resolvedCompanyId = req.body?.companyId as string | undefined;
+      if (!resolvedCompanyId && typeof req.body?.companyCode === 'string') {
+        const company = await prisma.company.findUnique({
+          where: { companyCode: req.body.companyCode },
+          select: { id: true },
+        });
+        resolvedCompanyId = company?.id;
+      }
+      const targetEmail =
+        req.body?.targetEmail ||
+        req.body?.targetUserEmail ||
+        req.body?.data?.basicDetails?.email;
+      if (
+        error instanceof AppError &&
+        typeof initiatorId === 'string' &&
+        typeof resolvedCompanyId === 'string'
+      ) {
+        await UserDbController.notifyConflict(
+          resolvedCompanyId,
+          initiatorId,
+          error.message,
+          String(targetEmail || 'user'),
+        );
+      }
+      throw error;
+    }
   }
 
   /**
@@ -3543,7 +3572,8 @@ export class UserDbController {
         }
       });
 
-      let message = `User onboarding ${status}d successfully`;
+      const requestType = String(onboarding.type || 'INITIATE').toUpperCase();
+      let message = `User request ${status.toLowerCase()}d successfully`;
       if (result && result.status === 'PARTIAL_APPROVED') {
         message = `User request approved at Level ${result.level}, pending remaining approval`;
         notificationRecipients =
@@ -3553,12 +3583,19 @@ export class UserDbController {
             notificationRecipients,
           );
       } else if (result && result.status === 'APPROVED') {
-        message =
-          onboarding.type && onboarding.type !== 'INITIATE'
-            ? `User ${onboarding.type.toLowerCase()} request approved`
-            : 'User approved and onboarded';
+        if (requestType === 'INITIATE') {
+          message = 'User onboarding request approved and user onboarded';
+        } else if (requestType === 'UPDATE') {
+          message = 'User update request approved';
+        } else if (requestType === 'ACTIVE') {
+          message = 'User activation request approved';
+        } else if (requestType === 'INACTIVE') {
+          message = 'User inactivation request approved';
+        } else if (requestType === 'ARCHIVE') {
+          message = 'User archive request approved';
+        }
       } else if (result && result.status === 'REJECTED') {
-        message = 'User request rejected';
+        message = `User ${requestType.toLowerCase()} request rejected`;
       }
 
       const requestInitiatorId =
