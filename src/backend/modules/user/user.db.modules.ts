@@ -853,9 +853,46 @@ export class UserDbController {
       summary.set(row.reqId, current);
     });
 
+    const noApproverIds = Array.from(summary.entries())
+      .filter(([, value]) => value.total === 0)
+      .map(([id]) => id);
+    const latestHistoryByReqId = new Map<string, string>();
+    if (noApproverIds.length > 0) {
+      const historyRows =
+        reqTable === 'workflow_req'
+          ? await prisma.workflowReqHistory.findMany({
+              where: { workflowReqId: { in: noApproverIds } },
+              orderBy: [{ createdAt: 'desc' }],
+              select: { workflowReqId: true, event: true },
+            })
+          : reqTable === 'org_structure_req'
+            ? await prisma.orgHistory.findMany({
+                where: { orgReqId: { in: noApproverIds } },
+                orderBy: [{ createdAt: 'desc' }],
+                select: { orgReqId: true, event: true },
+              })
+            : await prisma.userHistory.findMany({
+                where: { reqId: { in: noApproverIds } },
+                orderBy: [{ createdAt: 'desc' }],
+                select: { reqId: true, event: true },
+              });
+
+      historyRows.forEach((row: any) => {
+        const reqId = row.workflowReqId || row.orgReqId || row.reqId;
+        if (reqId && !latestHistoryByReqId.has(reqId)) {
+          latestHistoryByReqId.set(reqId, row.event);
+        }
+      });
+    }
+
     const effective = new Set<string>();
     summary.forEach((value, id) => {
-      if (value.total === 0 || value.pending > 0) {
+      const latestEvent = latestHistoryByReqId.get(id);
+      const noApproverButStillOpen =
+        value.total === 0 &&
+        latestEvent !== 'APPROVED' &&
+        latestEvent !== 'REJECTED';
+      if (noApproverButStillOpen || value.pending > 0) {
         effective.add(id);
       }
     });
