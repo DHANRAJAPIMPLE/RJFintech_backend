@@ -14,12 +14,14 @@ export type UserCompanyNodeWorkflow = {
   levelsHash: string;
   name: string;
   alias: string;
+  status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
 };
 
 export type UserCompanyNode = {
   nodeName: string;
   nodePath: string;
   nodeType: UserCompanyNodeType;
+  status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
   workflows: UserCompanyNodeWorkflow[];
   roleName: string;
 };

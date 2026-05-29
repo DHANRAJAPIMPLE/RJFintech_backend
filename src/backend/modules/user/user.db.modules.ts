@@ -32,6 +32,7 @@ type CompanyNodeWorkflowOption = {
   levelsHash: string;
   name: string;
   alias: string;
+  status?: string;
 };
 
 type UserRequestType =
@@ -619,12 +620,14 @@ export class UserDbController {
         module: 'SYSTEM_ACCESS',
         subModule: normalizedSubCategory,
         name: { contains: 'DEFAULT' },
+        status: 'ACTIVE',
       },
       orderBy: { createdAt: 'desc' },
       select: {
         levelsHash: true,
         name: true,
         alias: true,
+        status: true,
       },
     });
   }
@@ -4032,21 +4035,27 @@ export class UserDbController {
 
       if (globalAccess) {
         const companyNodes = await prisma.orgStructure.findMany({
-          where: { companyId },
+          where: {
+            companyId,
+            status: 'ACTIVE',
+          },
           select: {
             nodeName: true,
             nodePath: true,
             nodeType: true,
+            status: true,
             workflows: {
               where: {
                 ...(workflowSubCategory
                   ? { subModule: workflowSubCategory }
                   : {}),
+                status: 'ACTIVE',
               },
               select: {
                 levelsHash: true,
                 name: true,
                 alias: true,
+                status: true,
               },
             },
           },
@@ -4084,12 +4093,17 @@ export class UserDbController {
                 nodeName: true,
                 nodePath: true,
                 nodeType: true,
+                status: true,
                 workflows: {
-                  where: { subModule: workflowSubCategory },
+                  where: {
+                    subModule: workflowSubCategory,
+                    status: 'ACTIVE',
+                  },
                   select: {
                     levelsHash: true,
                     name: true,
                     alias: true,
+                    status: true,
                   },
                 },
               },

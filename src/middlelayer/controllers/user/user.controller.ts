@@ -823,10 +823,12 @@ export class UserController {
         nodeName: node.nodeName,
         nodePath: node.nodePath,
         nodeType: node.nodeType,
+        status: node.status,
         workflows: node.workflows.map((workflow) => ({
           levelsHash: workflow.levelsHash,
           name: workflow.name,
           alias: workflow.alias,
+          status: workflow.status,
         })),
         roleName: node.roleName || node.roleCode || '',
       }));

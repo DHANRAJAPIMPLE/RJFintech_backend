@@ -1224,8 +1224,12 @@ export class OrgStructureDbController {
             ? data.parentNode.nodePath
             : null;
         const hasPathSignals = candidatePaths.length > 0;
+        const extractedNames = candidatePaths
+          .map((p) => p.split('.').pop()?.toLowerCase())
+          .filter((value): value is string => Boolean(value));
+        const allCandidateNames = [...candidateNodeNames, ...extractedNames];
         const nodeNameMatches = normalizedNodeName
-          ? candidateNodeNames.includes(normalizedNodeName)
+          ? allCandidateNames.includes(normalizedNodeName)
           : true;
         const nodePathMatches =
           typeof nodePath === 'string' && nodePath.length > 0

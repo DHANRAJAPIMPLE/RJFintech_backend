@@ -1648,15 +1648,21 @@ export class WorkflowDbController {
                 })
                 .filter(Boolean);
 
-              resultList.push({
-                workflowReqId: h.workflowReqId,
-                workflowId: h.workflowReq?.workflowId || null,
-                type: h.workflowReq?.type || null,
-                impact: h.workflowReq?.impact || null,
-                oldData:
-                  h.workflowReq?.oldData ||
-                  ((h.workflowReq?.data as any)?.oldData ?? null),
-                newData: h.workflowReq?.data || null,
+                let newDataObj = h.workflowReq?.data ? { ...(h.workflowReq.data as any) } : null;
+                if (newDataObj && h.workflowReq?.type !== 'INITIATE') {
+                  delete newDataObj.target;
+                  delete newDataObj.subModule;
+                }
+
+                resultList.push({
+                  workflowReqId: h.workflowReqId,
+                  workflowId: h.workflowReq?.workflowId || null,
+                  type: h.workflowReq?.type || null,
+                  impact: h.workflowReq?.impact || null,
+                  oldData:
+                    h.workflowReq?.oldData ||
+                    ((h.workflowReq?.data as any)?.oldData ?? null),
+                  newData: newDataObj,
                 nodeId: h.workflowReq?.nodeId || null,
                 workflowName: (h.workflowReq?.data as any)?.name || null,
                 module: h.workflowReq?.module || null,
@@ -1685,15 +1691,21 @@ export class WorkflowDbController {
           h.workflowReq.type !== 'INITIATE'
             ? 'MODIFY'
             : h.event;
-        return {
-          workflowReqId: h.workflowReqId,
-          workflowId: h.workflowReq?.workflowId || null,
-          type: h.workflowReq?.type || null,
-          impact: h.workflowReq?.impact || null,
-          oldData:
-            h.workflowReq?.oldData ||
-            ((h.workflowReq?.data as any)?.oldData ?? null),
-          newData: h.workflowReq?.data || null,
+          let newDataObj = h.workflowReq?.data ? { ...(h.workflowReq.data as any) } : null;
+          if (newDataObj && h.workflowReq?.type !== 'INITIATE') {
+            delete newDataObj.target;
+            delete newDataObj.subModule;
+          }
+
+          return {
+            workflowReqId: h.workflowReqId,
+            workflowId: h.workflowReq?.workflowId || null,
+            type: h.workflowReq?.type || null,
+            impact: h.workflowReq?.impact || null,
+            oldData:
+              h.workflowReq?.oldData ||
+              ((h.workflowReq?.data as any)?.oldData ?? null),
+            newData: newDataObj,
           nodeId: h.workflowReq?.nodeId || null,
           workflowName: (h.workflowReq?.data as any)?.name || null,
           module: h.workflowReq?.module || null,
@@ -2152,15 +2164,98 @@ export class WorkflowDbController {
           pendingRequestsRaw.map((req) => req.workflowId).filter(Boolean),
         ),
       ) as string[];
+      const targetTuples = Array.from(
+        new Set(
+          pendingRequestsRaw
+            .map((req) => (req.data as any)?.target)
+            .filter(
+              (target: any) =>
+                target &&
+                typeof target.module === 'string' &&
+                typeof target.subModule === 'string' &&
+                typeof target.nodePath === 'string' &&
+                typeof target.levelsHash === 'string',
+            )
+            .map(
+              (target: any) =>
+                `${target.module}|${target.subModule}|${target.nodePath}|${target.levelsHash}`,
+            ),
+        ),
+      );
+      const targetFilters = targetTuples.map((tuple) => {
+        const [module, subModule, nodePath, levelsHash] = tuple.split('|');
+        return {
+          module,
+          subModule,
+          levelsHash,
+          orgStructure: { nodePath },
+        };
+      });
+
       const nodeIds = Array.from(
         new Set(pendingRequestsRaw.map((req) => req.nodeId)),
       ) as string[];
 
-      const [workflowDetails, nodeDetails] = await Promise.all([
+      const [workflowDetails, targetWorkflowDetails, nodeDetails] = await Promise.all([
         prisma.workflow.findMany({
           where: { id: { in: workflowIds } },
-          select: { id: true, name: true, alias: true },
+          select: { 
+            id: true, 
+            name: true, 
+            alias: true,
+            module: true,
+            subModule: true,
+            levelsHash: true,
+            status: true,
+            orgStructure: {
+              select: {
+                nodePath: true,
+                nodeName: true,
+                nodeType: true,
+              },
+            },
+            levels: {
+              select: {
+                level: true,
+                approver1: true,
+                approver2: true,
+                approverType: true
+              }
+            }
+          },
         }),
+        targetFilters.length > 0
+          ? prisma.workflow.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                OR: targetFilters as any,
+              },
+              select: {
+                id: true,
+                name: true,
+                alias: true,
+                module: true,
+                subModule: true,
+                levelsHash: true,
+                status: true,
+                orgStructure: {
+                  select: {
+                    nodePath: true,
+                    nodeName: true,
+                    nodeType: true,
+                  },
+                },
+                levels: {
+                  select: {
+                    level: true,
+                    approver1: true,
+                    approver2: true,
+                    approverType: true,
+                  },
+                },
+              },
+            })
+          : Promise.resolve([]),
         prisma.orgStructure.findMany({
           where: { id: { in: nodeIds } },
           select: { id: true, nodeName: true, nodePath: true, nodeType: true },
@@ -2168,6 +2263,14 @@ export class WorkflowDbController {
       ]);
 
       const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
+      const targetWorkflowMap = new Map(
+        targetWorkflowDetails.map((w) => [
+          [w.module, w.subModule, w.orgStructure?.nodePath, w.levelsHash].join(
+            '|',
+          ),
+          w,
+        ]),
+      );
       const nodeMap = new Map(nodeDetails.map((n) => [n.id, n]));
 
       // 2. Flatten initiator, node info, and workflow info for frontend
@@ -2181,25 +2284,68 @@ export class WorkflowDbController {
         const node = nodeMap.get(req.nodeId);
         const nodeType = node?.nodeType || null;
 
-        // Resolve workflow name and alias
+        // Resolve workflow name, alias, and master data (target match first)
+        const target = (req.data as any)?.target;
+        const targetKey = [
+          target?.module,
+          target?.subModule,
+          target?.nodePath,
+          target?.levelsHash,
+        ].join('|');
+        const targetWorkflow = targetWorkflowMap.get(targetKey);
+        const linkedWorkflow = req.workflowId
+          ? workflowMap.get(req.workflowId)
+          : null;
+        const resolvedWorkflow = targetWorkflow || linkedWorkflow || null;
+
         let workflowName = (req.data as any)?.name || 'New Workflow';
         let alias = req.alias || (req.data as any)?.alias || 'N/A';
+        let masterData: any = null;
 
-        if (req.workflowId) {
-          const w = workflowMap.get(req.workflowId);
-          if (w) {
-            workflowName = w.name;
-            alias = w.alias;
-          }
+        if (resolvedWorkflow) {
+          workflowName = resolvedWorkflow.name;
+          alias = resolvedWorkflow.alias;
+          masterData = {
+            name: resolvedWorkflow.name,
+            module: resolvedWorkflow.module,
+            subModule: resolvedWorkflow.subModule,
+            levelsHash: resolvedWorkflow.levelsHash,
+            status: resolvedWorkflow.status,
+            levels: resolvedWorkflow.levels.reduce((acc: any, l: any) => {
+              acc[`l${l.level}`] = {
+                type: l.approverType,
+                approver1: l.approver1,
+                approver2: l.approver2,
+              };
+              return acc;
+            }, {}),
+          };
         }
 
         const rest = { ...req };
+        if (req.type !== 'INITIATE' && masterData) {
+          rest.data = {
+            ...masterData,
+            nodePath:
+              resolvedWorkflow?.orgStructure?.nodePath ||
+              node?.nodePath ||
+              (req.data as any)?.nodePath ||
+              null,
+          };
+        }
         delete rest.workflowHistories;
+        
+        let newDataObj = req.type === 'INITIATE' ? null : (req.data ? { ...(req.data as any) } : null);
+        if (newDataObj) {
+          delete newDataObj.target;
+          delete newDataObj.subModule;
+        }
+
         return {
           ...rest,
           impact: req.impact ?? null,
           oldData: req.oldData || ((req.data as any)?.oldData ?? null),
-          newData: req.type === 'INITIATE' ? null : (req.data || null),
+          newData: newDataObj,
           initiator,
           initiatorTimestamp,
           nodeType,
