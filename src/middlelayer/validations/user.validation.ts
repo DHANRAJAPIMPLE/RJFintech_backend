@@ -40,7 +40,7 @@ const normalizeUserListType = (value: unknown) =>
 
 const requiredUserListTypeSchema = z.preprocess(
   normalizeUserListType,
-  z.enum(['active', 'pending']),
+  z.enum(['active', 'pending', 'inactive']),
 );
 
 const optionalUserSearchQuerySchema = z.preprocess((value) => {
@@ -167,7 +167,7 @@ export const userListSchema = z
   .object({
     type: z.preprocess(
       normalizeUserListType,
-      z.enum(['active', 'pending']).optional(),
+      z.enum(['active', 'pending', 'inactive']).optional(),
     ),
     query: optionalUserSearchQuerySchema,
     page: z.preprocess(

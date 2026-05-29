@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { prisma } from '../../lib/prisma';
 import { AppError } from '../../../shared/middlewares/error.middleware';
 
-const LOCK_DURATION_MS = 30 * 60 * 1000;
+const DEFAULT_LOCK_MINUTES = 10;
 
 type EditLockType = 'USER' | 'ORG' | 'WORKFLOW';
 
@@ -17,7 +17,12 @@ type LockResult = {
 type LockOperations = {
   release: (now: Date) => Promise<{ count: number }>;
   acquire: (now: Date, expiresAt: Date) => Promise<{ count: number }>;
-  current: () => Promise<{ editLockExpiresAt: Date | null } | null>;
+  extend: (now: Date, expiresAt: Date) => Promise<{ count: number }>;
+  current: () => Promise<{
+    editLockedBy: string | null;
+    editLockedAt: Date | null;
+    editLockExpiresAt: Date | null;
+  } | null>;
 };
 
 export class EditLockDbController {
@@ -29,24 +34,59 @@ export class EditLockDbController {
     return value.trim();
   }
 
-  private static async toggleResolvedLock(
+  /**
+   * Resolves the display name for the user who currently holds a lock.
+   * Returns "Name (email)" or just email, or "unknown user" as fallback.
+   */
+  private static async getLockerDisplayName(
+    userId: string | null,
+  ): Promise<string> {
+    if (!userId) return 'unknown user';
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, email: true },
+    });
+    if (!user) return 'unknown user';
+    return user.name ? `${user.name} (${user.email})` : user.email;
+  }
+
+  /**
+   * Returns the effective lock duration in minutes.
+   * Uses addMin if > 0, otherwise falls back to DEFAULT_LOCK_MINUTES (10).
+   */
+  private static getLockMinutes(addMin?: number): number {
+    return addMin && addMin > 0 ? addMin : DEFAULT_LOCK_MINUTES;
+  }
+
+  /**
+   * Handles an explicit "lock" request:
+   * 1. Try to extend if the same user already holds the lock (atomic).
+   * 2. If no active lock, acquire a new one (atomic).
+   * 3. If another user holds it, return a detailed message with their name.
+   */
+  private static async handleLock(
     targetType: EditLockType,
     operations: LockOperations,
+    userId: string,
+    addMin?: number,
   ): Promise<LockResult> {
     const now = new Date();
+    const minutes = EditLockDbController.getLockMinutes(addMin);
+    const expiresAt = new Date(now.getTime() + minutes * 60 * 1000);
 
-    const released = await operations.release(now);
-    if (released.count === 1) {
+    // 1. Try to extend — succeeds only if same user holds an active lock
+    const extended = await operations.extend(now, expiresAt);
+    if (extended.count === 1) {
       return {
-        lockAcquired: false,
-        locked: false,
-        released: true,
-        expiresAt: null,
-        message: `${targetType} edit lock released`,
+        lockAcquired: true,
+        locked: true,
+        released: false,
+        expiresAt: expiresAt.toISOString(),
+        message: `${targetType} edit lock extended by ${minutes} minutes`,
       };
     }
 
-    const expiresAt = new Date(now.getTime() + LOCK_DURATION_MS);
+    // 2. Try to acquire — succeeds only if no lock or lock is expired
     const acquired = await operations.acquire(now, expiresAt);
     if (acquired.count === 1) {
       return {
@@ -54,28 +94,96 @@ export class EditLockDbController {
         locked: true,
         released: false,
         expiresAt: expiresAt.toISOString(),
-        message: `${targetType} edit lock acquired for 30 minutes`,
+        message: `${targetType} edit lock acquired for ${minutes} minutes`,
       };
     }
 
+    // 3. Lock held by another user — return detailed message
     const current = await operations.current();
     if (!current) {
       throw new AppError(`${targetType} target not found`, 404);
     }
 
+    const lockerName = await EditLockDbController.getLockerDisplayName(
+      current.editLockedBy,
+    );
+    const lockedSince = current.editLockedAt
+      ? current.editLockedAt.toISOString()
+      : 'unknown time';
     return {
       lockAcquired: false,
       locked: true,
       released: false,
       expiresAt: current.editLockExpiresAt?.toISOString() || null,
-      message: 'This record is currently being edited by another user',
+      message: `This record is currently being edited by ${lockerName} since ${lockedSince}`,
     };
   }
 
-  private static async toggleUserLock(
+  /**
+   * Handles an explicit "release" request:
+   * 1. Try to release the lock held by the requesting user (atomic).
+   * 2. If no active lock exists, return a "no lock" message.
+   * 3. If lock is held by another user, return a message with their name.
+   */
+  private static async handleRelease(
+    targetType: EditLockType,
+    operations: LockOperations,
+    userId: string,
+  ): Promise<LockResult> {
+    const now = new Date();
+
+    // 1. Try to release — succeeds only if same user holds an active lock
+    const released = await operations.release(now);
+    if (released.count === 1) {
+      return {
+        lockAcquired: false,
+        locked: false,
+        released: true,
+        expiresAt: null,
+        message: `${targetType} edit lock released successfully`,
+      };
+    }
+
+    // 2. Check if any active lock exists at all
+    const current = await operations.current();
+    if (
+      !current ||
+      !current.editLockedBy ||
+      !current.editLockExpiresAt ||
+      current.editLockExpiresAt <= now
+    ) {
+      return {
+        lockAcquired: false,
+        locked: false,
+        released: false,
+        expiresAt: null,
+        message: `No active ${targetType} edit lock found to release`,
+      };
+    }
+
+    // 3. Lock held by another user — cannot release
+    const lockerName = await EditLockDbController.getLockerDisplayName(
+      current.editLockedBy,
+    );
+    return {
+      lockAcquired: false,
+      locked: true,
+      released: false,
+      expiresAt: current.editLockExpiresAt.toISOString(),
+      message: `Cannot release: lock is held by ${lockerName}`,
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Per-type lock handlers
+  // ────────────────────────────────────────────────────────────────────────
+
+  private static async processUserLock(
     userId: string,
     companyId: string,
     target: Record<string, unknown>,
+    subtype: string,
+    addMin?: number,
   ): Promise<LockResult> {
     const email = EditLockDbController.requireString(
       target.email,
@@ -93,7 +201,7 @@ export class EditLockDbController {
       throw new AppError('User target not found in this company', 404);
     }
 
-    return EditLockDbController.toggleResolvedLock('USER', {
+    const operations: LockOperations = {
       release: (now) =>
         prisma.user.updateMany({
           where: {
@@ -123,18 +231,39 @@ export class EditLockDbController {
             editLockExpiresAt: expiresAt,
           },
         }),
+      extend: (now, expiresAt) =>
+        prisma.user.updateMany({
+          where: {
+            id: user.id,
+            editLockedBy: userId,
+            editLockExpiresAt: { gt: now },
+          },
+          data: {
+            editLockExpiresAt: expiresAt,
+          },
+        }),
       current: () =>
         prisma.user.findUnique({
           where: { id: user.id },
-          select: { editLockExpiresAt: true },
+          select: {
+            editLockedBy: true,
+            editLockedAt: true,
+            editLockExpiresAt: true,
+          },
         }),
-    });
+    };
+
+    return subtype === 'release'
+      ? EditLockDbController.handleRelease('USER', operations, userId)
+      : EditLockDbController.handleLock('USER', operations, userId, addMin);
   }
 
-  private static async toggleOrgLock(
+  private static async processOrgLock(
     userId: string,
     companyId: string,
     target: Record<string, unknown>,
+    subtype: string,
+    addMin?: number,
   ): Promise<LockResult> {
     const nodePath = EditLockDbController.requireString(
       target.nodePath,
@@ -149,7 +278,7 @@ export class EditLockDbController {
       throw new AppError('Organization target not found in this company', 404);
     }
 
-    return EditLockDbController.toggleResolvedLock('ORG', {
+    const operations: LockOperations = {
       release: (now) =>
         prisma.orgStructure.updateMany({
           where: {
@@ -179,18 +308,39 @@ export class EditLockDbController {
             editLockExpiresAt: expiresAt,
           },
         }),
+      extend: (now, expiresAt) =>
+        prisma.orgStructure.updateMany({
+          where: {
+            id: node.id,
+            editLockedBy: userId,
+            editLockExpiresAt: { gt: now },
+          },
+          data: {
+            editLockExpiresAt: expiresAt,
+          },
+        }),
       current: () =>
         prisma.orgStructure.findUnique({
           where: { id: node.id },
-          select: { editLockExpiresAt: true },
+          select: {
+            editLockedBy: true,
+            editLockedAt: true,
+            editLockExpiresAt: true,
+          },
         }),
-    });
+    };
+
+    return subtype === 'release'
+      ? EditLockDbController.handleRelease('ORG', operations, userId)
+      : EditLockDbController.handleLock('ORG', operations, userId, addMin);
   }
 
-  private static async toggleWorkflowLock(
+  private static async processWorkflowLock(
     userId: string,
     companyId: string,
     target: Record<string, unknown>,
+    subtype: string,
+    addMin?: number,
   ): Promise<LockResult> {
     const nodePath = EditLockDbController.requireString(
       target.nodePath,
@@ -229,7 +379,7 @@ export class EditLockDbController {
       throw new AppError('Workflow target not found in this company', 404);
     }
 
-    return EditLockDbController.toggleResolvedLock('WORKFLOW', {
+    const operations: LockOperations = {
       release: (now) =>
         prisma.workflow.updateMany({
           where: {
@@ -259,13 +409,36 @@ export class EditLockDbController {
             editLockExpiresAt: expiresAt,
           },
         }),
+      extend: (now, expiresAt) =>
+        prisma.workflow.updateMany({
+          where: {
+            id: workflow.id,
+            editLockedBy: userId,
+            editLockExpiresAt: { gt: now },
+          },
+          data: {
+            editLockExpiresAt: expiresAt,
+          },
+        }),
       current: () =>
         prisma.workflow.findUnique({
           where: { id: workflow.id },
-          select: { editLockExpiresAt: true },
+          select: {
+            editLockedBy: true,
+            editLockedAt: true,
+            editLockExpiresAt: true,
+          },
         }),
-    });
+    };
+
+    return subtype === 'release'
+      ? EditLockDbController.handleRelease('WORKFLOW', operations, userId)
+      : EditLockDbController.handleLock('WORKFLOW', operations, userId, addMin);
   }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Public API
+  // ────────────────────────────────────────────────────────────────────────
 
   static async toggle(req: Request, res: Response, next: NextFunction) {
     try {
@@ -286,6 +459,17 @@ export class EditLockDbController {
           ? (req.body.target as Record<string, unknown>)
           : null;
 
+      // New fields: subtype defaults to 'lock', addMin defaults to 0
+      const subtype =
+        typeof req.body?.subtype === 'string' &&
+        ['lock', 'release'].includes(req.body.subtype.toLowerCase())
+          ? req.body.subtype.toLowerCase()
+          : 'lock';
+      const addMin =
+        typeof req.body?.addMin === 'number' && req.body.addMin >= 0
+          ? req.body.addMin
+          : 0;
+
       if (!target || !['USER', 'ORG', 'WORKFLOW'].includes(type)) {
         throw new AppError('Valid type and target are required', 400);
       }
@@ -293,24 +477,30 @@ export class EditLockDbController {
       let result: LockResult;
       switch (type) {
         case 'USER':
-          result = await EditLockDbController.toggleUserLock(
+          result = await EditLockDbController.processUserLock(
             userId,
             companyId,
             target,
+            subtype,
+            addMin,
           );
           break;
         case 'ORG':
-          result = await EditLockDbController.toggleOrgLock(
+          result = await EditLockDbController.processOrgLock(
             userId,
             companyId,
             target,
+            subtype,
+            addMin,
           );
           break;
         case 'WORKFLOW':
-          result = await EditLockDbController.toggleWorkflowLock(
+          result = await EditLockDbController.processWorkflowLock(
             userId,
             companyId,
             target,
+            subtype,
+            addMin,
           );
           break;
         default:

@@ -138,6 +138,7 @@ export type UserListAccess = {
 export type PendingRequestSnapshot = {
   id: string;
   type?: string | null;
+  impact?: string | null;
   status?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
@@ -172,6 +173,7 @@ export type PendingUserAccess = Omit<UserListAccess, 'nodeType'> & {
 export type PendingUserListItem = {
   id: string;
   type?: string;
+  impact?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
   basicDetails: PendingUserBasicDetails;

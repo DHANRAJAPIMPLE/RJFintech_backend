@@ -82,8 +82,12 @@ export class WorkflowController {
         status: workflow.data.status ?? null,
       },
       type: workflow.type,
+      impact: workflow.impact ?? null,
       oldData: workflow.oldData ?? workflow.data.oldData ?? null,
-      newData: workflow.newData ?? workflow.data ?? null,
+      newData:
+        workflow.type === 'INITIATE'
+          ? null
+          : workflow.newData ?? workflow.data ?? null,
       status: workflow.status,
       alias: workflow.alias,
       approvalRemark: workflow.approvalRemark,
@@ -387,7 +391,7 @@ export class WorkflowController {
 
       const workflowData = data as FetchWorkflowsInternalData;
       const publicData =
-        body.type === 'active'
+        body.type === 'active' || body.type === 'inactive'
           ? workflowData.data.map((workflow) =>
               WorkflowController.formatActiveWorkflow(
                 workflow as WorkflowActiveItem,
@@ -404,6 +408,7 @@ export class WorkflowController {
         data: publicData,
         activeCount: workflowData.activeCount,
         pendingCount: workflowData.pendingCount,
+        inactiveCount: workflowData.inactiveCount,
         pageInfo: workflowData.pageInfo,
       };
 

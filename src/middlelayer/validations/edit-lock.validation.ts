@@ -4,10 +4,16 @@ import { emailSchema } from './common.validation';
 const targetKeySchema = (fieldName: string) =>
   z.string().trim().min(1, `${fieldName} is required`).max(255);
 
+const lockCommonFields = {
+  subtype: z.enum(['lock', 'release']).default('lock'),
+  addMin: z.number().int().min(0).default(0),
+};
+
 export const editLockSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('USER'),
+      ...lockCommonFields,
       target: z
         .object({
           email: emailSchema,
@@ -18,6 +24,7 @@ export const editLockSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('ORG'),
+      ...lockCommonFields,
       target: z
         .object({
           nodePath: targetKeySchema('Node path'),
@@ -28,6 +35,7 @@ export const editLockSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('WORKFLOW'),
+      ...lockCommonFields,
       target: z.preprocess(
         (val: any) => {
           if (val && typeof val === 'object') {

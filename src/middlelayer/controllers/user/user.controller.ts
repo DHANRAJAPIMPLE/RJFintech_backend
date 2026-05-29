@@ -104,11 +104,13 @@ export class UserController {
   private static formatPendingUserListItem(
     user: PendingUserListItem,
   ): PendingUserListItem {
+    const isInitiate = user.type === 'INITIATE';
     return {
       id: user.id,
       type: user.type,
-      oldData: user.oldData ?? null,
-      newData: user.newData ?? null,
+      impact: user.impact ?? null,
+      oldData: isInitiate ? null : (user.oldData ?? null),
+      newData: isInitiate ? null : (user.newData ?? null),
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,
@@ -186,7 +188,7 @@ export class UserController {
 
   private static async fetchAndProcessUsers(
     req: Request & { user?: { id: string; companyId: string } },
-    listType?: 'active' | 'pending',
+    listType?: 'active' | 'pending' | 'inactive',
   ): Promise<FetchAndProcessUsersResult> {
     const {
       direction,
@@ -269,6 +271,7 @@ export class UserController {
       const { type } = zodParse(fetchAllUserSchema, req.body ?? {});
       const {
         activeUsers,
+        inactiveUsers,
         pendingUsers,
         activeCount,
         inactiveCount,
@@ -277,7 +280,12 @@ export class UserController {
       } = await UserController.fetchAndProcessUsers(req, type);
 
       const response: FetchAllUsersResponse = {
-        data: type === 'active' ? activeUsers : pendingUsers,
+        data:
+          type === 'active'
+            ? activeUsers
+            : type === 'inactive'
+              ? inactiveUsers
+              : pendingUsers,
         activeCount,
         inactiveCount,
         pendingCount,

@@ -1,4 +1,5 @@
 export type EditLockType = 'USER' | 'ORG' | 'WORKFLOW';
+export type EditLockSubtype = 'lock' | 'release';
 
 export type EditLockResponse = {
   lockAcquired: boolean;

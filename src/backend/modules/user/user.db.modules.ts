@@ -126,11 +126,9 @@ export class UserDbController {
   private static permissionReplacementKey(permission: UserPermissionSnapshot) {
     if (permission.accessType === 'PRIMARY') return 'PRIMARY';
 
-    return [
-      permission.accessType,
-      permission.nodePath,
-      permission.roleSubCategory,
-    ].join('|');
+    return [permission.accessType, permission.nodePath, permission.roleName].join(
+      '|',
+    );
   }
 
   private static mergePermissionMutations(
@@ -150,13 +148,22 @@ export class UserDbController {
       const exactIndex = proposed.findIndex((stored) =>
         UserDbController.permissionsEqual(stored, permission),
       );
-      const replacementIndex = proposed.findIndex(
-        (stored) =>
-          UserDbController.permissionReplacementKey(stored) ===
-          UserDbController.permissionReplacementKey(permission),
-      );
+      const replacementIndex =
+        permission.accessType === 'PRIMARY'
+          ? proposed.findIndex(
+              (stored) =>
+                UserDbController.permissionReplacementKey(stored) ===
+                UserDbController.permissionReplacementKey(permission),
+            )
+          : -1;
 
       if (operation === 'REMOVE') {
+        if (permission.accessType === 'PRIMARY') {
+          throw new AppError(
+            'PRIMARY permission cannot be removed. Overwrite it with another PRIMARY permission instead.',
+            400,
+          );
+        }
         const index = exactIndex >= 0 ? exactIndex : replacementIndex;
         if (index >= 0) proposed.splice(index, 1);
         continue;
@@ -739,6 +746,7 @@ export class UserDbController {
   private static async getCurrentApproverRequestIds(
     reqTable: string,
     userId?: string | null,
+    companyId?: string | null,
   ) {
     if (!userId) return [];
 
@@ -747,13 +755,31 @@ export class UserDbController {
       select: { reqId: true, approversList: true },
     });
 
-    return approverRows
+    const approverReqIds = approverRows
       .filter(
         (row) =>
           Array.isArray(row.approversList) &&
           row.approversList.includes(userId),
       )
       .map((row) => row.reqId);
+
+    if (!companyId || reqTable !== 'user_onboarding') {
+      return approverReqIds;
+    }
+
+    const initiatedReqIds = (
+      await prisma.userOnboarding.findMany({
+        where: {
+          companyId,
+          status: 'PENDING',
+          initiatorId: userId,
+          type: { in: ['UPDATE', 'ACTIVE', 'INACTIVE', 'ARCHIVE'] },
+        },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    return Array.from(new Set([...approverReqIds, ...initiatedReqIds]));
   }
 
   private static formatProductionUser(u: any, pendingRequest?: any) {
@@ -764,6 +790,7 @@ export class UserDbController {
         ? {
             id: pendingRequest.id,
             type: pendingRequest.type,
+            impact: pendingRequest.impact ?? null,
             status: pendingRequest.status,
             oldData:
               pendingRequest.oldData ||
@@ -889,6 +916,7 @@ export class UserDbController {
       await UserDbController.getCurrentApproverRequestIds(
         'user_onboarding',
         viewerUserId,
+        resolvedCompanyId,
       );
     const pendingVisibleTypeWhere =
       approverRequestIds.length > 0
@@ -1160,11 +1188,14 @@ export class UserDbController {
         }
       });
 
+      const type = onb.type || 'INITIATE';
+      const isInitiate = type === 'INITIATE';
       return {
         id: onb.id,
-        type: onb.type || 'INITIATE',
-        oldData: onb.oldData || dataBlob?.oldData || null,
-        newData: dataBlob || null,
+        type,
+        impact: onb.impact || null,
+        oldData: isInitiate ? null : (onb.oldData || dataBlob?.oldData || null),
+        newData: isInitiate ? null : (dataBlob || null),
         approver: approve?.user || null,
         basicDetails: {
           name: basic.name,
@@ -1401,28 +1432,30 @@ export class UserDbController {
       ]);
 
       const activeWhere = buildUserWhere('ACTIVE');
-      const activePageWhere =
-        listType === 'active' && cursor
+      const inactiveWhere = buildUserWhere('INACTIVE');
+      const selectedUserWhere = listType === 'inactive' ? inactiveWhere : activeWhere;
+      const selectedUserPageWhere =
+        (listType === 'active' || listType === 'inactive') && cursor
           ? UserDbController.appendCursorWhere(
-              activeWhere,
+              selectedUserWhere,
               cursor,
               effectiveDirection === 'prev' ? 'newer' : 'older',
             )
-          : activeWhere;
-      const activeNewWhere =
-        listType === 'active' && topCursor
-          ? UserDbController.appendCursorWhere(activeWhere, topCursor, 'newer')
+          : selectedUserWhere;
+      const selectedUserNewWhere =
+        (listType === 'active' || listType === 'inactive') && topCursor
+          ? UserDbController.appendCursorWhere(selectedUserWhere, topCursor, 'newer')
           : null;
 
-      const [activeRows, inactiveRows, pendingResult, activeNewCount] =
+      const [selectedRows, inactiveRows, pendingResult, selectedNewCount] =
         await Promise.all([
           listType === 'pending'
             ? Promise.resolve([])
             : prisma.user.findMany({
-                where: activePageWhere,
+                where: selectedUserPageWhere,
                 include: userInclude,
                 orderBy: UserDbController.getPageOrder(effectiveDirection),
-                ...(listType === 'active'
+                ...(listType === 'active' || listType === 'inactive'
                   ? { skip: cursor ? 0 : offset, take: limit + 1 }
                   : {}),
               }),
@@ -1451,48 +1484,49 @@ export class UserDbController {
                 query,
                 viewerUserId: userId,
               }),
-          activeNewWhere
-            ? prisma.user.count({ where: activeNewWhere })
+          selectedUserNewWhere
+            ? prisma.user.count({ where: selectedUserNewWhere })
             : Promise.resolve(0),
         ]);
 
-      const activePage =
-        listType === 'active'
+      const selectedPage =
+        listType === 'active' || listType === 'inactive'
           ? UserDbController.buildPageInfo(
-              activeRows,
+              selectedRows,
               limit,
               requestedTopCursor,
-              activeNewCount,
+              selectedNewCount,
               effectiveDirection,
               cursor,
               page,
               isPagePagination,
             )
-          : { pageRows: activeRows, pageInfo: null };
-      const firstActivePageRow = activePage.pageRows[0];
+          : { pageRows: selectedRows, pageInfo: null };
+      const firstActivePageRow = selectedPage.pageRows[0];
       if (
-        listType === 'active' &&
+        (listType === 'active' || listType === 'inactive') &&
         !isPagePagination &&
         cursor &&
         firstActivePageRow &&
-        activePage.pageInfo
+        selectedPage.pageInfo
       ) {
         const newerCount = await prisma.user.count({
           where: UserDbController.appendCursorWhere(
-            activeWhere,
+            selectedUserWhere,
             firstActivePageRow,
             'newer',
           ),
         });
-        activePage.pageInfo.page = Math.floor(newerCount / limit) + 1;
+        selectedPage.pageInfo.page = Math.floor(newerCount / limit) + 1;
       }
-      const activeEmails = activePage.pageRows
+      const activeEmails = selectedPage.pageRows
         .map((user: any) => user.email)
         .filter(Boolean);
       const activeApproverRequestIds =
         await UserDbController.getCurrentApproverRequestIds(
           'user_onboarding',
           userId,
+          resolvedCompanyId,
         );
       const activePendingRequests =
         activeEmails.length > 0 && activeApproverRequestIds.length > 0
@@ -1531,15 +1565,22 @@ export class UserDbController {
           activePendingByEmail.set(email, request);
         }
       });
-      const activeUsers = activePage.pageRows.map((user: any) =>
+      const selectedUsers = selectedPage.pageRows.map((user: any) =>
         UserDbController.formatProductionUser(
           user,
           activePendingByEmail.get((user.email || '').toLowerCase()),
         ),
       );
-      const inactiveUsers = inactiveRows.map(
-        UserDbController.formatProductionUser,
-      );
+      const activeUsers =
+        listType === 'inactive'
+          ? []
+          : selectedUsers;
+      const inactiveUsers =
+        listType === 'inactive'
+          ? selectedUsers
+          : inactiveRows.map(
+              UserDbController.formatProductionUser,
+            );
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
         resolvedCompanyId,
@@ -1576,8 +1617,8 @@ export class UserDbController {
         limit,
         offset,
         pageInfo:
-          listType === 'active'
-            ? activePage.pageInfo
+          listType === 'active' || listType === 'inactive'
+            ? selectedPage.pageInfo
             : (pendingResult as any).pageInfo || null,
       });
     } catch (error) {
@@ -1938,6 +1979,18 @@ export class UserDbController {
 
     if (!target) {
       throw new AppError('Target user not found', 404);
+    }
+
+    const adminAccess = await prisma.userAccess.findFirst({
+      where: {
+        userId: target.id,
+        companyId,
+        OR: [{ roleCode: 'SAAS_ADMIN' }, { roleCode: 'CORP_ADMIN' }],
+      },
+    });
+
+    if (adminAccess) {
+      throw new AppError('SAAS Admin and Corp Admin users cannot be modified', 400);
     }
 
     const current = await UserDbController.fetchUserSnapshot(

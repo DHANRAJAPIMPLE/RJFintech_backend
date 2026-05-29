@@ -230,6 +230,10 @@ export class WorkflowDbController {
       throw new AppError('Active workflow not found', 404);
     }
 
+    if (target.alias === '1M_1C_D' || target.name.includes('DEFAULT')) {
+      throw new AppError('Default workflow cannot be modified', 400);
+    }
+
     await WorkflowDbController.assertTargetNotPendingModification(
       prisma,
       companyId,
@@ -1510,7 +1514,12 @@ export class WorkflowDbController {
   static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId, userId } = req.body;
-      const type = req.body?.type === 'pending' ? 'pending' : 'active';
+      const type =
+        req.body?.type === 'pending'
+          ? 'pending'
+          : req.body?.type === 'inactive'
+            ? 'inactive'
+            : 'active';
       const query =
         typeof req.body?.query === 'string' && req.body.query.trim()
           ? req.body.query.trim()
@@ -1584,6 +1593,33 @@ export class WorkflowDbController {
         status: 'PENDING',
         ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
       };
+      const inactiveWhere: any = {
+        companyId: resolvedCompanyId,
+        status: 'INACTIVE',
+        AND: [
+          ...(isGlobal
+            ? []
+            : [
+                {
+                  OR: [
+                    { nodeId: { in: userNodeIds } },
+                    { name: { contains: 'DEFAULT' } },
+                  ],
+                },
+              ]),
+          ...(query
+            ? [
+                {
+                  OR: [
+                    { name: { contains: query, mode: 'insensitive' } },
+                    { alias: { contains: query, mode: 'insensitive' } },
+                    { module: { contains: query, mode: 'insensitive' } },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      };
       const approverRows = userId
         ? await prisma.workflowApprover.findMany({
             where: { reqTable: 'workflow_req', status: 'PENDING' },
@@ -1597,18 +1633,39 @@ export class WorkflowDbController {
             row.approversList.includes(userId),
         )
         .map((row) => row.reqId);
+      const initiatorRequestIds = userId
+        ? (
+            await prisma.workflowReq.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                status: 'PENDING',
+                initiatorId: userId,
+                type: { in: ['UPDATE', 'INACTIVE'] },
+              },
+              select: { id: true },
+            })
+          ).map((row) => row.id)
+        : [];
+      const visiblePendingRequestIds = Array.from(
+        new Set([...approverRequestIds, ...initiatorRequestIds]),
+      );
       const pendingListWhere: any = {
         ...pendingWhere,
-        ...(approverRequestIds.length > 0
+        ...(visiblePendingRequestIds.length > 0
           ? {
               OR: [
                 { type: 'INITIATE' },
-                { id: { in: approverRequestIds } },
+                { id: { in: visiblePendingRequestIds } },
               ],
             }
           : { type: 'INITIATE' }),
       };
-      const listWhere = type === 'active' ? activeWhere : pendingListWhere;
+      const listWhere =
+        type === 'pending'
+          ? pendingListWhere
+          : type === 'inactive'
+            ? inactiveWhere
+            : activeWhere;
       const pageWhere = pagination.cursor
         ? appendCursorWhere(
             listWhere,
@@ -1679,13 +1736,14 @@ export class WorkflowDbController {
             );
           })
         : null;
-      const [activeCount, pendingCount, selectedRows, newCount] =
+      const [activeCount, pendingCount, inactiveCount, selectedRows, newCount] =
         await Promise.all([
           prisma.workflow.count({ where: activeWhere }),
           filteredPendingRows
             ? Promise.resolve(filteredPendingRows.length)
             : prisma.workflowReq.count({ where: pendingListWhere }),
-          type === 'active'
+          prisma.workflow.count({ where: inactiveWhere }),
+          type === 'active' || type === 'inactive'
             ? prisma.workflow.findMany({
                 where: pageWhere,
                 select: activeSelect,
@@ -1705,7 +1763,7 @@ export class WorkflowDbController {
                   take: pagination.limit + 1,
                 }),
           newWhere
-            ? type === 'active'
+            ? type === 'active' || type === 'inactive'
               ? prisma.workflow.count({ where: newWhere })
               : filteredPendingRows && pagination.topCursor
                 ? Promise.resolve(
@@ -1725,7 +1783,7 @@ export class WorkflowDbController {
       if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
         const newerWhere = appendCursorWhere(listWhere, firstPageRow, 'newer');
         const newerCount =
-          type === 'active'
+          type === 'active' || type === 'inactive'
             ? await prisma.workflow.count({ where: newerWhere })
             : filteredPendingRows
               ? filteredPendingRows.filter((request) =>
@@ -1735,7 +1793,7 @@ export class WorkflowDbController {
         pageData.pageInfo.page = Math.floor(newerCount / pagination.limit) + 1;
       }
 
-      if (type === 'active') {
+      if (type === 'active' || type === 'inactive') {
         const activeRows = pageData.pageRows as any[];
         const activeIds = activeRows.map((workflow) => workflow.id);
         const activeKeys = new Set(
@@ -1749,13 +1807,15 @@ export class WorkflowDbController {
           ),
         );
         const pendingModifications =
-          activeIds.length > 0 && approverRequestIds.length > 0
+          type === 'active' &&
+          activeIds.length > 0 &&
+          visiblePendingRequestIds.length > 0
             ? await prisma.workflowReq.findMany({
                 where: {
                   companyId: resolvedCompanyId,
                   status: 'PENDING',
                   type: { in: ['UPDATE', 'INACTIVE'] },
-                  id: { in: approverRequestIds },
+                  id: { in: visiblePendingRequestIds },
                 },
                 select: pendingSelect,
                 orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1794,6 +1854,7 @@ export class WorkflowDbController {
               ? {
                   id: pending.id,
                   type: pending.type,
+                  impact: pending.impact ?? null,
                   status: pending.status,
                   oldData:
                     pending.oldData || ((pending.data as any)?.oldData ?? null),
@@ -1808,6 +1869,7 @@ export class WorkflowDbController {
           data: activeWithPending,
           activeCount,
           pendingCount,
+          inactiveCount,
           pageInfo: pageData.pageInfo,
         });
       }
@@ -1863,8 +1925,9 @@ export class WorkflowDbController {
         delete rest.workflowHistories;
         return {
           ...rest,
+          impact: req.impact ?? null,
           oldData: req.oldData || ((req.data as any)?.oldData ?? null),
-          newData: req.data || null,
+          newData: req.type === 'INITIATE' ? null : (req.data || null),
           initiator,
           initiatorTimestamp,
           nodeType,
@@ -1879,6 +1942,7 @@ export class WorkflowDbController {
         data: pendingRequests,
         activeCount,
         pendingCount,
+        inactiveCount,
         pageInfo: pageData.pageInfo,
       });
     } catch (error) {

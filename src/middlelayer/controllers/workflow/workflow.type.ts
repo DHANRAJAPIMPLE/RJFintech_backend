@@ -96,6 +96,7 @@ export type WorkflowInitiator = {
 export type WorkflowPendingItem = {
   data: WorkflowPendingRequestData;
   type?: 'INITIATE' | 'UPDATE' | 'INACTIVE';
+  impact?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
   status: 'PENDING';
@@ -114,13 +115,14 @@ export type WorkflowPendingItem = {
 export type WorkflowPendingRequestSnapshot = {
   id: string;
   type?: 'INITIATE' | 'UPDATE' | 'INACTIVE';
+  impact?: string | null;
   status?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
   createdAt?: string | null;
 };
 
-export type WorkflowListType = 'active' | 'pending';
+export type WorkflowListType = 'active' | 'pending' | 'inactive';
 
 export type WorkflowListPageInfo = {
   page: number;
@@ -154,6 +156,7 @@ export type FetchWorkflowsInternalData = {
   data: WorkflowActiveInternalItem[] | WorkflowPendingInternalItem[];
   activeCount: number;
   pendingCount: number;
+  inactiveCount: number;
   pageInfo: WorkflowListPageInfo;
 };
 
@@ -163,6 +166,7 @@ export type FetchWorkflowsResponse = {
   data: WorkflowActiveItem[] | WorkflowPendingItem[];
   activeCount: number;
   pendingCount: number;
+  inactiveCount: number;
   pageInfo: WorkflowListPageInfo;
 };
 

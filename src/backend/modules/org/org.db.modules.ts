@@ -41,6 +41,7 @@ export class OrgStructureDbController {
   private static async getCurrentApproverRequestIds(
     reqTable: string,
     userId?: string | null,
+    companyId?: string | null,
   ) {
     if (!userId) return [];
 
@@ -49,13 +50,31 @@ export class OrgStructureDbController {
       select: { reqId: true, approversList: true },
     });
 
-    return approverRows
+    const approverReqIds = approverRows
       .filter(
         (row) =>
           Array.isArray(row.approversList) &&
           row.approversList.includes(userId),
       )
       .map((row) => row.reqId);
+
+    if (!companyId || reqTable !== 'org_structure_req') {
+      return approverReqIds;
+    }
+
+    const initiatedReqIds = (
+      await prisma.orgStructureReq.findMany({
+        where: {
+          companyId,
+          status: 'PENDING',
+          initiatorId: userId,
+          type: 'UPDATE',
+        },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    return Array.from(new Set([...approverReqIds, ...initiatedReqIds]));
   }
 
   private static toNodeSnapshot(node: any): OrgNodeSnapshot {
@@ -100,6 +119,21 @@ export class OrgStructureDbController {
     if (!access) {
       throw new AppError(
         'Access Denied: UPDATE permission is required for organization modifications',
+        403,
+      );
+    }
+
+    const adminAccess = await prisma.userAccess.findFirst({
+      where: {
+        userId: initiatorId,
+        companyId,
+        OR: [{ roleCode: 'SAAS_ADMIN' }, { roleCode: 'CORP_ADMIN' }],
+      },
+    });
+
+    if (adminAccess) {
+      throw new AppError(
+        'SAAS Admin and Corp Admin cannot modify organization structures',
         403,
       );
     }
@@ -222,6 +256,9 @@ export class OrgStructureDbController {
       });
       if (!node || node.companyId !== companyId) {
         throw new AppError('Organization node not found', 404);
+      }
+      if (node.nodeType === 'ROOT') {
+        throw new AppError('Root organization node cannot be modified', 400);
       }
       if (node.status !== 'ACTIVE') {
         throw new AppError(
@@ -1388,6 +1425,7 @@ export class OrgStructureDbController {
         await OrgStructureDbController.getCurrentApproverRequestIds(
           'org_structure_req',
           userId,
+          resolvedCompanyId,
         ),
       );
       const pendingByNodePath = new Map<string, any>();

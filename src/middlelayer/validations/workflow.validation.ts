@@ -9,11 +9,7 @@
  * - To strictly type workflow initiation, actions, and history lookups.
  */
 import { z } from 'zod';
-import {
-  cursorPaginationFields,
-  nameSchema,
-  requiredActivePendingTypeSchema,
-} from './common.validation';
+import { cursorPaginationFields, nameSchema } from './common.validation';
 
 const approverTypeEnum = z.enum([
   'GLOBAL_APPROVER',
@@ -42,6 +38,10 @@ const levelsSchema = z.object({
 
 const normalizeRequestType = (value: unknown) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;
+const requiredWorkflowListTypeSchema = z.preprocess(
+  normalizeRequestType,
+  z.enum(['active', 'pending', 'inactive']),
+);
 
 export const workflowOnboardingSchema = z
   .object({
@@ -126,7 +126,7 @@ export const workflowRequestsSchema = z
 
 export const workflowListSchema = z
   .object({
-    type: requiredActivePendingTypeSchema,
+    type: requiredWorkflowListTypeSchema,
     ...cursorPaginationFields,
   })
   .strict();
