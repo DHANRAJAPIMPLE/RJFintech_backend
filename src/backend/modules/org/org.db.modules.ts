@@ -1193,40 +1193,64 @@ export class OrgStructureDbController {
       }
 
       let whereCondition: any = { companyId: resolvedCompanyId };
+      let applyHistoryFilter = false;
+      const normalizedNodeName = nodeName?.trim().toLowerCase() || null;
+      let selectedNodeType: string | null = null;
+      if (typeof nodePath === 'string' && nodePath.length > 0) {
+        const selectedNode = await prisma.orgStructure.findFirst({
+          where: { companyId: resolvedCompanyId, nodePath },
+          select: { nodeType: true },
+        });
+        selectedNodeType = selectedNode?.nodeType || null;
+      }
+      const matchesNodeFilter = (data: any) => {
+        if (!data) return false;
+        const candidateNodeNames = [data?.newNodeName, data?.currentData?.nodeName]
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.toLowerCase());
+        const derivedNodePath =
+          typeof data?.parentNode?.nodePath === 'string' &&
+          typeof data?.newNodeName === 'string'
+            ? `${data.parentNode.nodePath}.${OrgStructureDbController.pathSegment(data.newNodeName)}`
+            : null;
+        const candidatePaths = [
+          data?.targetNodePath,
+          data?.currentData?.nodePath,
+          data?.nodePath,
+          derivedNodePath,
+        ].filter((value): value is string => typeof value === 'string');
+        const parentNodePath =
+          typeof data?.parentNode?.nodePath === 'string'
+            ? data.parentNode.nodePath
+            : null;
+        const hasPathSignals = candidatePaths.length > 0;
+        const nodeNameMatches = normalizedNodeName
+          ? candidateNodeNames.includes(normalizedNodeName)
+          : true;
+        const nodePathMatches =
+          typeof nodePath === 'string' && nodePath.length > 0
+            ? hasPathSignals
+              ? candidatePaths.some((path) => path === nodePath) ||
+                (selectedNodeType === 'ROOT' && parentNodePath === nodePath)
+              : nodeNameMatches
+            : true;
+        return nodeNameMatches && nodePathMatches;
+      };
 
       if (nodeName || nodePath) {
-        const normalizedNodeName = nodeName?.trim().toLowerCase() || null;
         const matchingReqs = (
           await prisma.orgStructureReq.findMany({
             where: { companyId: resolvedCompanyId },
             select: { id: true, data: true, type: true },
           })
-        ).filter((req) => {
-          const data = req.data as any;
-          const candidateNodeName = String(
-            data?.newNodeName ||
-              data?.currentData?.nodeName ||
-              data?.parentNode?.nodeName ||
-              '',
-          ).toLowerCase();
-          const targetNodePath = String(
-            data?.targetNodePath ||
-              data?.currentData?.nodePath ||
-              data?.nodePath ||
-              '',
-          );
-          const parentNodePath = String(data?.parentNode?.nodePath || '');
-          const nodeNameMatches = normalizedNodeName
-            ? candidateNodeName === normalizedNodeName
-            : true;
-          const nodePathMatches = nodePath
-            ? targetNodePath === nodePath || parentNodePath === nodePath
-            : true;
-          return nodeNameMatches && nodePathMatches;
-        });
+        ).filter((req) => matchesNodeFilter(req.data as any));
 
         const reqIds = matchingReqs.map((r) => r.id);
-        whereCondition.orgReqId = { in: reqIds };
+        if (reqIds.length > 0) {
+          whereCondition.orgReqId = { in: reqIds };
+        } else {
+          applyHistoryFilter = true;
+        }
       }
 
       let histories = await prisma.orgHistory.findMany({
@@ -1259,6 +1283,9 @@ export class OrgStructureDbController {
       histories = histories.filter(
         (h) => !h.orgReqId || !rejectedReqIds.has(h.orgReqId),
       );
+      if (applyHistoryFilter) {
+        histories = histories.filter((h) => matchesNodeFilter(h.orgReq?.data as any));
+      }
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
       const reqIds = Array.from(
