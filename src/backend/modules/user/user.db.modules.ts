@@ -846,7 +846,7 @@ export class UserDbController {
         data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
       return (
         typeof targetNodePath === 'string' &&
-        UserDbController.pathsOverlap(targetNodePath, nodePath)
+        targetNodePath === nodePath
       );
     });
 
@@ -1339,6 +1339,17 @@ export class UserDbController {
         ? await prisma.user.findMany({
             where: { email: { in: pendingEmails } },
             include: {
+              userMappings: {
+                where: { companyId: resolvedCompanyId },
+                include: {
+                  manager: {
+                    select: {
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              },
               userAccesses: {
                 where: { companyId: resolvedCompanyId },
                 include: {
@@ -1361,8 +1372,8 @@ export class UserDbController {
             },
           })
         : [];
-    const existingAccessMap = new Map(
-      existingUsers.map((user) => [user.email, user.userAccesses]),
+    const existingUserMap = new Map(
+      existingUsers.map((user) => [String(user.email || '').toLowerCase(), user]),
     );
 
     return pendingOnboardings.map((onb: any) => {
@@ -1370,6 +1381,10 @@ export class UserDbController {
       const basic = dataBlob?.basicDetails || {};
       const email = basic.email || dataBlob?.targetUserEmail;
       const historyEmail = dataBlob?.targetUserEmail || email;
+      const existingUser = existingUserMap.get(
+        String(historyEmail || '').toLowerCase(),
+      );
+      const existingMapping = existingUser?.userMappings?.[0];
       const managerEmail = basic.reportingManager;
       const init = historyMap.get(`${historyEmail}_INITIATE`);
       const approve = historyMap.get(`${historyEmail}_APPROVED`);
@@ -1385,7 +1400,7 @@ export class UserDbController {
       const effectivePermissions =
         incomingPermissions.length > 0
           ? incomingPermissions
-          : (existingAccessMap.get(historyEmail) || []).map((access: any) => ({
+          : (existingUser?.userAccesses || []).map((access: any) => ({
               roleCategory: access.role?.category || '',
               roleSubCategory: access.role?.subCategory || '',
               roleName: access.role?.roleName || access.roleCode,
@@ -1428,15 +1443,26 @@ export class UserDbController {
         newData: isInitiate ? null : (dataBlob || null),
         approver: approve?.user || null,
         basicDetails: {
-          name: basic.name,
-          email: basic.email,
-          phone: basic.phone,
+          name: basic.name ?? existingUser?.name ?? null,
+          email: basic.email ?? existingUser?.email ?? null,
+          phone: basic.phone ?? existingUser?.phone ?? null,
           createdAt: onb.createdAt,
-          designation: basic.designation || null,
-          employeeId: basic.employeeId || null,
-          status: basic.status || null,
-          reportingManagerName: managerInfo?.name || null,
-          reportingManagerEmail: managerInfo?.email || null,
+          designation:
+            basic.designation !== undefined
+              ? basic.designation
+              : (existingMapping?.designation ?? null),
+          employeeId:
+            basic.employeeId !== undefined
+              ? basic.employeeId
+              : (existingMapping?.employeeId ?? null),
+          status:
+            basic.status !== undefined
+              ? basic.status
+              : (existingMapping?.status ?? null),
+          reportingManagerName:
+            managerInfo?.name || existingMapping?.manager?.name || null,
+          reportingManagerEmail:
+            managerInfo?.email || existingMapping?.manager?.email || null,
           initiatorName: init?.user?.name || null,
           initiatorEmail: init?.user?.email || null,
           initiatedDate: onb.createdAt,
@@ -2451,10 +2477,27 @@ export class UserDbController {
             id: true,
             type: true,
             data: true,
-            initiator: { select: { email: true } },
+            initiatorId: true,
           },
           take: 11,
         });
+        const initiatorIds = Array.from(
+          new Set(
+            userReqs
+              .map((req) => req.initiatorId)
+              .filter((id): id is string => typeof id === 'string'),
+          ),
+        );
+        const initiators =
+          initiatorIds.length > 0
+            ? await prisma.user.findMany({
+                where: { id: { in: initiatorIds } },
+                select: { id: true, email: true },
+              })
+            : [];
+        const initiatorMap = new Map(
+          initiators.map((initiator) => [initiator.id, initiator.email]),
+        );
         const lines = userReqs
           .slice(0, 10)
           .map((req) => {
@@ -2465,7 +2508,10 @@ export class UserDbController {
               data?.targetNodePath ||
               data?.basicDetails?.email ||
               'N/A';
-            return `- Request ID: #${req.id} | Type: ${req.type || 'N/A'} | Target: ${targetName}`;
+            const initiatorEmail = req.initiatorId
+              ? initiatorMap.get(req.initiatorId) || 'unknown'
+              : 'unknown';
+            return `- Request ID: #${req.id} | Type: ${req.type || 'N/A'} | Target: ${targetName} | Initiator: ${initiatorEmail}`;
           })
           .join('\n');
         const remaining = Math.max(blockingReqIds.length - 10, 0);

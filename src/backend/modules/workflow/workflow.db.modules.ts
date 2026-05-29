@@ -128,12 +128,12 @@ export class WorkflowDbController {
     const [userRequests, orgRequests, workflowRequests] = await Promise.all([
       client.userOnboarding.findMany({
         where: { workflowId, status: 'PENDING' },
-        select: { id: true, type: true, initiator: { select: { email: true } } },
+        select: { id: true, type: true, initiatorId: true },
         take: 11,
       }),
       client.orgStructureReq.findMany({
         where: { workflowId, status: 'PENDING' },
-        select: { id: true, type: true, initiator: { select: { email: true } } },
+        select: { id: true, type: true, initiatorId: true },
         take: 11,
       }),
       client.workflowReq.findMany({
@@ -151,7 +151,7 @@ export class WorkflowDbController {
 
     const initiatorIds = Array.from(
       new Set(
-        workflowRequests
+        [...workflowRequests, ...userRequests, ...orgRequests]
           .map((request: any) => request.initiatorId)
           .filter((id: any): id is string => typeof id === 'string'),
       ),
@@ -166,14 +166,17 @@ export class WorkflowDbController {
     const workflowInitiatorMap = new Map(
       workflowInitiators.map((user: any) => [user.id, user.email]),
     );
-    const normalizedWorkflowRequests = workflowRequests.map((request: any) => ({
+    const normalizeWithInitiator = (request: any) => ({
       ...request,
       initiator: {
         email: workflowInitiatorMap.get(request.initiatorId) || 'unknown',
       },
-    }));
-
-    const combined = [...userRequests, ...orgRequests, ...normalizedWorkflowRequests];
+    });
+    const combined = [
+      ...userRequests.map(normalizeWithInitiator),
+      ...orgRequests.map(normalizeWithInitiator),
+      ...workflowRequests.map(normalizeWithInitiator),
+    ];
     if (combined.length > 0) {
       const lines = combined
         .slice(0, 10)
@@ -315,7 +318,7 @@ export class WorkflowDbController {
         data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
       return (
         typeof targetNodePath === 'string' &&
-        WorkflowDbController.pathsOverlap(targetNodePath, nodePath)
+        targetNodePath === nodePath
       );
     });
 
