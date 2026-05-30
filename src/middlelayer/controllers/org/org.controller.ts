@@ -463,6 +463,7 @@ export class OrgController {
           return {
             id: req.id,
             type: req.type,
+            impact: req.impact ?? null,
             oldData: req.oldData ?? reqData.oldData ?? null,
             newData: req.newData ?? reqData ?? null,
             newNodeName: reqData.newNodeName ?? reqData.targetNodePath ?? '',

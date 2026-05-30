@@ -4,7 +4,15 @@ import { emitNotificationEvent } from '../../../shared/utils/notification-events
 import { getPagination } from '../../../shared/utils/pagination.util';
 import { prisma } from '../../lib/prisma';
 
-type NotificationType = 'INITIATE' | 'APPROVE' | 'REJECT' | 'ONBOARDED';
+type NotificationType =
+  | 'INITIATE'
+  | 'APPROVE'
+  | 'REJECT'
+  | 'ONBOARDED'
+  | 'MODIFICATION'
+  | 'ACTIVE'
+  | 'INACTIVE'
+  | 'ARCHIVE';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 
 type CreateNotificationInput = {
@@ -24,6 +32,10 @@ const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
   'APPROVE',
   'REJECT',
   'ONBOARDED',
+  'MODIFICATION',
+  'ACTIVE',
+  'INACTIVE',
+  'ARCHIVE',
 ];
 const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'USER',
@@ -127,7 +139,8 @@ export class NotificationService {
     const workflowName = getDisplayValue(input.referenceName, 'the workflow');
     const companyName = getDisplayValue(input.referenceName, 'the company');
 
-    switch (`${input.referenceType}:${input.type}`) {
+    const content = (() => {
+      switch (`${input.referenceType}:${input.type}`) {
       case 'USER:INITIATE':
         return {
           name: 'User onboarding initiated',
@@ -147,6 +160,26 @@ export class NotificationService {
         return {
           name: 'User onboarded',
           message: `${actorName} onboarded ${userName}`,
+        };
+      case 'USER:MODIFICATION':
+        return {
+          name: 'User modification',
+          message: `${actorName} updated user access for ${userName}`,
+        };
+      case 'USER:ACTIVE':
+        return {
+          name: 'User activated',
+          message: `${actorName} activated ${userName}`,
+        };
+      case 'USER:INACTIVE':
+        return {
+          name: 'User inactivated',
+          message: `${actorName} inactivated ${userName}`,
+        };
+      case 'USER:ARCHIVE':
+        return {
+          name: 'User archived',
+          message: `${actorName} archived ${userName}`,
         };
       case 'ORG:INITIATE':
         return {
@@ -168,6 +201,11 @@ export class NotificationService {
           name: 'Organization structure onboarded',
           message: `${actorName} onboarded organization structure for ${orgName}`,
         };
+      case 'ORG:MODIFICATION':
+        return {
+          name: 'Organization modification',
+          message: `${actorName} updated organization structure for ${orgName}`,
+        };
       case 'WORKFLOW:INITIATE':
         return {
           name: 'Workflow request initiated',
@@ -187,6 +225,21 @@ export class NotificationService {
         return {
           name: 'Workflow onboarded',
           message: `${actorName} onboarded workflow ${workflowName}`,
+        };
+      case 'WORKFLOW:MODIFICATION':
+        return {
+          name: 'Workflow modification',
+          message: `${actorName} updated workflow ${workflowName}`,
+        };
+      case 'WORKFLOW:ACTIVE':
+        return {
+          name: 'Workflow activated',
+          message: `${actorName} activated workflow ${workflowName}`,
+        };
+      case 'WORKFLOW:INACTIVE':
+        return {
+          name: 'Workflow inactivated',
+          message: `${actorName} inactivated workflow ${workflowName}`,
         };
       case 'COMPANY:INITIATE':
         return {
@@ -210,10 +263,16 @@ export class NotificationService {
         };
       default:
         return {
-          name: input.name || 'Notification',
-          message: input.message || `${actorName} updated a notification`,
+          name: 'Notification',
+          message: `${actorName} updated a notification`,
         };
-    }
+      }
+    })();
+
+    return {
+      name: input.name || content.name,
+      message: input.message || content.message,
+    };
   }
 
   private static async filterActiveCompanyUserIds(

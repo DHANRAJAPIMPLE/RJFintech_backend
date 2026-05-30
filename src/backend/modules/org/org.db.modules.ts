@@ -56,7 +56,7 @@ export class OrgStructureDbController {
     );
     await NotificationService.createRequestNotification({
       companyId,
-      type: 'INITIATE',
+      type: 'MODIFICATION',
       name: 'Organization modification blocked',
       message,
       referenceType: 'ORG',
@@ -71,6 +71,229 @@ export class OrgStructureDbController {
       .trim()
       .replace(/[^a-zA-Z0-9_]/g, '_')
       .toUpperCase();
+  }
+
+  private static getOrgNotificationContent(
+    type: string | null | undefined,
+    phase: 'initiated' | 'approved' | 'rejected',
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Organization modification'
+        : 'Organization onboarding';
+
+    return {
+      name: `${label} ${phase}`,
+      message: `${label} request ${phase} for ${referenceName}`,
+    };
+  }
+
+  private static getOrgNotificationType(
+    type: string | null | undefined,
+    status: string | null | undefined,
+  ) {
+    const normalizedStatus = String(status || '').toUpperCase();
+    if (normalizedStatus === 'REJECTED') return 'REJECT' as const;
+    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVE' as const;
+
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    if (normalizedType === 'UPDATE') return 'MODIFICATION' as const;
+    if (normalizedStatus === 'APPROVED') return 'ONBOARDED' as const;
+
+    return 'INITIATE' as const;
+  }
+
+  private static resolveRequestedNodePath(data: any, fallback?: string | null) {
+    if (typeof fallback === 'string' && fallback.trim()) {
+      return fallback.trim();
+    }
+    if (typeof data?.nodePath === 'string' && data.nodePath.trim()) {
+      return data.nodePath.trim();
+    }
+    if (
+      typeof data?.parentNode?.nodePath === 'string' &&
+      data.parentNode.nodePath.trim() &&
+      typeof data?.newNodeName === 'string' &&
+      data.newNodeName.trim()
+    ) {
+      return `${data.parentNode.nodePath.trim()}.${OrgStructureDbController.pathSegment(data.newNodeName)}`;
+    }
+
+    return null;
+  }
+
+  private static formatUserAccessImpact(count: number) {
+    return count > 0 ? `${count} USER_ACCESS_ADDED` : 'NO_ISSUES';
+  }
+
+  private static async getPropagatingParentAccesses(
+    client: any,
+    companyId: string,
+    newNodePath: string,
+  ) {
+    const parentPaths = ltree.getAncestors(newNodePath);
+    if (parentPaths.length === 0) {
+      return [];
+    }
+
+    const parentNodes = await client.orgStructure.findMany({
+      where: {
+        companyId,
+        nodePath: { in: parentPaths },
+      },
+      select: { id: true, nodePath: true },
+    });
+    const parentNodeIds = parentNodes.map((node: any) => node.id);
+    if (parentNodeIds.length === 0) {
+      return [];
+    }
+
+    const directParentPath = ltree.getParent(newNodePath);
+    const directParentId = parentNodes.find(
+      (node: any) => node.nodePath === directParentPath,
+    )?.id;
+
+    return client.userAccess.findMany({
+      where: {
+        companyId,
+        nodeId: { in: parentNodeIds },
+        isGlobalAccess: false,
+        OR: [
+          { accessCategory: 'ALL_CHILD' },
+          directParentId
+            ? {
+                nodeId: directParentId,
+                accessCategory: 'IMMEDIATE_CHILD',
+              }
+            : undefined,
+        ].filter(Boolean) as any,
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        role: { select: { roleName: true } },
+      },
+    });
+  }
+
+  private static buildPropagatedAccesses(
+    parentAccesses: any[],
+    newNodeId: string,
+  ) {
+    const newAccessesMap = new Map<string, any>();
+
+    for (const access of parentAccesses) {
+      const uniqueKey = `${access.userId}_${access.roleCode}`;
+      if (newAccessesMap.has(uniqueKey)) continue;
+
+      newAccessesMap.set(uniqueKey, {
+        userId: access.userId,
+        userName: access.user?.name || null,
+        userEmail: access.user?.email || null,
+        roleCode: access.roleCode,
+        roleName: access.role?.roleName || access.roleCode,
+        nodeId: newNodeId,
+        accessType: 'SECONDARY',
+        accessCategory:
+          access.accessCategory === 'IMMEDIATE_CHILD'
+            ? 'NODE'
+            : access.accessCategory,
+        companyId: access.companyId,
+        isGlobalAccess: false,
+      });
+    }
+
+    return Array.from(newAccessesMap.values());
+  }
+
+  private static async countPropagatedUserAccesses(
+    client: any,
+    companyId: string,
+    newNodePath: string | null,
+  ) {
+    if (!newNodePath) return 0;
+
+    const parentAccesses =
+      await OrgStructureDbController.getPropagatingParentAccesses(
+        client,
+        companyId,
+        newNodePath,
+      );
+
+    return new Set(
+      parentAccesses.map((access: any) => `${access.userId}_${access.roleCode}`),
+    ).size;
+  }
+
+  private static async notifyUserAccessImpact(params: {
+    companyId: string;
+    orgReqId: string;
+    nodeName: string;
+    nodePath: string;
+    createdBy: string;
+    accessChanges: Array<{
+      userId: string;
+      userName?: string | null;
+      userEmail?: string | null;
+      roleName?: string | null;
+      roleCode: string;
+    }>;
+  }) {
+    const { companyId, accessChanges } = params;
+    if (accessChanges.length === 0) return;
+
+    const impactedUserIds = accessChanges.map((change) => change.userId);
+    const [impactedMappings, corpAdminAccesses] = await Promise.all([
+      prisma.userMapping.findMany({
+        where: {
+          companyId,
+          userId: { in: impactedUserIds },
+          status: 'ACTIVE',
+        },
+        select: { userId: true, reportingManager: true },
+      }),
+      prisma.userAccess.findMany({
+        where: {
+          companyId,
+          roleCode: 'CORP_ADMIN',
+          user: {
+            userMappings: {
+              some: { companyId, status: 'ACTIVE' },
+            },
+          },
+        },
+        select: { userId: true },
+      }),
+    ]);
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      impactedUserIds,
+      impactedMappings.map((mapping) => mapping.reportingManager),
+      corpAdminAccesses.map((access) => access.userId),
+    );
+    const impactedNames = accessChanges
+      .slice(0, 5)
+      .map((change) => {
+        const user = change.userName || change.userEmail || change.userId;
+        const role = change.roleName || change.roleCode;
+        return `${user} (${role})`;
+      })
+      .join(', ');
+    const remaining = Math.max(accessChanges.length - 5, 0);
+    const remainingText =
+      remaining > 0 ? ` and ${remaining} more access change(s)` : '';
+
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'MODIFICATION',
+      name: 'Organization access updated',
+      message: `System added ${accessChanges.length} user role access(es) for new organization node ${params.nodeName} (${params.nodePath}). Impacted: ${impactedNames}${remainingText}.`,
+      referenceId: params.orgReqId,
+      referenceName: params.nodeName,
+      createdBy: params.createdBy,
+      recipientUserIds,
+    });
   }
 
   private static pathsOverlap(left: string, right: string) {
@@ -111,7 +334,6 @@ export class OrgStructureDbController {
           companyId,
           status: 'PENDING',
           initiatorId: userId,
-          type: 'UPDATE',
         },
         select: { id: true },
       })
@@ -536,9 +758,20 @@ export class OrgStructureDbController {
         return requestRecord;
       });
 
+      const modificationNotification =
+        OrgStructureDbController.getOrgNotificationContent(
+          'UPDATE',
+          'initiated',
+          targetNodePath,
+        );
       await NotificationService.createRequestNotification({
         companyId,
-        type: 'INITIATE',
+        type: OrgStructureDbController.getOrgNotificationType(
+          'UPDATE',
+          'PENDING',
+        ),
+        name: modificationNotification.name,
+        message: modificationNotification.message,
         referenceType: 'ORG',
         referenceId: request.id,
         referenceName: targetNodePath,
@@ -690,6 +923,7 @@ export class OrgStructureDbController {
       let notificationCompanyId = '';
       let notificationRecipients: string[] = [];
       let notificationSubject = 'Organization request';
+      let userAccessImpactNotification: any = null;
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
@@ -870,75 +1104,41 @@ export class OrgStructureDbController {
             },
           });
 
-          // Propagate user access from parent nodes using ltree concept
-          const parentPaths = ltree.getAncestors(newNodePath);
+          const parentAccesses =
+            await OrgStructureDbController.getPropagatingParentAccesses(
+              tx,
+              request.companyId,
+              newNodePath,
+            );
+          const newAccesses =
+            OrgStructureDbController.buildPropagatedAccesses(
+              parentAccesses,
+              newNode.id,
+            );
 
-          if (parentPaths.length > 0) {
-            const parentNodes = await tx.orgStructure.findMany({
-              where: {
-                companyId: request.companyId,
-                nodePath: { in: parentPaths },
-              },
+          if (newAccesses.length > 0) {
+            await tx.userAccess.createMany({
+              data: newAccesses.map(
+                ({
+                  userName,
+                  userEmail,
+                  roleName,
+                  ...access
+                }: any) => access,
+              ),
+              skipDuplicates: true,
             });
-
-            const parentNodeIds = parentNodes.map((n) => n.id);
-            const directParentPath = ltree.getParent(newNodePath);
-            const directParentId = parentNodes.find(
-              (n) => n.nodePath === directParentPath,
-            )?.id;
-
-            if (parentNodeIds.length > 0) {
-              // Fetch only propagating access:
-              // - ALL_CHILD from any ancestor
-              // - IMMEDIATE_CHILD only from the direct parent
-              const parentAccesses = await tx.userAccess.findMany({
-                where: {
-                  companyId: request.companyId,
-                  nodeId: { in: parentNodeIds },
-                  isGlobalAccess: false,
-                  OR: [
-                    { accessCategory: 'ALL_CHILD' },
-                    directParentId
-                      ? {
-                          nodeId: directParentId,
-                          accessCategory: 'IMMEDIATE_CHILD',
-                        }
-                      : undefined,
-                  ].filter(Boolean) as any,
-                },
-              });
-
-              // Prepare new entries, ensuring uniqueness
-              const newAccessesMap = new Map();
-              for (const access of parentAccesses) {
-                const uniqueKey = `${access.userId}_${access.roleCode}`;
-                if (!newAccessesMap.has(uniqueKey)) {
-                  // Rule: IMMEDIATE_CHILD on parent becomes NODE on child
-                  const newCategory =
-                    access.accessCategory === 'IMMEDIATE_CHILD'
-                      ? 'NODE'
-                      : access.accessCategory;
-
-                  newAccessesMap.set(uniqueKey, {
-                    userId: access.userId,
-                    roleCode: access.roleCode,
-                    nodeId: newNode.id,
-                    accessType: 'SECONDARY',
-                    accessCategory: newCategory,
-                    companyId: access.companyId,
-                    isGlobalAccess: false,
-                  });
-                }
-              }
-
-              const newAccesses = Array.from(newAccessesMap.values());
-              if (newAccesses.length > 0) {
-                await tx.userAccess.createMany({
-                  data: newAccesses,
-                  skipDuplicates: true,
-                });
-              }
-            }
+            userAccessImpactNotification = {
+              nodeName: newNode.nodeName,
+              nodePath: newNode.nodePath,
+              accessChanges: newAccesses.map((access: any) => ({
+                userId: access.userId,
+                userName: access.userName,
+                userEmail: access.userEmail,
+                roleName: access.roleName,
+                roleCode: access.roleCode,
+              })),
+            };
           }
 
           // 2. Update the onboarding request status
@@ -946,6 +1146,10 @@ export class OrgStructureDbController {
             where: { id },
             data: {
               status: 'APPROVED',
+              impact:
+                OrgStructureDbController.formatUserAccessImpact(
+                  newAccesses.length,
+                ),
               remarks,
             },
           });
@@ -986,20 +1190,43 @@ export class OrgStructureDbController {
             notificationRecipients,
             requestInitiatorId,
           );
+        const orgNotificationContent =
+          requestType === 'UPDATE' && result?.status
+            ? OrgStructureDbController.getOrgNotificationContent(
+                requestType,
+                result.status === 'REJECTED' ? 'rejected' : 'approved',
+                notificationSubject,
+              )
+            : null;
 
         await NotificationService.createRequestNotification({
           companyId: notificationCompanyId,
-          type:
-            result?.status === 'REJECTED'
-              ? 'REJECT'
-              : result?.status === 'APPROVED' && result?.type !== 'UPDATE'
-                ? 'ONBOARDED'
-                : 'APPROVE',
+          type: OrgStructureDbController.getOrgNotificationType(
+            result?.type || requestType,
+            result?.status,
+          ),
+          ...(orgNotificationContent || {}),
           referenceType: 'ORG',
           referenceId: id,
           referenceName: notificationSubject,
           createdBy: approverId,
           recipientUserIds: notificationRecipientUserIds,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type !== 'UPDATE' &&
+        userAccessImpactNotification
+      ) {
+        await OrgStructureDbController.notifyUserAccessImpact({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          nodeName: userAccessImpactNotification.nodeName,
+          nodePath: userAccessImpactNotification.nodePath,
+          createdBy: approverId,
+          accessChanges: userAccessImpactNotification.accessChanges,
         });
       }
 
@@ -1089,9 +1316,22 @@ export class OrgStructureDbController {
       let notificationRecipients = rest.eligibleApprovers;
 
       const request = await prisma.$transaction(async (tx) => {
+        const reqData = rest.data || {};
+        const requestedNodePath =
+          OrgStructureDbController.resolveRequestedNodePath(reqData);
+        const propagatedAccessCount =
+          await OrgStructureDbController.countPropagatedUserAccesses(
+            tx,
+            resolvedCompanyId,
+            requestedNodePath,
+          );
         const reqRecord = await tx.orgStructureReq.create({
           data: {
             ...rest,
+            impact:
+              OrgStructureDbController.formatUserAccessImpact(
+                propagatedAccessCount,
+              ),
             initiatorId: initiatorId || null,
             companyId: resolvedCompanyId,
           },
@@ -1100,7 +1340,6 @@ export class OrgStructureDbController {
 
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         // Determine node for approver resolution from the request data
-        const reqData = rest.data || {};
         let nodeId: string | null = null;
 
         // Use parent node if available, otherwise use root node
@@ -1695,8 +1934,7 @@ export class OrgStructureDbController {
         }
       });
       const visiblePendingWithDetails = pendingWithDetails.filter(
-        (request: any) =>
-          request.type === 'INITIATE' || approverRequestIds.has(request.id),
+        (request: any) => approverRequestIds.has(request.id),
       );
 
       // 4. Remove internal UUIDs and format for the tree UI
@@ -1710,6 +1948,7 @@ export class OrgStructureDbController {
           ? {
               id: pendingByNodePath.get(node.nodePath).id,
               type: pendingByNodePath.get(node.nodePath).type,
+              impact: pendingByNodePath.get(node.nodePath).impact ?? null,
               status: pendingByNodePath.get(node.nodePath).status,
               oldData: pendingByNodePath.get(node.nodePath).oldData ?? null,
               newData: pendingByNodePath.get(node.nodePath).newData ?? null,

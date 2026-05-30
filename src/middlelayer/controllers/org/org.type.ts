@@ -40,6 +40,7 @@ export type OrgPendingInitiator = {
 export type OrgPendingInternalItem = {
   id: string;
   type?: 'INITIATE' | 'UPDATE';
+  impact?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
   data: OrgPendingRequestData;
@@ -52,6 +53,7 @@ export type OrgPendingInternalItem = {
 export type OrgPendingItem = {
   id: string;
   type?: 'INITIATE' | 'UPDATE';
+  impact?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
   newNodeName: string;
@@ -68,6 +70,7 @@ export type OrgPendingItem = {
 export type OrgPendingRequestSnapshot = {
   id: string;
   type?: 'INITIATE' | 'UPDATE';
+  impact?: string | null;
   status?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;

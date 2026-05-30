@@ -120,7 +120,7 @@ export class UserDbController {
     );
     await NotificationService.createRequestNotification({
       companyId,
-      type: 'INITIATE',
+      type: 'MODIFICATION',
       name: 'User modification blocked',
       message,
       referenceType: 'USER',
@@ -145,6 +145,47 @@ export class UserDbController {
     }
 
     return type as UserRequestType;
+  }
+
+  private static getUserNotificationContent(
+    type: string | null | undefined,
+    phase: 'initiated' | 'approved' | 'rejected',
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'User modification'
+        : normalizedType === 'ACTIVE'
+          ? 'User activation'
+          : normalizedType === 'INACTIVE'
+            ? 'User inactivation'
+            : normalizedType === 'ARCHIVE'
+              ? 'User archive'
+              : 'User onboarding';
+
+    return {
+      name: `${label} ${phase}`,
+      message: `${label} request ${phase} for ${referenceName}`,
+    };
+  }
+
+  private static getUserNotificationType(
+    type: string | null | undefined,
+    status: string | null | undefined,
+  ) {
+    const normalizedStatus = String(status || '').toUpperCase();
+    if (normalizedStatus === 'REJECTED') return 'REJECT' as const;
+    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVE' as const;
+
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    if (normalizedType === 'UPDATE') return 'MODIFICATION' as const;
+    if (normalizedType === 'ACTIVE') return 'ACTIVE' as const;
+    if (normalizedType === 'INACTIVE') return 'INACTIVE' as const;
+    if (normalizedType === 'ARCHIVE') return 'ARCHIVE' as const;
+    if (normalizedStatus === 'APPROVED') return 'ONBOARDED' as const;
+
+    return 'INITIATE' as const;
   }
 
   private static normalizePermission(permission: any): UserPermissionSnapshot {
@@ -281,6 +322,26 @@ export class UserDbController {
       added: added.filter((_, index) => !pairedAdded.has(index)),
       updated,
     };
+  }
+
+  private static rolePermissionRank(value: unknown) {
+    return (
+      {
+        VIEWER: 1,
+        USER: 2,
+        MANAGER: 3,
+      }[String(value || '').toUpperCase()] || 0
+    );
+  }
+
+  private static accessScopeRank(value: unknown) {
+    return (
+      {
+        NODE: 1,
+        IMMEDIATE_CHILD: 2,
+        ALL_CHILD: 3,
+      }[String(value || 'NODE').toUpperCase()] || 1
+    );
   }
 
   private static async fetchUserSnapshot(
@@ -467,27 +528,39 @@ export class UserDbController {
             select: { roleName: true, permissionLevel: true },
           })
         : [];
-    const rank = new Map(
+    const roleRank = new Map(
       roles.map((role) => [
         role.roleName,
-        { VIEWER: 1, USER: 2, MANAGER: 3 }[
-          String(role.permissionLevel || '').toUpperCase()
-        ] || 0,
+        UserDbController.rolePermissionRank(role.permissionLevel),
       ]),
     );
-    const hasLowerRole = diff.updated.some(
-      (change) =>
-        (rank.get(change.newData.roleName) || 0) <
-        (rank.get(change.oldData.roleName) || 0),
-    );
-    const hasHigherRole = diff.updated.some(
-      (change) =>
-        (rank.get(change.newData.roleName) || 0) >=
-        (rank.get(change.oldData.roleName) || 0),
-    );
+    const hasLowerPermission = diff.updated.some((change) => {
+      const oldRoleRank = roleRank.get(change.oldData.roleName) || 0;
+      const newRoleRank = roleRank.get(change.newData.roleName) || 0;
+      const oldScopeRank = UserDbController.accessScopeRank(
+        change.oldData.accessCategory,
+      );
+      const newScopeRank = UserDbController.accessScopeRank(
+        change.newData.accessCategory,
+      );
 
-    if (diff.removed.length > 0 || hasLowerRole) return 'DOWNGRADE';
-    if (diff.added.length > 0 || hasHigherRole) return 'UPGRADE';
+      return newRoleRank < oldRoleRank || newScopeRank < oldScopeRank;
+    });
+    const hasHigherPermission = diff.updated.some((change) => {
+      const oldRoleRank = roleRank.get(change.oldData.roleName) || 0;
+      const newRoleRank = roleRank.get(change.newData.roleName) || 0;
+      const oldScopeRank = UserDbController.accessScopeRank(
+        change.oldData.accessCategory,
+      );
+      const newScopeRank = UserDbController.accessScopeRank(
+        change.newData.accessCategory,
+      );
+
+      return newRoleRank > oldRoleRank || newScopeRank > oldScopeRank;
+    });
+
+    if (diff.removed.length > 0 || hasLowerPermission) return 'DOWNGRADE';
+    if (diff.added.length > 0 || hasHigherPermission) return 'UPGRADE';
     if (
       existing.basicDetails.reportingManager !==
       proposed.basicDetails.reportingManager
@@ -826,7 +899,6 @@ export class UserDbController {
           companyId,
           status: 'PENDING',
           initiatorId: userId,
-          type: { in: ['UPDATE', 'ACTIVE', 'INACTIVE', 'ARCHIVE'] },
         },
         select: { id: true },
       })
@@ -1117,30 +1189,6 @@ export class UserDbController {
     };
   }
 
-  private static isPendingOnboardingVisibleToNodePaths(
-    onboarding: any,
-    visibleNodePaths: Set<string>,
-  ) {
-    const data = onboarding.data as any;
-    const basic = data?.basicDetails || {};
-    const permissions = Array.isArray(data?.permissions)
-      ? data.permissions
-      : [];
-
-    const isGlobalRequest =
-      basic.isGlobalUser === true ||
-      permissions.some((p: any) => p.roleName === 'Corp Admin');
-
-    if (isGlobalRequest) return false;
-
-    return permissions.some(
-      (p: any) =>
-        (p.accessType === 'PRIMARY' || p.accessType === 'SECONDARY') &&
-        typeof p.nodePath === 'string' &&
-        visibleNodePaths.has(p.nodePath),
-    );
-  }
-
   private static matchesPendingUserSearch(
     onboarding: any,
     query: string | null,
@@ -1201,21 +1249,13 @@ export class UserDbController {
         viewerUserId,
         resolvedCompanyId,
       );
-    const pendingVisibleTypeWhere =
-      approverRequestIds.length > 0
-        ? {
-            OR: [
-              { type: 'INITIATE' as const },
-              { id: { in: approverRequestIds } },
-            ],
-          }
-        : { type: 'INITIATE' as const };
+    const pendingVisibleWhere = { id: { in: approverRequestIds } };
 
     if (isGlobal && !query) {
       const where = {
         status: 'PENDING' as const,
         companyId: resolvedCompanyId,
-        ...pendingVisibleTypeWhere,
+        ...pendingVisibleWhere,
       };
       const pageWhere =
         applyPagination && cursor
@@ -1294,13 +1334,12 @@ export class UserDbController {
       };
     }
 
-    const visibleNodePathSet = new Set(visibleNodePaths);
     const approverRequestIdSet = new Set(approverRequestIds);
 
     const where = {
       status: 'PENDING' as const,
       companyId: resolvedCompanyId,
-      ...pendingVisibleTypeWhere,
+      ...pendingVisibleWhere,
     };
 
     const allPendingOnboardings = await prisma.userOnboarding.findMany({
@@ -1310,12 +1349,7 @@ export class UserDbController {
 
     const visiblePendingOnboardings = allPendingOnboardings.filter(
       (onb) =>
-        (isGlobal ||
-          approverRequestIdSet.has(onb.id) ||
-          UserDbController.isPendingOnboardingVisibleToNodePaths(
-            onb,
-            visibleNodePathSet,
-          )) &&
+        approverRequestIdSet.has(onb.id) &&
         UserDbController.matchesPendingUserSearch(onb, query),
     );
     const pendingCount = visiblePendingOnboardings.length;
@@ -2707,9 +2741,16 @@ export class UserDbController {
       return request;
     });
 
+    const modificationNotification = UserDbController.getUserNotificationContent(
+      type,
+      'initiated',
+      current.user.email,
+    );
     await NotificationService.createRequestNotification({
       companyId,
-      type: 'INITIATE',
+      type: UserDbController.getUserNotificationType(type, 'PENDING'),
+      name: modificationNotification.name,
+      message: modificationNotification.message,
       referenceType: 'USER',
       referenceId: onboarding.id,
       referenceName: current.user.email,
@@ -3752,18 +3793,26 @@ export class UserDbController {
           notificationRecipients,
           requestInitiatorId,
         );
+      const notificationReferenceName = name || email;
+      const userNotificationContent =
+        requestType !== 'INITIATE' && result?.status
+          ? UserDbController.getUserNotificationContent(
+              requestType,
+              result.status === 'REJECTED' ? 'rejected' : 'approved',
+              notificationReferenceName,
+            )
+          : null;
 
       await NotificationService.createRequestNotification({
         companyId: onboarding.companyId,
-        type:
-          result?.status === 'REJECTED'
-            ? 'REJECT'
-            : result?.status === 'APPROVED' && onboarding.type === 'INITIATE'
-              ? 'ONBOARDED'
-              : 'APPROVE',
+        type: UserDbController.getUserNotificationType(
+          onboarding.type,
+          result?.status,
+        ),
+        ...(userNotificationContent || {}),
         referenceType: 'USER',
         referenceId: id,
-        referenceName: name || email,
+        referenceName: notificationReferenceName,
         createdBy: approverId,
         recipientUserIds: notificationRecipientUserIds,
       });

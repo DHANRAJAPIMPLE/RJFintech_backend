@@ -146,7 +146,12 @@ export const userModificationSchema = z
       .optional(),
     permissions: z.array(userPermissionMutationSchema).optional(),
     levelsHash: z.string().nullable().optional(),
-    remarks: z.string().trim().min(2).max(500).optional(),
+    remarks: z
+      .string()
+      .trim()
+      .min(2, 'Please enter a remark with at least 2 characters')
+      .max(500, 'Remark must be 500 characters or fewer')
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -212,13 +217,13 @@ export const userFilterOptionsSchema = z.object({}).strict();
 
 export const userActionSchema = z
   .object({
-    id: z.string().uuid('Invalid onboarding ID'),
+    id: z.string().uuid('Request ID is invalid'),
     action: z.enum(['approve', 'reject']),
     remark: z
       .string()
       .trim()
-      .min(2, 'Remark is too short')
-      .max(500, 'Remark too long'),
+      .min(2, 'Please enter an approval remark with at least 2 characters')
+      .max(500, 'Approval remark must be 500 characters or fewer'),
   })
   .strict();
 

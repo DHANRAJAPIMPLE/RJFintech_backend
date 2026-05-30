@@ -28,6 +28,44 @@ type WorkflowTarget = {
  * and the retrieval of active workflows and their histories.
  */
 export class WorkflowDbController {
+  private static getWorkflowNotificationContent(
+    type: string | null | undefined,
+    phase: 'initiated' | 'approved' | 'rejected',
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Workflow modification'
+        : normalizedType === 'ACTIVE'
+          ? 'Workflow activation'
+          : normalizedType === 'INACTIVE'
+            ? 'Workflow inactivation'
+            : 'Workflow onboarding';
+
+    return {
+      name: `${label} ${phase}`,
+      message: `${label} request ${phase} for ${referenceName}`,
+    };
+  }
+
+  private static getWorkflowNotificationType(
+    type: string | null | undefined,
+    status: string | null | undefined,
+  ) {
+    const normalizedStatus = String(status || '').toUpperCase();
+    if (normalizedStatus === 'REJECTED') return 'REJECT' as const;
+    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVE' as const;
+
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    if (normalizedType === 'UPDATE') return 'MODIFICATION' as const;
+    if (normalizedType === 'ACTIVE') return 'ACTIVE' as const;
+    if (normalizedType === 'INACTIVE') return 'INACTIVE' as const;
+    if (normalizedStatus === 'APPROVED') return 'ONBOARDED' as const;
+
+    return 'INITIATE' as const;
+  }
+
   private static async filterEffectivelyPendingRequestIds(
     reqTable: string,
     requestIds: string[],
@@ -92,6 +130,41 @@ export class WorkflowDbController {
     return effective;
   }
 
+  private static async getCurrentViewerRequestIds(
+    userId: string | null | undefined,
+    companyId: string,
+  ) {
+    if (!userId) return [];
+
+    const [approverRows, initiatedRows] = await Promise.all([
+      prisma.workflowApprover.findMany({
+        where: { reqTable: 'workflow_req', status: 'PENDING' },
+        select: { reqId: true, approversList: true },
+      }),
+      prisma.workflowReq.findMany({
+        where: {
+          companyId,
+          status: 'PENDING',
+          initiatorId: userId,
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    const approverRequestIds = approverRows
+      .filter(
+        (row) =>
+          Array.isArray(row.approversList) &&
+          row.approversList.includes(userId),
+      )
+      .map((row) => row.reqId);
+    const initiatorRequestIds = initiatedRows.map((row) => row.id);
+
+    return Array.from(
+      new Set([...approverRequestIds, ...initiatorRequestIds]),
+    );
+  }
+
   private static async notifyConflict(
     companyId: string,
     initiatorId: string,
@@ -120,7 +193,7 @@ export class WorkflowDbController {
     );
     await NotificationService.createRequestNotification({
       companyId,
-      type: 'INITIATE',
+      type: 'MODIFICATION',
       name: 'Workflow request blocked',
       message,
       referenceType: 'WORKFLOW',
@@ -696,9 +769,17 @@ export class WorkflowDbController {
       return created;
     });
 
+    const modificationNotification =
+      WorkflowDbController.getWorkflowNotificationContent(
+        type,
+        'initiated',
+        newData.name,
+      );
     await NotificationService.createRequestNotification({
       companyId,
-      type: 'INITIATE',
+      type: WorkflowDbController.getWorkflowNotificationType(type, 'PENDING'),
+      name: modificationNotification.name,
+      message: modificationNotification.message,
       referenceType: 'WORKFLOW',
       referenceId: request.id,
       referenceName: newData.name,
@@ -1045,7 +1126,7 @@ export class WorkflowDbController {
           );
           await NotificationService.createRequestNotification({
             companyId: resolvedCompanyId,
-            type: 'INITIATE',
+            type: 'MODIFICATION',
             name: 'Workflow modification blocked',
             message:
               error instanceof Error
@@ -1607,18 +1688,33 @@ export class WorkflowDbController {
           notificationRecipients,
           requestInitiatorId,
         );
+      const workflowReferenceName =
+        (request.data as any)?.name || request.alias || request.id;
+      const workflowNotificationRequestType =
+        request.impact === 'ACTIVE'
+          ? 'ACTIVE'
+          : request.impact === 'INACTIVE'
+            ? 'INACTIVE'
+            : request.type;
+      const workflowNotificationContent =
+        requestType !== 'INITIATE' && result?.status
+          ? WorkflowDbController.getWorkflowNotificationContent(
+              workflowNotificationRequestType,
+              result.status === 'REJECTED' ? 'rejected' : 'approved',
+              workflowReferenceName,
+            )
+          : null;
 
       await NotificationService.createRequestNotification({
         companyId: request.companyId,
-        type:
-          result?.status === 'REJECTED'
-            ? 'REJECT'
-            : result?.status === 'APPROVED' && request.type === 'INITIATE'
-              ? 'ONBOARDED'
-              : 'APPROVE',
+        type: WorkflowDbController.getWorkflowNotificationType(
+          workflowNotificationRequestType,
+          result?.status,
+        ),
+        ...(workflowNotificationContent || {}),
         referenceType: 'WORKFLOW',
         referenceId: request.id,
-        referenceName: (request.data as any)?.name,
+        referenceName: workflowReferenceName,
         createdBy: approverId,
         recipientUserIds: notificationRecipientUserIds,
       });
@@ -2053,7 +2149,6 @@ export class WorkflowDbController {
       const pendingWhere: any = {
         companyId: resolvedCompanyId,
         status: 'PENDING',
-        ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
       };
       const inactiveWhere: any = {
         companyId: resolvedCompanyId,
@@ -2097,45 +2192,14 @@ export class WorkflowDbController {
             : []),
         ],
       };
-      const approverRows = userId
-        ? await prisma.workflowApprover.findMany({
-            where: { reqTable: 'workflow_req', status: 'PENDING' },
-            select: { reqId: true, approversList: true },
-          })
-        : [];
-      const approverRequestIds = approverRows
-        .filter(
-          (row) =>
-            Array.isArray(row.approversList) &&
-            row.approversList.includes(userId),
-        )
-        .map((row) => row.reqId);
-      const initiatorRequestIds = userId
-        ? (
-            await prisma.workflowReq.findMany({
-              where: {
-                companyId: resolvedCompanyId,
-                status: 'PENDING',
-                initiatorId: userId,
-                type: { in: ['UPDATE', 'INACTIVE'] },
-              },
-              select: { id: true },
-            })
-          ).map((row) => row.id)
-        : [];
-      const visiblePendingRequestIds = Array.from(
-        new Set([...approverRequestIds, ...initiatorRequestIds]),
-      );
+      const visiblePendingRequestIds =
+        await WorkflowDbController.getCurrentViewerRequestIds(
+          userId,
+          resolvedCompanyId,
+        );
       const pendingListWhere: any = {
         ...pendingWhere,
-        ...(visiblePendingRequestIds.length > 0
-          ? {
-              OR: [
-                { type: 'INITIATE' },
-                { id: { in: visiblePendingRequestIds } },
-              ],
-            }
-          : { type: 'INITIATE' }),
+        id: { in: visiblePendingRequestIds },
       };
       const listWhere =
         type === 'pending'

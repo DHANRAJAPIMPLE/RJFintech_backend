@@ -2,7 +2,11 @@ export type NotificationActionType =
   | 'INITIATE'
   | 'APPROVE'
   | 'REJECT'
-  | 'ONBOARDED';
+  | 'ONBOARDED'
+  | 'MODIFICATION'
+  | 'ACTIVE'
+  | 'INACTIVE'
+  | 'ARCHIVE';
 
 export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 
