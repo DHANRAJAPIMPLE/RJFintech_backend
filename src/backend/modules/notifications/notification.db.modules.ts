@@ -546,14 +546,18 @@ export class NotificationService {
         params.userId,
         params.includeAllCompanies,
       );
-    const where: any = {
+    const baseWhere: any = {
       userId: params.userId,
       ...(includeAllCompanies ? {} : { companyId: params.companyId }),
+    };
+    const where: any = {
+      ...baseWhere,
       ...(status === 'ALL' ? {} : { status }),
     };
 
-    const [count, cursorRow] = await Promise.all([
+    const [count, allCount, cursorRow] = await Promise.all([
       prisma.notificationUser.count({ where }),
+      prisma.notificationUser.count({ where: baseWhere }),
       cursorId
         ? prisma.notificationUser.findFirst({
             where: { ...where, id: cursorId },
@@ -566,6 +570,7 @@ export class NotificationService {
       return {
         data: [],
         count,
+        allCount,
         limit: params.limit,
         offset: params.offset,
         status,
@@ -602,6 +607,7 @@ export class NotificationService {
     return {
       data: pageRows.map(formatNotification),
       count,
+      allCount,
       limit: params.limit,
       offset: cursorId ? 0 : params.offset,
       status,

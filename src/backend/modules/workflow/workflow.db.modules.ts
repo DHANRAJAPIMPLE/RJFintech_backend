@@ -160,9 +160,7 @@ export class WorkflowDbController {
       .map((row) => row.reqId);
     const initiatorRequestIds = initiatedRows.map((row) => row.id);
 
-    return Array.from(
-      new Set([...approverRequestIds, ...initiatorRequestIds]),
-    );
+    return Array.from(new Set([...approverRequestIds, ...initiatorRequestIds]));
   }
 
   private static async notifyConflict(
@@ -265,6 +263,310 @@ export class WorkflowDbController {
       },
       {} as Record<string, any>,
     );
+  }
+
+  private static normalizeWorkflowType(value: unknown) {
+    if (typeof value !== 'string') return 'NODE';
+    const normalized = value
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
+    if (normalized === 'ALL_CHILD') return 'ALL_CHILD';
+    if (
+      normalized === 'IMMEDIATE_CHILD' ||
+      normalized === 'IMMEDIATE_APPROVER' ||
+      normalized === 'IMMEDATE_APPROVER'
+    ) {
+      return 'IMMEDIATE_CHILD';
+    }
+    return 'NODE';
+  }
+
+  private static sanitizeWorkflowHistoryData(
+    value: unknown,
+    requestType?: string | null,
+  ) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return value;
+    }
+
+    const data = { ...(value as Record<string, unknown>) };
+    if (requestType === 'AUTO_GENERATE') {
+      [
+        'sourceWorkflowId',
+        'sourceNodeId',
+        'targetNodeId',
+        'parentOrgReqId',
+        'sourceWorkflowReqId',
+        'workflowId',
+        'workflowReqId',
+      ].forEach((key) => delete data[key]);
+      return data;
+    }
+
+    if (requestType && requestType !== 'INITIATE') {
+      delete data.target;
+      delete data.subModule;
+    }
+
+    return data;
+  }
+
+  private static formatWorkflowHistoryRemarks(history: any) {
+    if (history?.event !== 'AUTO_GENERATE') return history?.remarks ?? null;
+
+    const data = (history.workflowReq?.data || {}) as Record<string, any>;
+    const workflowName = data.name || 'workflow';
+    const nodeName = data.nodeName || 'organization node';
+    const nodePath = data.nodePath ? ` (${data.nodePath})` : '';
+    const sourceWorkflowName = data.sourceWorkflowName || 'parent workflow';
+    const sourceNodeName = data.sourceNodeName || 'parent node';
+    const sourceNodePath = data.sourceNodePath
+      ? ` (${data.sourceNodePath})`
+      : '';
+
+    return `Auto-generated workflow ${workflowName} for node ${nodeName}${nodePath} from ${sourceWorkflowName} on ${sourceNodeName}${sourceNodePath}`;
+  }
+
+  private static async autoGenerateExistingChildWorkflows(
+    tx: any,
+    params: {
+      companyId: string;
+      sourceWorkflow: {
+        id: string;
+        name: string;
+        alias: string;
+        module: string;
+        subModule: string;
+        roleCode?: string | null;
+        type: string;
+        levelsHash: string;
+      };
+      sourceNode: {
+        id: string;
+        nodePath: string;
+        nodeName: string;
+        nodeType: string;
+      };
+      levels: Array<{
+        level: number;
+        approver1: string;
+        approver2?: string | null;
+        approverType: string;
+      }>;
+      actorId: string;
+      sourceWorkflowReqId: string;
+    },
+  ) {
+    const { companyId, sourceWorkflow, sourceNode, levels, actorId } = params;
+    if (sourceWorkflow.type === 'NODE') return [];
+
+    const childWhere =
+      sourceWorkflow.type === 'IMMEDIATE_CHILD'
+        ? { parentId: sourceNode.id }
+        : { nodePath: { startsWith: `${sourceNode.nodePath}.` } };
+    const targetWorkflowType =
+      sourceWorkflow.type === 'IMMEDIATE_CHILD' ? 'NODE' : sourceWorkflow.type;
+    const targetNodes = await tx.orgStructure.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        ...childWhere,
+      },
+      select: {
+        id: true,
+        nodePath: true,
+        nodeName: true,
+        nodeType: true,
+      },
+    });
+
+    const generated = [];
+    for (const targetNode of targetNodes) {
+      const duplicate = await tx.workflow.findUnique({
+        where: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
+          companyId_nodeId_module_subModule_levelsHash: {
+            companyId,
+            nodeId: targetNode.id,
+            module: sourceWorkflow.module,
+            subModule: sourceWorkflow.subModule,
+            levelsHash: sourceWorkflow.levelsHash,
+          },
+        },
+        select: { id: true },
+      });
+      if (duplicate) continue;
+
+      const levelsPayload = levels.reduce(
+        (payload, level) => {
+          payload[`l${level.level}`] = {
+            approver1: level.approver1,
+            approver2: level.approver2 || null,
+            type: level.approverType || 'OR',
+          };
+          return payload;
+        },
+        {} as Record<string, any>,
+      );
+      const autoData = {
+        name: sourceWorkflow.name,
+        alias: sourceWorkflow.alias,
+        workflowType: targetWorkflowType,
+        module: sourceWorkflow.module,
+        subModule: sourceWorkflow.subModule,
+        nodePath: targetNode.nodePath,
+        nodeName: targetNode.nodeName,
+        nodeType: targetNode.nodeType,
+        levels: levelsPayload,
+        levelsHash: sourceWorkflow.levelsHash,
+        roleCode: sourceWorkflow.roleCode || null,
+        sourceWorkflowId: sourceWorkflow.id,
+        sourceWorkflowName: sourceWorkflow.name,
+        sourceWorkflowType: sourceWorkflow.type,
+        sourceNodeId: sourceNode.id,
+        sourceNodeName: sourceNode.nodeName,
+        sourceNodePath: sourceNode.nodePath,
+        targetNodeId: targetNode.id,
+        targetNodePath: targetNode.nodePath,
+        sourceWorkflowReqId: params.sourceWorkflowReqId,
+      };
+
+      const workflowReq = await tx.workflowReq.create({
+        data: {
+          companyId,
+          nodeId: targetNode.id,
+          module: sourceWorkflow.module,
+          subModule: sourceWorkflow.subModule,
+          levelsHash: sourceWorkflow.levelsHash,
+          workflowId: sourceWorkflow.id,
+          type: 'AUTO_GENERATE',
+          impact: 'AUTO_GENERATE',
+          initiatorId: actorId,
+          status: 'APPROVED',
+          data: autoData,
+          alias: sourceWorkflow.alias,
+          approvalRemark: `Auto-generated from parent workflow ${sourceWorkflow.name} for node ${targetNode.nodeName} (${targetNode.nodePath})`,
+          eligibleApprovers: [],
+        },
+      });
+
+      const workflow = await tx.workflow.create({
+        data: {
+          name: sourceWorkflow.name,
+          alias: sourceWorkflow.alias,
+          module: sourceWorkflow.module,
+          subModule: sourceWorkflow.subModule,
+          type: targetWorkflowType,
+          roleCode: sourceWorkflow.roleCode || null,
+          companyId,
+          nodeId: targetNode.id,
+          levelsHash: sourceWorkflow.levelsHash,
+          workflowReqIds: [workflowReq.id],
+        },
+      });
+
+      if (levels.length > 0) {
+        await tx.workflowLevel.createMany({
+          data: levels.map((level) => ({
+            workflowId: workflow.id,
+            level: level.level,
+            approver1: level.approver1,
+            approver2: level.approver2 || null,
+            approverType: level.approverType || 'OR',
+          })),
+        });
+      }
+
+      await tx.workflowReq.update({
+        where: { id: workflowReq.id },
+        data: { workflowId: workflow.id },
+      });
+
+      await tx.workflowReqHistory.create({
+        data: {
+          workflowReqId: workflowReq.id,
+          companyId,
+          event: 'AUTO_GENERATE',
+          eventUserId: actorId,
+          remarks: `Auto-generated workflow ${sourceWorkflow.name} for node ${targetNode.nodeName} (${targetNode.nodePath}) from parent workflow ${sourceWorkflow.name} on ${sourceNode.nodeName} (${sourceNode.nodePath})`,
+        },
+      });
+
+      generated.push({
+        workflowName: workflow.name,
+        alias: workflow.alias,
+        module: workflow.module,
+        subModule: workflow.subModule,
+        workflowType: targetWorkflowType,
+        nodeName: targetNode.nodeName,
+        nodePath: targetNode.nodePath,
+        sourceWorkflowName: sourceWorkflow.name,
+        sourceNodeName: sourceNode.nodeName,
+        sourceNodePath: sourceNode.nodePath,
+      });
+    }
+
+    return generated;
+  }
+
+  private static async notifyAutoGeneratedWorkflows(params: {
+    companyId: string;
+    sourceWorkflowReqId: string;
+    createdBy: string;
+    generatedWorkflows: Array<{
+      workflowName: string;
+      alias: string;
+      module: string;
+      subModule: string;
+      workflowType: string;
+      nodeName: string;
+      nodePath: string;
+      sourceWorkflowName: string;
+      sourceNodeName: string;
+      sourceNodePath: string;
+    }>;
+  }) {
+    const { companyId, generatedWorkflows } = params;
+    if (generatedWorkflows.length === 0) return;
+
+    const corpAdminAccesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        roleCode: 'CORP_ADMIN',
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+      },
+      select: { userId: true },
+    });
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      corpAdminAccesses.map((access) => access.userId),
+    );
+    const generatedSummary = generatedWorkflows
+      .slice(0, 5)
+      .map(
+        (workflow) =>
+          `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`,
+      )
+      .join(', ');
+    const remaining = Math.max(generatedWorkflows.length - 5, 0);
+    const remainingText =
+      remaining > 0 ? ` and ${remaining} more workflow(s)` : '';
+
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'ONBOARDED',
+      name: 'Workflow auto-generated',
+      message: `System auto-generated ${generatedWorkflows.length} workflow(s): ${generatedSummary}${remainingText}.`,
+      referenceType: 'WORKFLOW',
+      referenceId: params.sourceWorkflowReqId,
+      referenceName: generatedWorkflows[0]?.sourceWorkflowName || 'workflow',
+      createdBy: params.createdBy,
+      recipientUserIds,
+    });
   }
 
   private static async assertWorkflowNotUsedInPendingApproval(
@@ -419,32 +721,43 @@ export class WorkflowDbController {
         },
       },
     });
-    const effectiveIds = await WorkflowDbController.filterEffectivelyPendingRequestIds(
-      'workflow_req',
-      pendingRequests.map((request: { id: string }) => request.id),
-    );
-    const pendingTargetRequest = pendingRequests.find((request: { id: string; data: unknown; alias: string | null; initiatorId: string | null; createdAt: Date; eligibleApprovers?: string[] | null; workflowHistories?: Array<{ event: string }> }) => {
-      if (!effectiveIds.has(request.id)) return false;
-      const latestEvent = request.workflowHistories?.[0]?.event;
-      const hasRemainingEligibleApprovers =
-        Array.isArray(request.eligibleApprovers) &&
-        request.eligibleApprovers.length > 0;
-      if (
-        latestEvent === 'REJECTED' ||
-        (latestEvent === 'APPROVED' && !hasRemainingEligibleApprovers)
-      ) {
-        return false;
-      }
-      const pendingTarget = (request.data as any)?.target;
-      // Conflict matching is based on the actual target workflow identity,
-      // not alias. Alias can be the same across unrelated workflows.
-      return (
-        pendingTarget?.module === target.module &&
-        pendingTarget?.subModule === target.subModule &&
-        pendingTarget?.nodePath === target.nodePath &&
-        pendingTarget?.levelsHash === target.levelsHash
+    const effectiveIds =
+      await WorkflowDbController.filterEffectivelyPendingRequestIds(
+        'workflow_req',
+        pendingRequests.map((request: { id: string }) => request.id),
       );
-    });
+    const pendingTargetRequest = pendingRequests.find(
+      (request: {
+        id: string;
+        data: unknown;
+        alias: string | null;
+        initiatorId: string | null;
+        createdAt: Date;
+        eligibleApprovers?: string[] | null;
+        workflowHistories?: Array<{ event: string }>;
+      }) => {
+        if (!effectiveIds.has(request.id)) return false;
+        const latestEvent = request.workflowHistories?.[0]?.event;
+        const hasRemainingEligibleApprovers =
+          Array.isArray(request.eligibleApprovers) &&
+          request.eligibleApprovers.length > 0;
+        if (
+          latestEvent === 'REJECTED' ||
+          (latestEvent === 'APPROVED' && !hasRemainingEligibleApprovers)
+        ) {
+          return false;
+        }
+        const pendingTarget = (request.data as any)?.target;
+        // Conflict matching is based on the actual target workflow identity,
+        // not alias. Alias can be the same across unrelated workflows.
+        return (
+          pendingTarget?.module === target.module &&
+          pendingTarget?.subModule === target.subModule &&
+          pendingTarget?.nodePath === target.nodePath &&
+          pendingTarget?.levelsHash === target.levelsHash
+        );
+      },
+    );
 
     if (pendingTargetRequest) {
       if (message !== 'Workflow already has a pending modification') {
@@ -491,23 +804,25 @@ export class WorkflowDbController {
         },
       },
     });
-    const effectiveIds = await WorkflowDbController.filterEffectivelyPendingRequestIds(
-      'org_structure_req',
-      pendingOrgRequests.map((request: { id: string }) => request.id),
-    );
-    const effectivePendingOrgRequests = pendingOrgRequests.filter((request: { id: string }) =>
-      effectiveIds.has(request.id),
+    const effectiveIds =
+      await WorkflowDbController.filterEffectivelyPendingRequestIds(
+        'org_structure_req',
+        pendingOrgRequests.map((request: { id: string }) => request.id),
+      );
+    const effectivePendingOrgRequests = pendingOrgRequests.filter(
+      (request: { id: string }) => effectiveIds.has(request.id),
     );
 
-    const blocking = effectivePendingOrgRequests.find((request: { data: unknown }) => {
-      const data = request.data as any;
-      const targetNodePath =
-        data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
-      return (
-        typeof targetNodePath === 'string' &&
-        targetNodePath === nodePath
-      );
-    });
+    const blocking = effectivePendingOrgRequests.find(
+      (request: { data: unknown }) => {
+        const data = request.data as any;
+        const targetNodePath =
+          data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
+        return (
+          typeof targetNodePath === 'string' && targetNodePath === nodePath
+        );
+      },
+    );
 
     if (!blocking) return;
     const data = blocking.data as any;
@@ -564,7 +879,10 @@ export class WorkflowDbController {
     if (!target) {
       throw new AppError('Workflow not found', 404);
     }
-    if ((type === 'UPDATE' || type === 'INACTIVE') && target.status !== 'ACTIVE') {
+    if (
+      (type === 'UPDATE' || type === 'INACTIVE') &&
+      target.status !== 'ACTIVE'
+    ) {
       throw new AppError('Active workflow not found', 404);
     }
     if (type === 'ACTIVE' && target.status !== 'INACTIVE') {
@@ -629,6 +947,7 @@ export class WorkflowDbController {
       module: target.module,
       subModule: target.subModule,
       nodePath: target.orgStructure.nodePath,
+      workflowType: target.type,
       levels: currentLevels,
       levelsHash: target.levelsHash,
       alias: target.alias,
@@ -640,6 +959,10 @@ export class WorkflowDbController {
       module: data?.module || currentData.module,
       subModule: data?.subModule || currentData.subModule,
       nodePath: proposedNodePath,
+      workflowType:
+        typeof data?.workflowType === 'string'
+          ? WorkflowDbController.normalizeWorkflowType(data.workflowType)
+          : currentData.workflowType,
       levels: proposedLevels,
       levelsHash: proposedLevelsHash,
       alias: WorkflowDbController.buildAlias(proposedLevels),
@@ -659,7 +982,14 @@ export class WorkflowDbController {
     }
 
     const oldData: Record<string, unknown> = {};
-    for (const field of ['name', 'module', 'subModule', 'nodePath', 'status']) {
+    for (const field of [
+      'name',
+      'module',
+      'subModule',
+      'nodePath',
+      'workflowType',
+      'status',
+    ]) {
       if ((currentData as any)[field] !== (newData as any)[field]) {
         oldData[field] = (currentData as any)[field];
       }
@@ -930,6 +1260,12 @@ export class WorkflowDbController {
         module: requestData?.module || target.module,
         subModule: requestData?.subModule || target.subModule,
         nodePath: proposedNodePath,
+        workflowType:
+          typeof requestData?.workflowType === 'string'
+            ? WorkflowDbController.normalizeWorkflowType(
+                requestData.workflowType,
+              )
+            : target.type,
         levels: proposedLevels,
         levelsHash: WorkflowDbController.buildLevelsHash(proposedLevels),
         alias: WorkflowDbController.buildAlias(proposedLevels),
@@ -988,6 +1324,7 @@ export class WorkflowDbController {
           subModule: nextData.subModule,
           roleCode: roleRecord?.roleCode || null,
           nodeId: node.id,
+          type: nextData.workflowType,
           levelsHash: calculatedHash,
           workflowReqIds: { push: request.id },
         },
@@ -1142,7 +1479,12 @@ export class WorkflowDbController {
         }
       }
 
-      const { module, subModule, nodePath, levels } = data;
+      const workflowType = WorkflowDbController.normalizeWorkflowType(
+        data?.workflowType,
+      );
+      const workflowData = { ...(data || {}), workflowType };
+      delete workflowData.type;
+      const { module, subModule, nodePath, levels } = workflowData;
       await WorkflowDbController.assertNoPendingOrgModificationForNode(
         resolvedCompanyId,
         nodePath,
@@ -1238,7 +1580,7 @@ export class WorkflowDbController {
             levelsHash,
             type: 'INITIATE',
             initiatorId,
-            data,
+            data: workflowData,
             alias: generatedAlias,
             status: 'PENDING',
             eligibleApprovers: filteredApprovers,
@@ -1288,7 +1630,7 @@ export class WorkflowDbController {
         type: 'INITIATE',
         referenceType: 'WORKFLOW',
         referenceId: result.id,
-        referenceName: data?.name,
+        referenceName: workflowData?.name,
         createdBy: initiatorId,
         recipientUserIds: notificationRecipients,
       });
@@ -1384,6 +1726,18 @@ export class WorkflowDbController {
         );
       const id = request.id;
       let notificationRecipients = request.eligibleApprovers || [];
+      let autoGeneratedWorkflowNotifications: Array<{
+        workflowName: string;
+        alias: string;
+        module: string;
+        subModule: string;
+        workflowType: string;
+        nodeName: string;
+        nodePath: string;
+        sourceWorkflowName: string;
+        sourceNodeName: string;
+        sourceNodePath: string;
+      }> = [];
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
@@ -1530,7 +1884,10 @@ export class WorkflowDbController {
             select: { id: true, name: true, status: true },
           });
           if (existingWorkflow?.status === 'ACTIVE') {
-            throw new AppError(`Already active: "${existingWorkflow.name}"`, 409);
+            throw new AppError(
+              `Already active: "${existingWorkflow.name}"`,
+              409,
+            );
           }
           if (existingWorkflow) {
             throw new AppError(
@@ -1565,6 +1922,9 @@ export class WorkflowDbController {
             nodePath,
             levels,
           } = reqData;
+          const workflowType = WorkflowDbController.normalizeWorkflowType(
+            reqData?.workflowType,
+          );
 
           // 1. Resolve the organizational node from the path
           const nodeRecord = await tx.orgStructure.findUnique({
@@ -1610,14 +1970,15 @@ export class WorkflowDbController {
               roleCode: roleRecord?.roleCode || null,
               companyId: request.companyId,
               nodeId: nodeRecord.id,
+              type: workflowType,
               levelsHash: request.levelsHash,
               workflowReqIds: [id],
             },
           });
 
           // 4. Create the specific Approval Levels for this workflow
+          const levelData = [];
           if (levels) {
-            const levelData = [];
             for (const [key, level] of Object.entries(levels)) {
               if (level) {
                 const l = level as any;
@@ -1644,6 +2005,16 @@ export class WorkflowDbController {
             },
           });
 
+          autoGeneratedWorkflowNotifications =
+            await WorkflowDbController.autoGenerateExistingChildWorkflows(tx, {
+              companyId: request.companyId,
+              sourceWorkflow: workflow,
+              sourceNode: nodeRecord,
+              levels: levelData,
+              actorId: approverId,
+              sourceWorkflowReqId: id,
+            });
+
           return { ...updated, status: 'APPROVED' };
         }
 
@@ -1660,12 +2031,12 @@ export class WorkflowDbController {
             ? 'Workflow initiate request approved and activated'
             : requestType === 'UPDATE'
               ? 'Workflow update request approved'
-            : (requestType === 'INACTIVE' ||
-                ((request.data as any)?.status === 'INACTIVE' &&
-                  requestType === 'UPDATE'))
+              : requestType === 'INACTIVE' ||
+                  ((request.data as any)?.status === 'INACTIVE' &&
+                    requestType === 'UPDATE')
                 ? 'Workflow inactivation request approved'
-                : (requestType === 'UPDATE' &&
-                     (request.data as any)?.status === 'ACTIVE')
+                : requestType === 'UPDATE' &&
+                    (request.data as any)?.status === 'ACTIVE'
                   ? 'Workflow activation request approved'
                   : 'Workflow update request approved';
       } else if (result && result.status === 'REJECTED') {
@@ -1718,6 +2089,19 @@ export class WorkflowDbController {
         createdBy: approverId,
         recipientUserIds: notificationRecipientUserIds,
       });
+
+      if (
+        result?.status === 'APPROVED' &&
+        requestType === 'INITIATE' &&
+        autoGeneratedWorkflowNotifications.length > 0
+      ) {
+        await WorkflowDbController.notifyAutoGeneratedWorkflows({
+          companyId: request.companyId,
+          sourceWorkflowReqId: request.id,
+          createdBy: approverId,
+          generatedWorkflows: autoGeneratedWorkflowNotifications,
+        });
+      }
 
       res.status(200).json({
         message,
@@ -1959,21 +2343,21 @@ export class WorkflowDbController {
                 })
                 .filter(Boolean);
 
-                let newDataObj = h.workflowReq?.data ? { ...(h.workflowReq.data as any) } : null;
-                if (newDataObj && h.workflowReq?.type !== 'INITIATE') {
-                  delete newDataObj.target;
-                  delete newDataObj.subModule;
-                }
+              const newDataObj =
+                WorkflowDbController.sanitizeWorkflowHistoryData(
+                  h.workflowReq?.data,
+                  h.workflowReq?.type,
+                );
 
-                resultList.push({
-                  workflowReqId: h.workflowReqId,
-                  workflowId: h.workflowReq?.workflowId || null,
-                  type: h.workflowReq?.type || null,
-                  impact: h.workflowReq?.impact || null,
-                  oldData:
-                    h.workflowReq?.oldData ||
-                    ((h.workflowReq?.data as any)?.oldData ?? null),
-                  newData: newDataObj,
+              resultList.push({
+                workflowReqId: h.workflowReqId,
+                workflowId: h.workflowReq?.workflowId || null,
+                type: h.workflowReq?.type || null,
+                impact: h.workflowReq?.impact || null,
+                oldData:
+                  h.workflowReq?.oldData ||
+                  ((h.workflowReq?.data as any)?.oldData ?? null),
+                newData: newDataObj,
                 nodeId: h.workflowReq?.nodeId || null,
                 workflowName: (h.workflowReq?.data as any)?.name || null,
                 module: h.workflowReq?.module || null,
@@ -2002,21 +2386,20 @@ export class WorkflowDbController {
           h.workflowReq.type !== 'INITIATE'
             ? 'MODIFY'
             : h.event;
-          let newDataObj = h.workflowReq?.data ? { ...(h.workflowReq.data as any) } : null;
-          if (newDataObj && h.workflowReq?.type !== 'INITIATE') {
-            delete newDataObj.target;
-            delete newDataObj.subModule;
-          }
+        const newDataObj = WorkflowDbController.sanitizeWorkflowHistoryData(
+          h.workflowReq?.data,
+          h.workflowReq?.type,
+        );
 
-          return {
-            workflowReqId: h.workflowReqId,
-            workflowId: h.workflowReq?.workflowId || null,
-            type: h.workflowReq?.type || null,
-            impact: h.workflowReq?.impact || null,
-            oldData:
-              h.workflowReq?.oldData ||
-              ((h.workflowReq?.data as any)?.oldData ?? null),
-            newData: newDataObj,
+        return {
+          workflowReqId: h.workflowReqId,
+          workflowId: h.workflowReq?.workflowId || null,
+          type: h.workflowReq?.type || null,
+          impact: h.workflowReq?.impact || null,
+          oldData:
+            h.workflowReq?.oldData ||
+            ((h.workflowReq?.data as any)?.oldData ?? null),
+          newData: newDataObj,
           nodeId: h.workflowReq?.nodeId || null,
           workflowName: (h.workflowReq?.data as any)?.name || null,
           module: h.workflowReq?.module || null,
@@ -2030,7 +2413,7 @@ export class WorkflowDbController {
           event: displayEvent,
           level: h.level,
           createdAt: h.createdAt,
-          remarks: h.remarks,
+          remarks: WorkflowDbController.formatWorkflowHistoryRemarks(h),
           user: HistoryUserUtil.formatAuditUser(
             h.user,
             h.eventUserId,
@@ -2222,6 +2605,7 @@ export class WorkflowDbController {
         createdAt: true,
         name: true,
         alias: true,
+        type: true,
         module: true,
         subModule: true,
         orgStructure: {
@@ -2270,7 +2654,9 @@ export class WorkflowDbController {
               select: pendingSelect,
             });
             const nodeIds = Array.from(
-              new Set(requests.map((request) => request.nodeId).filter(Boolean)),
+              new Set(
+                requests.map((request) => request.nodeId).filter(Boolean),
+              ),
             ) as string[];
             const nodes =
               nodeIds.length > 0
@@ -2371,7 +2757,7 @@ export class WorkflowDbController {
 
       if (type === 'active' || type === 'inactive') {
         const activeRows = pageData.pageRows as any[];
-        
+
         return res.status(200).json({
           data: activeRows,
           activeCount,
@@ -2427,71 +2813,79 @@ export class WorkflowDbController {
         new Set(pendingRequestsRaw.map((req) => req.nodeId)),
       ) as string[];
 
-      const [workflowDetails, targetWorkflowDetails, nodeDetails] = await Promise.all([
-        prisma.workflow.findMany({
-          where: { id: { in: workflowIds } },
-          select: { 
-            id: true, 
-            name: true, 
-            alias: true,
-            module: true,
-            subModule: true,
-            levelsHash: true,
-            status: true,
-            orgStructure: {
-              select: {
-                nodePath: true,
-                nodeName: true,
-                nodeType: true,
+      const [workflowDetails, targetWorkflowDetails, nodeDetails] =
+        await Promise.all([
+          prisma.workflow.findMany({
+            where: { id: { in: workflowIds } },
+            select: {
+              id: true,
+              name: true,
+              alias: true,
+              type: true,
+              module: true,
+              subModule: true,
+              levelsHash: true,
+              status: true,
+              orgStructure: {
+                select: {
+                  nodePath: true,
+                  nodeName: true,
+                  nodeType: true,
+                },
+              },
+              levels: {
+                select: {
+                  level: true,
+                  approver1: true,
+                  approver2: true,
+                  approverType: true,
+                },
               },
             },
-            levels: {
-              select: {
-                level: true,
-                approver1: true,
-                approver2: true,
-                approverType: true
-              }
-            }
-          },
-        }),
-        targetFilters.length > 0
-          ? prisma.workflow.findMany({
-              where: {
-                companyId: resolvedCompanyId,
-                OR: targetFilters as any,
-              },
-              select: {
-                id: true,
-                name: true,
-                alias: true,
-                module: true,
-                subModule: true,
-                levelsHash: true,
-                status: true,
-                orgStructure: {
-                  select: {
-                    nodePath: true,
-                    nodeName: true,
-                    nodeType: true,
+          }),
+          targetFilters.length > 0
+            ? prisma.workflow.findMany({
+                where: {
+                  companyId: resolvedCompanyId,
+                  OR: targetFilters as any,
+                },
+                select: {
+                  id: true,
+                  name: true,
+                  alias: true,
+                  type: true,
+                  module: true,
+                  subModule: true,
+                  levelsHash: true,
+                  status: true,
+                  orgStructure: {
+                    select: {
+                      nodePath: true,
+                      nodeName: true,
+                      nodeType: true,
+                    },
+                  },
+                  levels: {
+                    select: {
+                      level: true,
+                      approver1: true,
+                      approver2: true,
+                      approverType: true,
+                    },
                   },
                 },
-                levels: {
-                  select: {
-                    level: true,
-                    approver1: true,
-                    approver2: true,
-                    approverType: true,
-                  },
-                },
-              },
-            })
-          : Promise.resolve([]),
-        prisma.orgStructure.findMany({
-          where: { id: { in: nodeIds } },
-          select: { id: true, nodeName: true, nodePath: true, nodeType: true },
-        }),
-      ]);
+              })
+            : Promise.resolve([]),
+          prisma.orgStructure.findMany({
+            where: { id: { in: nodeIds } },
+            select: {
+              id: true,
+              nodeName: true,
+              nodePath: true,
+              nodeType: true,
+            },
+          }),
+        ]);
 
       const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
       const targetWorkflowMap = new Map(
@@ -2538,6 +2932,7 @@ export class WorkflowDbController {
           alias = resolvedWorkflow.alias;
           masterData = {
             name: resolvedWorkflow.name,
+            workflowType: resolvedWorkflow.type,
             module: resolvedWorkflow.module,
             subModule: resolvedWorkflow.subModule,
             levelsHash: resolvedWorkflow.levelsHash,
@@ -2565,8 +2960,13 @@ export class WorkflowDbController {
           };
         }
         delete rest.workflowHistories;
-        
-        let newDataObj = req.type === 'INITIATE' ? null : (req.data ? { ...(req.data as any) } : null);
+
+        const newDataObj =
+          req.type === 'INITIATE'
+            ? null
+            : req.data
+              ? { ...(req.data as any) }
+              : null;
         if (newDataObj) {
           delete newDataObj.target;
           delete newDataObj.subModule;
@@ -2599,5 +2999,3 @@ export class WorkflowDbController {
     }
   }
 }
-
-

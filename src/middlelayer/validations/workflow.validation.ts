@@ -38,14 +38,36 @@ const levelsSchema = z.object({
 
 const normalizeRequestType = (value: unknown) =>
   typeof value === 'string' ? value.trim().toLowerCase() : value;
+const normalizeWorkflowType = (value: unknown) => {
+  if (typeof value !== 'string') return value;
+  const normalized = value
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+  if (normalized === 'INITIATE') return 'NODE';
+  if (
+    normalized === 'IMMEDIATE_APPROVER' ||
+    normalized === 'IMMEDATE_APPROVER' ||
+    normalized === 'IMMEDIATE_CHILD'
+  ) {
+    return 'IMMEDIATE_CHILD';
+  }
+  if (normalized === 'ALL_CHILD') return 'ALL_CHILD';
+  return normalized;
+};
 const requiredWorkflowListTypeSchema = z.preprocess(
   normalizeRequestType,
   z.enum(['active', 'pending', 'inactive']),
+);
+const workflowTypeSchema = z.preprocess(
+  normalizeWorkflowType,
+  z.enum(['NODE', 'IMMEDIATE_CHILD', 'ALL_CHILD']),
 );
 
 export const workflowOnboardingSchema = z
   .object({
     type: z.preprocess(normalizeRequestType, z.literal('initiate')).optional(),
+    workflowType: workflowTypeSchema.default('NODE'),
     name: nameSchema('Workflow name')
       .min(2, 'Workflow name must be at least 2 characters')
       .max(100, 'Workflow name too long'),
@@ -59,15 +81,18 @@ export const workflowOnboardingSchema = z
 
 export const workflowModificationSchema = z
   .object({
-    type: z.preprocess(normalizeRequestType, z.enum(['update', 'inactive', 'active'])),
+    type: z.preprocess(
+      normalizeRequestType,
+      z.enum(['update', 'inactive', 'active']),
+    ),
     target: z
-        .object({
-          module: z.string().trim().min(1, 'Target module is required'),
-          subModule: z.string().trim().min(1, 'Target sub-module is required'),
-          nodePath: z.string().trim().min(1, 'Target node path is required'),
-          levelsHash: z.string().trim().min(1, 'Target levels hash is required'),
-        })
-        .strict(),
+      .object({
+        module: z.string().trim().min(1, 'Target module is required'),
+        subModule: z.string().trim().min(1, 'Target sub-module is required'),
+        nodePath: z.string().trim().min(1, 'Target node path is required'),
+        levelsHash: z.string().trim().min(1, 'Target levels hash is required'),
+      })
+      .strict(),
     name: nameSchema('Workflow name')
       .min(2, 'Workflow name must be at least 2 characters')
       .max(100, 'Workflow name too long')
@@ -75,6 +100,7 @@ export const workflowModificationSchema = z
     module: z.string().trim().min(1, 'Module is required').optional(),
     nodePath: z.string().trim().min(1, 'Node path is required').optional(),
     subModule: z.string().trim().min(1, 'Sub-module is required').optional(),
+    workflowType: workflowTypeSchema.optional(),
     levels: levelsSchema.optional(),
     levelsHash: z.string().nullable().optional(),
     remarks: z
@@ -92,6 +118,7 @@ export const workflowModificationSchema = z
       !value.module &&
       !value.nodePath &&
       !value.subModule &&
+      !value.workflowType &&
       !value.levels
     ) {
       context.addIssue({

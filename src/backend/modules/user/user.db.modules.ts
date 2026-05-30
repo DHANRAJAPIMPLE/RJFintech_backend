@@ -170,6 +170,17 @@ export class UserDbController {
     };
   }
 
+  private static formatUserReferenceName(
+    user: { name?: string | null; email?: string | null },
+    fallback = 'user',
+  ) {
+    const name = typeof user.name === 'string' ? user.name.trim() : '';
+    const email = typeof user.email === 'string' ? user.email.trim() : '';
+
+    if (name && email) return `${name} (${email})`;
+    return name || email || fallback;
+  }
+
   private static getUserNotificationType(
     type: string | null | undefined,
     status: string | null | undefined,
@@ -2741,10 +2752,13 @@ export class UserDbController {
       return request;
     });
 
+    const userReferenceName = UserDbController.formatUserReferenceName(
+      current.user,
+    );
     const modificationNotification = UserDbController.getUserNotificationContent(
       type,
       'initiated',
-      current.user.email,
+      userReferenceName,
     );
     await NotificationService.createRequestNotification({
       companyId,
@@ -2753,7 +2767,7 @@ export class UserDbController {
       message: modificationNotification.message,
       referenceType: 'USER',
       referenceId: onboarding.id,
-      referenceName: current.user.email,
+      referenceName: userReferenceName,
       createdBy: initiatorId,
       recipientUserIds: notificationRecipients,
     });
@@ -3059,7 +3073,12 @@ export class UserDbController {
         resolvedCompanyId = company.id;
       }
 
-      const email = onboardingData.data?.basicDetails?.email;
+      const basicDetails = onboardingData.data?.basicDetails || {};
+      const email = basicDetails.email;
+      const userReferenceName = UserDbController.formatUserReferenceName({
+        name: basicDetails.name,
+        email,
+      });
       const permissions = onboardingData.data?.permissions || [];
       const requestedNodePaths = Array.from(
       new Set(
@@ -3209,7 +3228,7 @@ export class UserDbController {
       type: 'INITIATE',
       referenceType: 'USER',
       referenceId: onboarding.id,
-      referenceName: email,
+      referenceName: userReferenceName,
       createdBy: initiatorId,
       recipientUserIds: notificationRecipients,
     });
@@ -3793,7 +3812,20 @@ export class UserDbController {
           notificationRecipients,
           requestInitiatorId,
         );
-      const notificationReferenceName = name || email;
+      const notificationLookupEmail =
+        result?.status === 'REJECTED' ? historyEmail : email || historyEmail;
+      const notificationUser = notificationLookupEmail
+        ? await prisma.user.findUnique({
+            where: { email: notificationLookupEmail },
+            select: { name: true, email: true },
+          })
+        : null;
+      const notificationReferenceName = UserDbController.formatUserReferenceName(
+        {
+          name: name || notificationUser?.name,
+          email: notificationLookupEmail || notificationUser?.email,
+        },
+      );
       const userNotificationContent =
         requestType !== 'INITIATE' && result?.status
           ? UserDbController.getUserNotificationContent(

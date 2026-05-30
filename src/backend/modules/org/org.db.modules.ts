@@ -128,6 +128,238 @@ export class OrgStructureDbController {
     return count > 0 ? `${count} USER_ACCESS_ADDED` : 'NO_ISSUES';
   }
 
+  private static toWorkflowLevelsPayload(levels: any[]) {
+    return levels.reduce(
+      (payload, level) => {
+        payload[`l${level.level}`] = {
+          approver1: level.approver1,
+          approver2: level.approver2 || null,
+          type: level.approverType || 'OR',
+        };
+        return payload;
+      },
+      {} as Record<string, any>,
+    );
+  }
+
+  private static async autoGenerateChildWorkflows(
+    tx: any,
+    params: {
+      companyId: string;
+      parentNodeId?: string | null;
+      newNode: {
+        id: string;
+        nodePath: string;
+        nodeName: string;
+        nodeType: string;
+      };
+      orgReqId: string;
+      actorId: string;
+    },
+  ) {
+    const { companyId, parentNodeId, newNode, orgReqId, actorId } = params;
+    if (!parentNodeId) return [];
+
+    const parentNode = await tx.orgStructure.findFirst({
+      where: { id: parentNodeId, companyId },
+      select: { id: true, nodePath: true, nodeName: true, nodeType: true },
+    });
+    if (!parentNode) return [];
+
+    const parentWorkflows = await tx.workflow.findMany({
+      where: {
+        companyId,
+        nodeId: parentNodeId,
+        status: 'ACTIVE',
+        type: { in: ['ALL_CHILD', 'IMMEDIATE_CHILD'] },
+      },
+      include: {
+        levels: { orderBy: { level: 'asc' } },
+      },
+    });
+
+    const generated = [];
+    for (const source of parentWorkflows) {
+      const targetType =
+        source.type === 'IMMEDIATE_CHILD' ? 'NODE' : source.type;
+      const duplicate = await tx.workflow.findUnique({
+        where: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
+          companyId_nodeId_module_subModule_levelsHash: {
+            companyId,
+            nodeId: newNode.id,
+            module: source.module,
+            subModule: source.subModule,
+            levelsHash: source.levelsHash,
+          },
+        },
+        select: { id: true },
+      });
+      if (duplicate) continue;
+
+      const levelsPayload = OrgStructureDbController.toWorkflowLevelsPayload(
+        source.levels,
+      );
+      const autoData = {
+        name: source.name,
+        alias: source.alias,
+        workflowType: targetType,
+        module: source.module,
+        subModule: source.subModule,
+        nodePath: newNode.nodePath,
+        nodeName: newNode.nodeName,
+        nodeType: newNode.nodeType,
+        levels: levelsPayload,
+        levelsHash: source.levelsHash,
+        roleCode: source.roleCode || null,
+        sourceWorkflowId: source.id,
+        sourceWorkflowName: source.name,
+        sourceWorkflowType: source.type,
+        sourceNodeId: parentNode.id,
+        sourceNodeName: parentNode.nodeName,
+        sourceNodePath: parentNode.nodePath,
+        targetNodeId: newNode.id,
+        targetNodePath: newNode.nodePath,
+        parentOrgReqId: orgReqId,
+      };
+
+      const workflowReq = await tx.workflowReq.create({
+        data: {
+          companyId,
+          nodeId: newNode.id,
+          module: source.module,
+          subModule: source.subModule,
+          levelsHash: source.levelsHash,
+          workflowId: source.id,
+          type: 'AUTO_GENERATE',
+          impact: 'AUTO_GENERATE',
+          initiatorId: actorId,
+          status: 'APPROVED',
+          data: autoData,
+          alias: source.alias,
+          approvalRemark: `Auto-generated from parent workflow ${source.name} for node ${newNode.nodeName} (${newNode.nodePath})`,
+          eligibleApprovers: [],
+        },
+      });
+
+      const workflow = await tx.workflow.create({
+        data: {
+          name: source.name,
+          alias: source.alias,
+          module: source.module,
+          subModule: source.subModule,
+          type: targetType,
+          roleCode: source.roleCode || null,
+          companyId,
+          nodeId: newNode.id,
+          levelsHash: source.levelsHash,
+          workflowReqIds: [workflowReq.id],
+        },
+      });
+
+      if (source.levels.length > 0) {
+        await tx.workflowLevel.createMany({
+          data: source.levels.map((level: any) => ({
+            workflowId: workflow.id,
+            level: level.level,
+            approver1: level.approver1,
+            approver2: level.approver2 || null,
+            approverType: level.approverType || 'OR',
+          })),
+        });
+      }
+
+      await tx.workflowReq.update({
+        where: { id: workflowReq.id },
+        data: { workflowId: workflow.id },
+      });
+
+      await tx.workflowReqHistory.create({
+        data: {
+          workflowReqId: workflowReq.id,
+          companyId,
+          event: 'AUTO_GENERATE',
+          eventUserId: actorId,
+          remarks: `Auto-generated workflow ${source.name} for node ${newNode.nodeName} (${newNode.nodePath}) from parent workflow ${source.name} on ${parentNode.nodeName} (${parentNode.nodePath})`,
+        },
+      });
+
+      generated.push({
+        workflowName: workflow.name,
+        alias: workflow.alias,
+        module: workflow.module,
+        subModule: workflow.subModule,
+        workflowType: targetType,
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
+        sourceWorkflowName: source.name,
+        sourceNodeName: parentNode.nodeName,
+        sourceNodePath: parentNode.nodePath,
+      });
+    }
+
+    return generated;
+  }
+
+  private static async notifyAutoGeneratedWorkflows(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    generatedWorkflows: Array<{
+      workflowName: string;
+      alias: string;
+      module: string;
+      subModule: string;
+      workflowType: string;
+      nodeName: string;
+      nodePath: string;
+      sourceWorkflowName: string;
+      sourceNodeName: string;
+      sourceNodePath: string;
+    }>;
+  }) {
+    const { companyId, generatedWorkflows } = params;
+    if (generatedWorkflows.length === 0) return;
+
+    const corpAdminAccesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        roleCode: 'CORP_ADMIN',
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+      },
+      select: { userId: true },
+    });
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      corpAdminAccesses.map((access) => access.userId),
+    );
+    const generatedSummary = generatedWorkflows
+      .slice(0, 5)
+      .map(
+        (workflow) =>
+          `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`,
+      )
+      .join(', ');
+    const remaining = Math.max(generatedWorkflows.length - 5, 0);
+    const remainingText =
+      remaining > 0 ? ` and ${remaining} more workflow(s)` : '';
+
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'ONBOARDED',
+      name: 'Workflow auto-generated',
+      message: `System auto-generated ${generatedWorkflows.length} workflow(s): ${generatedSummary}${remainingText}.`,
+      referenceType: 'WORKFLOW',
+      referenceId: params.orgReqId,
+      referenceName: generatedWorkflows[0]?.nodeName || 'workflow',
+      createdBy: params.createdBy,
+      recipientUserIds,
+    });
+  }
+
   private static async getPropagatingParentAccesses(
     client: any,
     companyId: string,
@@ -222,7 +454,9 @@ export class OrgStructureDbController {
       );
 
     return new Set(
-      parentAccesses.map((access: any) => `${access.userId}_${access.roleCode}`),
+      parentAccesses.map(
+        (access: any) => `${access.userId}_${access.roleCode}`,
+      ),
     ).size;
   }
 
@@ -451,7 +685,6 @@ export class OrgStructureDbController {
         403,
       );
     }
-
   }
 
   private static async assertNoPendingHierarchyConflict(
@@ -460,7 +693,9 @@ export class OrgStructureDbController {
   ) {
     const pendingRequests = await prisma.orgStructureReq.findMany({
       where: { companyId, status: 'PENDING' },
-      include: { orgHistories: { where: { event: 'INITIATE' }, include: { user: true } } },
+      include: {
+        orgHistories: { where: { event: 'INITIATE' }, include: { user: true } },
+      },
     });
 
     for (const request of pendingRequests) {
@@ -482,7 +717,8 @@ export class OrgStructureDbController {
         )
       ) {
         const initiator = request.orgHistories?.[0]?.user;
-        const initiatedAt = request.orgHistories?.[0]?.createdAt || request.createdAt;
+        const initiatedAt =
+          request.orgHistories?.[0]?.createdAt || request.createdAt;
         const pendingTitle =
           data?.newNodeName || data?.targetNodePath || request.id;
         throw new AppError(
@@ -503,9 +739,7 @@ export class OrgStructureDbController {
         module: 'SYSTEM_ACCESS',
         subModule: 'ORG_STR',
         status: 'ACTIVE',
-        ...(levelsHash
-          ? { levelsHash }
-          : { name: { contains: 'DEFAULT' } }),
+        ...(levelsHash ? { levelsHash } : { name: { contains: 'DEFAULT' } }),
       },
       orderBy: levelsHash ? undefined : { createdAt: 'desc' },
       include: { orgStructure: { select: { nodePath: true } } },
@@ -526,10 +760,11 @@ export class OrgStructureDbController {
         },
       },
     });
-    const effectiveIds = await OrgStructureDbController.filterEffectivelyPendingRequestIds(
-      'workflow_req',
-      pendingRequests.map((request) => request.id),
-    );
+    const effectiveIds =
+      await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+        'workflow_req',
+        pendingRequests.map((request) => request.id),
+      );
     const blocking = pendingRequests.find((request: any) => {
       if (!effectiveIds.has(request.id)) return false;
       const target = (request.data as any)?.target || {};
@@ -626,7 +861,10 @@ export class OrgStructureDbController {
           nodePath: { startsWith: `${nodePath}.` },
         },
       });
-      const names = children.slice(0, 5).map((child: any) => child.nodeName).join(', ');
+      const names = children
+        .slice(0, 5)
+        .map((child: any) => child.nodeName)
+        .join(', ');
       throw new AppError(
         `Cannot inactivate node '${nodeName || nodePath}' because it contains ${childCount} active sub-departments. You must first inactivate the following child nodes: ${names}.`,
         400,
@@ -924,6 +1162,18 @@ export class OrgStructureDbController {
       let notificationRecipients: string[] = [];
       let notificationSubject = 'Organization request';
       let userAccessImpactNotification: any = null;
+      let autoGeneratedWorkflowNotifications: Array<{
+        workflowName: string;
+        alias: string;
+        module: string;
+        subModule: string;
+        workflowType: string;
+        nodeName: string;
+        nodePath: string;
+        sourceWorkflowName: string;
+        sourceNodeName: string;
+        sourceNodePath: string;
+      }> = [];
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
@@ -1104,27 +1354,30 @@ export class OrgStructureDbController {
             },
           });
 
+          autoGeneratedWorkflowNotifications =
+            await OrgStructureDbController.autoGenerateChildWorkflows(tx, {
+              companyId: request.companyId,
+              parentNodeId: parentId || null,
+              newNode,
+              orgReqId: id,
+              actorId: approverId,
+            });
+
           const parentAccesses =
             await OrgStructureDbController.getPropagatingParentAccesses(
               tx,
               request.companyId,
               newNodePath,
             );
-          const newAccesses =
-            OrgStructureDbController.buildPropagatedAccesses(
-              parentAccesses,
-              newNode.id,
-            );
+          const newAccesses = OrgStructureDbController.buildPropagatedAccesses(
+            parentAccesses,
+            newNode.id,
+          );
 
           if (newAccesses.length > 0) {
             await tx.userAccess.createMany({
               data: newAccesses.map(
-                ({
-                  userName,
-                  userEmail,
-                  roleName,
-                  ...access
-                }: any) => access,
+                ({ userName, userEmail, roleName, ...access }: any) => access,
               ),
               skipDuplicates: true,
             });
@@ -1146,10 +1399,9 @@ export class OrgStructureDbController {
             where: { id },
             data: {
               status: 'APPROVED',
-              impact:
-                OrgStructureDbController.formatUserAccessImpact(
-                  newAccesses.length,
-                ),
+              impact: OrgStructureDbController.formatUserAccessImpact(
+                newAccesses.length,
+              ),
               remarks,
             },
           });
@@ -1160,7 +1412,9 @@ export class OrgStructureDbController {
         throw new Error('Invalid status value');
       });
 
-      const requestType = String((result as any)?.type || 'INITIATE').toUpperCase();
+      const requestType = String(
+        (result as any)?.type || 'INITIATE',
+      ).toUpperCase();
       let message = 'Org structure request processed';
       if (result && result.status === 'PARTIAL_APPROVED') {
         message = `Org structure request approved at Level ${result.level}, pending remaining approval`;
@@ -1230,6 +1484,20 @@ export class OrgStructureDbController {
         });
       }
 
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type !== 'UPDATE' &&
+        autoGeneratedWorkflowNotifications.length > 0
+      ) {
+        await OrgStructureDbController.notifyAutoGeneratedWorkflows({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          generatedWorkflows: autoGeneratedWorkflowNotifications,
+        });
+      }
+
       res.status(200).json({
         success: true,
         message,
@@ -1254,7 +1522,11 @@ export class OrgStructureDbController {
           resolvedCompanyId,
           initiatorId,
           error.message,
-          String(req.body?.targetNodePath || req.body?.data?.newNodeName || 'organization'),
+          String(
+            req.body?.targetNodePath ||
+              req.body?.data?.newNodeName ||
+              'organization',
+          ),
         );
       }
       next(error);
@@ -1328,10 +1600,9 @@ export class OrgStructureDbController {
         const reqRecord = await tx.orgStructureReq.create({
           data: {
             ...rest,
-            impact:
-              OrgStructureDbController.formatUserAccessImpact(
-                propagatedAccessCount,
-              ),
+            impact: OrgStructureDbController.formatUserAccessImpact(
+              propagatedAccessCount,
+            ),
             initiatorId: initiatorId || null,
             companyId: resolvedCompanyId,
           },
@@ -1524,7 +1795,10 @@ export class OrgStructureDbController {
       }
       const matchesNodeFilter = (data: any) => {
         if (!data) return false;
-        const candidateNodeNames = [data?.newNodeName, data?.currentData?.nodeName]
+        const candidateNodeNames = [
+          data?.newNodeName,
+          data?.currentData?.nodeName,
+        ]
           .filter((value): value is string => typeof value === 'string')
           .map((value) => value.toLowerCase());
         const derivedNodePath =
@@ -1607,7 +1881,9 @@ export class OrgStructureDbController {
         (h) => !h.orgReqId || !rejectedReqIds.has(h.orgReqId),
       );
       if (applyHistoryFilter) {
-        histories = histories.filter((h) => matchesNodeFilter(h.orgReq?.data as any));
+        histories = histories.filter((h) =>
+          matchesNodeFilter(h.orgReq?.data as any),
+        );
       }
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
@@ -1929,7 +2205,10 @@ export class OrgStructureDbController {
           requestData?.targetNodePath ||
           requestData?.nodePath ||
           requestData?.currentData?.nodePath;
-        if (typeof targetPath === 'string' && !pendingByNodePath.has(targetPath)) {
+        if (
+          typeof targetPath === 'string' &&
+          !pendingByNodePath.has(targetPath)
+        ) {
           pendingByNodePath.set(targetPath, request);
         }
       });

@@ -346,6 +346,7 @@ model Workflow {
   nodeId            String          @map("node_id")
   module            String
   subModule         String          @map("sub_module")
+  type              WorkflowType    @default(NODE)
   roleCode          String?         @map("role_code")
   companyId         String          @map("company_id")
   levelsHash        String          @map("levels_hash")
@@ -494,6 +495,7 @@ enum EventType {
   APPROVED
   REJECTED
   MODIFY
+  AUTO_GENERATE
 }
 
 enum Status {
@@ -512,6 +514,13 @@ enum RequestType {
   INITIATE
   UPDATE
   INACTIVE
+  AUTO_GENERATE
+}
+
+enum WorkflowType {
+  NODE
+  IMMEDIATE_CHILD
+  ALL_CHILD
 }
 
 enum OnboardedType {

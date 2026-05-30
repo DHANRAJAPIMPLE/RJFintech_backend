@@ -28,6 +28,7 @@ import type {
   FetchWorkflowsInternalData,
   FetchWorkflowsInternalResponse,
   FetchWorkflowsResponse,
+  WorkflowActiveInternalItem,
   InitiateWorkflowResponse,
   WorkflowActiveItem,
   WorkflowActionInternalResponse,
@@ -45,11 +46,13 @@ import type {
 
 export class WorkflowController {
   private static formatActiveWorkflow(
-    workflow: WorkflowActiveItem,
+    workflow: WorkflowActiveItem | WorkflowActiveInternalItem,
   ): WorkflowActiveItem {
     return {
       name: workflow.name,
       alias: workflow.alias,
+      workflowType:
+        'type' in workflow ? workflow.type : (workflow.workflowType ?? 'NODE'),
       module: workflow.module,
       subModule: workflow.subModule,
       orgStructure: {
@@ -74,6 +77,8 @@ export class WorkflowController {
     return {
       data: {
         name: workflow.data.name,
+        workflowType:
+          workflow.data.workflowType ?? workflow.workflowType ?? 'NODE',
         levels: workflow.data.levels,
         module: workflow.data.module,
         nodePath: workflow.data.nodePath,
@@ -87,7 +92,7 @@ export class WorkflowController {
       newData:
         workflow.type === 'INITIATE'
           ? null
-          : workflow.newData ?? workflow.data ?? null,
+          : (workflow.newData ?? workflow.data ?? null),
       status: workflow.status,
       alias: workflow.alias,
       approvalRemark: workflow.approvalRemark,
@@ -395,7 +400,7 @@ export class WorkflowController {
         body.type === 'active' || body.type === 'inactive'
           ? workflowData.data.map((workflow) =>
               WorkflowController.formatActiveWorkflow(
-                workflow as WorkflowActiveItem,
+                workflow as WorkflowActiveInternalItem,
               ),
             )
           : workflowData.data.map((workflow) =>

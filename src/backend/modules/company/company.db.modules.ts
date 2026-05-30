@@ -656,6 +656,7 @@ export class CompanyDbController {
             nodePath: rootNode.nodePath,
             nodeName: rootNode.nodeName,
             nodeType: rootNode.nodeType,
+            workflowType: 'NODE',
             levelsHash,
             alias: '1M_1C_D',
             levels: {

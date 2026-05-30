@@ -28,6 +28,8 @@ export type WorkflowApprovalType = 'AND' | 'OR';
 
 export type WorkflowRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
+export type WorkflowType = 'NODE' | 'IMMEDIATE_CHILD' | 'ALL_CHILD';
+
 export type WorkflowActionResultStatus =
   | WorkflowRequestStatus
   | 'PARTIAL_APPROVED';
@@ -56,6 +58,7 @@ export type WorkflowActiveLevel = {
 export type WorkflowActiveItem = {
   name: string;
   alias: string;
+  workflowType: WorkflowType;
   module: WorkflowModule;
   subModule: WorkflowSubModule;
   orgStructure: WorkflowOrgStructure;
@@ -80,6 +83,7 @@ export type WorkflowPendingLevels = {
 
 export type WorkflowPendingRequestData = {
   name: string;
+  workflowType?: WorkflowType;
   levels?: WorkflowPendingLevels;
   module: WorkflowModule;
   nodePath: string;
@@ -145,11 +149,16 @@ export type WorkflowPendingInternalItem = Omit<WorkflowPendingItem, 'data'> & {
   nodeId: string;
   workflowId: string | null;
   data: WorkflowPendingInternalRequestData;
+  workflowType?: WorkflowType;
 };
 
-export type WorkflowActiveInternalItem = WorkflowActiveItem & {
+export type WorkflowActiveInternalItem = Omit<
+  WorkflowActiveItem,
+  'workflowType'
+> & {
   id: string;
   createdAt: string;
+  type: WorkflowType;
 };
 
 export type FetchWorkflowsInternalData = {
@@ -179,7 +188,8 @@ export type WorkflowHistoryEvent =
   | 'INITIATE'
   | 'APPROVED'
   | 'REJECTED'
-  | 'MODIFY';
+  | 'MODIFY'
+  | 'AUTO_GENERATE';
 
 export type WorkflowHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
