@@ -15,6 +15,7 @@ import {
 } from '../../../shared/utils/cursor-pagination.util';
 
 type WorkflowTarget = {
+  name?: string;
   module: string;
   subModule: string;
   nodePath: string;
@@ -337,14 +338,30 @@ export class WorkflowDbController {
         data: true,
         createdAt: true,
         initiatorId: true,
+        eligibleApprovers: true,
+        workflowHistories: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { event: true },
+        },
       },
     });
     const effectiveIds = await WorkflowDbController.filterEffectivelyPendingRequestIds(
       'workflow_req',
       pendingRequests.map((request: { id: string }) => request.id),
     );
-    const pendingTargetRequest = pendingRequests.find((request: { id: string; data: unknown; alias: string | null; initiatorId: string | null; createdAt: Date }) => {
+    const pendingTargetRequest = pendingRequests.find((request: { id: string; data: unknown; alias: string | null; initiatorId: string | null; createdAt: Date; eligibleApprovers?: string[] | null; workflowHistories?: Array<{ event: string }> }) => {
       if (!effectiveIds.has(request.id)) return false;
+      const latestEvent = request.workflowHistories?.[0]?.event;
+      const hasRemainingEligibleApprovers =
+        Array.isArray(request.eligibleApprovers) &&
+        request.eligibleApprovers.length > 0;
+      if (
+        latestEvent === 'REJECTED' ||
+        (latestEvent === 'APPROVED' && !hasRemainingEligibleApprovers)
+      ) {
+        return false;
+      }
       const pendingTarget = (request.data as any)?.target;
       // Conflict matching is based on the actual target workflow identity,
       // not alias. Alias can be the same across unrelated workflows.
@@ -604,6 +621,7 @@ export class WorkflowDbController {
         module: newData.module,
         subModule: newData.subModule,
         levelsHash: newData.levelsHash,
+        alias: newData.alias,
         status: 'PENDING',
       },
       select: { id: true },
@@ -925,10 +943,27 @@ export class WorkflowDbController {
    * Includes the associated company details for context.
    */
   static async getWorkflowRequestByHash(req: Request, res: Response) {
-    const { id, levelsHash, companyId } = req.body;
+    const { id, levelsHash, companyId, module, subModule, alias, nodePath } =
+      req.body;
+    let nodeId: string | undefined;
+    if (nodePath) {
+      const node = await prisma.orgStructure.findFirst({
+        where: { companyId, nodePath },
+        select: { id: true },
+      });
+      nodeId = node?.id;
+    }
     const request = await prisma.workflowReq.findFirst({
       where: {
-        ...(id ? { id } : { levelsHash }),
+        ...(id
+          ? { id }
+          : {
+              levelsHash,
+              module: module || undefined,
+              subModule: subModule || undefined,
+              alias: alias || undefined,
+              nodeId: nodeId || undefined,
+            }),
         companyId,
         status: 'PENDING',
       },
@@ -1044,6 +1079,7 @@ export class WorkflowDbController {
 
       const nodeId = node.id;
       const levelsHash = WorkflowDbController.buildLevelsHash(levels);
+      const generatedAlias = WorkflowDbController.buildAlias(levels);
 
       // 2. Block if duplicate exists on the same unique workflow identity.
       // If an inactive record exists, callers must modify/reactivate it instead
@@ -1079,6 +1115,7 @@ export class WorkflowDbController {
           module,
           subModule,
           levelsHash,
+          alias: generatedAlias,
           status: 'PENDING',
         },
       });
@@ -1109,8 +1146,6 @@ export class WorkflowDbController {
         (id) => id !== initiatorId,
       );
       let notificationRecipients = filteredApprovers;
-
-      const generatedAlias = WorkflowDbController.buildAlias(levels);
 
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.workflowReq.create({
@@ -1229,12 +1264,32 @@ export class WorkflowDbController {
         status,
         approverId,
         remark,
+        module,
+        subModule,
+        alias,
+        nodePath,
       } = req.body;
+      let nodeId: string | undefined;
+      if (nodePath) {
+        const node = await prisma.orgStructure.findFirst({
+          where: { companyId, nodePath },
+          select: { id: true },
+        });
+        nodeId = node?.id;
+      }
 
       // ── Find the pending request by levelsHash ──────────────────────────
       const request = await prisma.workflowReq.findFirst({
         where: {
-          ...(requestId ? { id: requestId } : { levelsHash }),
+          ...(requestId
+            ? { id: requestId }
+            : {
+                levelsHash,
+                module: module || undefined,
+                subModule: subModule || undefined,
+                alias: alias || undefined,
+                nodeId: nodeId || undefined,
+              }),
           companyId,
           status: 'PENDING',
         },
@@ -1411,6 +1466,7 @@ export class WorkflowDbController {
               module,
               subModule,
               levelsHash,
+              alias: request.alias || undefined,
               status: 'PENDING',
               id: { not: id },
             },
