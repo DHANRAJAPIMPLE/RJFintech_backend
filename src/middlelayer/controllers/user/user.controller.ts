@@ -85,6 +85,7 @@ export class UserController {
 
   private static formatUserListItem(user: UserListItem): UserListItem {
     return {
+      isPending: user.isPending ?? false,
       pendingRequest: user.pendingRequest ?? null,
       basicDetails: {
         name: user.basicDetails.name,
@@ -829,6 +830,7 @@ export class UserController {
           name: workflow.name,
           alias: workflow.alias,
           status: workflow.status,
+          isPending: workflow.isPending ?? false,
         })),
         roleName: node.roleName || node.roleCode || '',
       }));

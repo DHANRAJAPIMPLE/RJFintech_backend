@@ -50,6 +50,7 @@ export class OrgController {
       nodeName: node.nodeName,
       nodeType: node.nodeType,
       nodePath: node.nodePath,
+      isPending: node.isPending ?? false,
       pendingRequest: node.pendingRequest ?? null,
     };
   }

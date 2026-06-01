@@ -1156,6 +1156,7 @@ export class UserDbController {
     const mapping = u.userMappings[0];
 
     return {
+      isPending: Boolean(pendingRequest),
       pendingRequest: pendingRequest
         ? {
             id: pendingRequest.id,
@@ -4180,6 +4181,27 @@ export class UserDbController {
       const workflowSubCategory =
         UserDbController.normalizeFilterText(subCategory);
 
+      const visibleWorkflowRequestIds = new Set(
+        await UserDbController.getCurrentApproverRequestIds(
+          'workflow_req',
+          userId,
+          companyId,
+        ),
+      );
+      if (userId) {
+        const initiatedWorkflowRequests = await prisma.workflowReq.findMany({
+          where: {
+            companyId,
+            status: 'PENDING',
+            initiatorId: userId,
+          },
+          select: { id: true },
+        });
+        initiatedWorkflowRequests.forEach((request) =>
+          visibleWorkflowRequestIds.add(request.id),
+        );
+      }
+
       const userMapping = await prisma.userMapping.findUnique({
         where: {
           userId_companyId: {
@@ -4231,6 +4253,7 @@ export class UserDbController {
                 status: 'ACTIVE',
               },
               select: {
+                id: true,
                 levelsHash: true,
                 name: true,
                 alias: true,
@@ -4240,10 +4263,26 @@ export class UserDbController {
           },
         });
 
-        const nodes = companyNodes.map((node) => ({
-          ...UserDbController.withDefaultWorkflowOption(node, defaultWorkflow),
-          roleName: globalAccess.role?.roleName || globalAccess.roleCode,
-        }));
+        const nodes = companyNodes.map((node) => {
+          const nodeWithWorkflows = UserDbController.withDefaultWorkflowOption(
+            node,
+            defaultWorkflow,
+          );
+
+          return {
+            ...nodeWithWorkflows,
+            workflows: nodeWithWorkflows.workflows.map((workflow: any) => ({
+              levelsHash: workflow.levelsHash,
+              name: workflow.name,
+              alias: workflow.alias,
+              status: workflow.status,
+              isPending:
+                Boolean(workflow.id) &&
+                visibleWorkflowRequestIds.has(workflow.id),
+            })),
+            roleName: globalAccess.role?.roleName || globalAccess.roleCode,
+          };
+        });
 
         return res.status(200).json({
           nodes,
@@ -4273,17 +4312,18 @@ export class UserDbController {
                 nodePath: true,
                 nodeType: true,
                 status: true,
-                workflows: {
-                  where: {
-                    subModule: workflowSubCategory,
-                    status: 'ACTIVE',
-                  },
-                  select: {
-                    levelsHash: true,
-                    name: true,
-                    alias: true,
-                    status: true,
-                  },
+            workflows: {
+              where: {
+                subModule: workflowSubCategory,
+                status: 'ACTIVE',
+              },
+              select: {
+                id: true,
+                levelsHash: true,
+                name: true,
+                alias: true,
+                status: true,
+              },
                 },
               },
             },
@@ -4291,13 +4331,26 @@ export class UserDbController {
         });
 
         const nodes = userAccesses
-          .map((ua) => ({
-            ...UserDbController.withDefaultWorkflowOption(
+          .map((ua) => {
+            const nodeWithWorkflows = UserDbController.withDefaultWorkflowOption(
               ua.orgStructure,
               defaultWorkflow,
-            ),
-            roleName: ua.role?.roleName || ua.roleCode,
-          }))
+            );
+
+            return {
+              ...nodeWithWorkflows,
+              workflows: nodeWithWorkflows.workflows.map((workflow: any) => ({
+                levelsHash: workflow.levelsHash,
+                name: workflow.name,
+                alias: workflow.alias,
+                status: workflow.status,
+                isPending:
+                  Boolean(workflow.id) &&
+                  visibleWorkflowRequestIds.has(workflow.id),
+              })),
+              roleName: ua.role?.roleName || ua.roleCode,
+            };
+          })
           .filter(
             (node, index, self) =>
               index === self.findIndex((t) => t.nodePath === node.nodePath),

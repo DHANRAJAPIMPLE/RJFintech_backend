@@ -2223,6 +2223,7 @@ export class OrgStructureDbController {
         nodeName: node.nodeName,
         nodeType: node.nodeType,
         nodePath: node.nodePath,
+        isPending: pendingByNodePath.has(node.nodePath),
         pendingRequest: pendingByNodePath.has(node.nodePath)
           ? {
               id: pendingByNodePath.get(node.nodePath).id,
