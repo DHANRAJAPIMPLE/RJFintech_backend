@@ -2321,7 +2321,6 @@ export class OrgStructureDbController {
       );
       const pendingByNodePath = new Map<string, any>();
       pendingWithDetails.forEach((request: any) => {
-        if (!approverRequestIds.has(request.id)) return;
         const requestData = request.data as any;
         const targetPath =
           requestData?.targetNodePath ||
@@ -2346,7 +2345,9 @@ export class OrgStructureDbController {
         nodeType: node.nodeType,
         nodePath: node.nodePath,
         isPending: pendingByNodePath.has(node.nodePath),
-        pendingRequest: pendingByNodePath.has(node.nodePath)
+        pendingRequest:
+          pendingByNodePath.has(node.nodePath) &&
+          approverRequestIds.has(pendingByNodePath.get(node.nodePath).id)
           ? {
               id: pendingByNodePath.get(node.nodePath).id,
               type: pendingByNodePath.get(node.nodePath).type,
