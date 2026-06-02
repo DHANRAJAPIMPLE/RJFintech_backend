@@ -74,6 +74,12 @@ type UserPermissionDiff = {
   }>;
 };
 
+type HistoryChangeCount = {
+  added: number;
+  modify: number;
+  remove: number;
+};
+
 /**
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
  * Handles production user data and pending user requests.
@@ -209,6 +215,99 @@ export class UserDbController {
       nodePath: permission.nodePath,
       accessCategory: permission.accessCategory || null,
     };
+  }
+
+  private static normalizeChangeCount(value: unknown): HistoryChangeCount {
+    if (!value || typeof value !== 'object') {
+      return { added: 0, modify: 0, remove: 0 };
+    }
+
+    const source = value as Record<string, unknown>;
+    return {
+      added: Number(source.added) || 0,
+      modify: Number(source.modify) || 0,
+      remove: Number(source.remove) || 0,
+    };
+  }
+
+  private static permissionMutationKey(permission: any) {
+    return [
+      permission?.accessType || 'SECONDARY',
+      permission?.roleName || '',
+      permission?.nodePath || '',
+      permission?.accessCategory || '',
+    ].join('|');
+  }
+
+  private static getUserHistoryChangeCount(
+    requestData: any,
+    oldData: any,
+    requestType: string | null | undefined,
+  ): HistoryChangeCount {
+    const stored = UserDbController.normalizeChangeCount(
+      requestData?.changeCount ?? oldData?.changeCount,
+    );
+    if (stored.added || stored.modify || stored.remove) {
+      return stored;
+    }
+
+    const normalizedType = String(requestType || '').toUpperCase();
+    const mutations = Array.isArray(requestData?.permissions)
+      ? requestData.permissions
+      : [];
+
+    if (normalizedType === 'INITIATE') {
+      return {
+        added: mutations.length,
+        modify: 0,
+        remove: 0,
+      };
+    }
+
+    const oldPermissions = Array.isArray(oldData?.permissions)
+      ? oldData.permissions
+      : [];
+    const oldPermissionKeys = new Set(
+      oldPermissions.map((permission: any) =>
+        UserDbController.permissionMutationKey(permission),
+      ),
+    );
+
+    const counts: HistoryChangeCount = {
+      added: 0,
+      modify: 0,
+      remove: 0,
+    };
+
+    for (const mutation of mutations) {
+      const operation =
+        typeof mutation?.operation === 'string'
+          ? mutation.operation.trim().toUpperCase()
+          : '';
+
+      if (mutation?.remove === true || operation === 'REMOVE') {
+        counts.remove += 1;
+        continue;
+      }
+
+      if (operation === 'UPDATE' || operation === 'MODIFY') {
+        counts.modify += 1;
+        continue;
+      }
+
+      if (operation === 'ADD') {
+        counts.added += 1;
+        continue;
+      }
+
+      if (oldPermissionKeys.has(UserDbController.permissionMutationKey(mutation))) {
+        counts.modify += 1;
+      } else {
+        counts.added += 1;
+      }
+    }
+
+    return counts;
   }
 
   private static permissionsEqual(
@@ -4031,6 +4130,12 @@ export class UserDbController {
           if (levels) {
             const currentPending = levels.find((l) => l.status === 'PENDING');
             if (currentPending) {
+              const requestSnapshot = requestSnapshotMap.get(h.reqId);
+              const changeCount = UserDbController.getUserHistoryChangeCount(
+                requestSnapshot?.data,
+                requestSnapshot?.oldData,
+                requestSnapshot?.type,
+              );
               const approvers = (currentPending.approversList as string[])
                 .map((id) => {
                   const u = approverMap.get(id);
@@ -4049,6 +4154,7 @@ export class UserDbController {
                   ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ??
                     null),
                 newData: requestSnapshotMap.get(h.reqId)?.data || null,
+                changeCount,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -4064,6 +4170,13 @@ export class UserDbController {
         const requestType = h.reqId
           ? (requestSnapshotMap.get(h.reqId)?.type || null)
           : null;
+        const changeCount = h.reqId
+          ? UserDbController.getUserHistoryChangeCount(
+              requestSnapshotMap.get(h.reqId)?.data,
+              requestSnapshotMap.get(h.reqId)?.oldData,
+              requestType,
+            )
+          : { added: 0, modify: 0, remove: 0 };
         const displayEvent =
           h.event === 'INITIATE' &&
           requestType &&
@@ -4124,6 +4237,7 @@ export class UserDbController {
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
+          changeCount,
           user: HistoryUserUtil.formatAuditUser(
             h.user,
             h.eventUserId,
@@ -4220,6 +4334,11 @@ export class UserDbController {
         ? null
         : (onboarding?.oldData || requestData?.oldData || null);
       const newData = requestData || null;
+      const changeCount = UserDbController.getUserHistoryChangeCount(
+        requestData,
+        onboarding?.oldData || requestData?.oldData || null,
+        requestType,
+      );
 
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
         viewerUserId,
@@ -4245,6 +4364,7 @@ export class UserDbController {
           level: history.level,
           createdAt: history.createdAt,
           remarks: history.remarks,
+          changeCount,
           oldData,
           newData,
           user: HistoryUserUtil.formatAuditUser(

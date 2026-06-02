@@ -197,6 +197,12 @@ export type WorkflowHistoryAuditUser = {
   email: string;
 };
 
+export type WorkflowHistoryChangeCount = {
+  added: number;
+  modify: number;
+  remove: number;
+};
+
 export type WorkflowHistoryEvent =
   | 'INITIATE'
   | 'APPROVED'
@@ -209,6 +215,7 @@ export type WorkflowHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 export type WorkflowHistoryBaseItem = {
   id: string;
   workflowName: string | null;
+  changeCount: WorkflowHistoryChangeCount;
 };
 
 export type WorkflowHistoryActionItem = WorkflowHistoryBaseItem & {

@@ -22,6 +22,12 @@ type WorkflowTarget = {
   levelsHash: string;
 };
 
+type HistoryChangeCount = {
+  added: number;
+  modify: number;
+  remove: number;
+};
+
 /**
  * Controller for handling workflow-related database operations.
  * Manages the lifecycle of workflow requests (initiation, approval/rejection)
@@ -409,6 +415,115 @@ export class WorkflowDbController {
       return 'IMMEDIATE_CHILD';
     }
     return 'NODE';
+  }
+
+  private static normalizeChangeCount(value: unknown): HistoryChangeCount {
+    if (!value || typeof value !== 'object') {
+      return { added: 0, modify: 0, remove: 0 };
+    }
+
+    const source = value as Record<string, unknown>;
+    return {
+      added: Number(source.added) || 0,
+      modify: Number(source.modify) || 0,
+      remove: Number(source.remove) || 0,
+    };
+  }
+
+  private static normalizeWorkflowLevel(level: any) {
+    if (!level || typeof level !== 'object') {
+      return {
+        approver1: null,
+        approver2: null,
+        type: 'OR',
+      };
+    }
+
+    return {
+      approver1: level.approver1 ?? null,
+      approver2: level.approver2 ?? null,
+      type: level.type ?? 'OR',
+    };
+  }
+
+  private static getWorkflowLevelMap(levels: unknown) {
+    if (!levels || typeof levels !== 'object' || Array.isArray(levels)) {
+      return new Map<number, { approver1: unknown; approver2: unknown; type: unknown }>();
+    }
+
+    const entries = Object.entries(levels as Record<string, any>)
+      .map(([key, level]) => {
+        const levelNumber = Number.parseInt(key.replace(/^l/i, ''), 10);
+        return [
+          levelNumber,
+          WorkflowDbController.normalizeWorkflowLevel(level),
+        ] as const;
+      })
+      .filter(([levelNumber]) => Number.isFinite(levelNumber));
+
+    return new Map(entries);
+  }
+
+  private static getWorkflowHistoryChangeCount(
+    requestData: any,
+    oldData: any,
+    requestType: string | null | undefined,
+  ): HistoryChangeCount {
+    const stored = WorkflowDbController.normalizeChangeCount(
+      requestData?.changeCount ?? oldData?.changeCount,
+    );
+    if (stored.added || stored.modify || stored.remove) {
+      return stored;
+    }
+
+    const normalizedType = String(requestType || '').toUpperCase();
+    const newLevels = WorkflowDbController.getWorkflowLevelMap(
+      requestData?.levels,
+    );
+    const oldLevels = WorkflowDbController.getWorkflowLevelMap(oldData?.levels);
+
+    if (normalizedType === 'INITIATE') {
+      return {
+        added: newLevels.size,
+        modify: 0,
+        remove: 0,
+      };
+    }
+
+    const counts: HistoryChangeCount = {
+      added: 0,
+      modify: 0,
+      remove: 0,
+    };
+    const allLevelNumbers = new Set([
+      ...Array.from(oldLevels.keys()),
+      ...Array.from(newLevels.keys()),
+    ]);
+
+    for (const levelNumber of allLevelNumbers) {
+      const oldLevel = oldLevels.get(levelNumber);
+      const newLevel = newLevels.get(levelNumber);
+
+      if (oldLevel && !newLevel) {
+        counts.remove += 1;
+        continue;
+      }
+
+      if (!oldLevel && newLevel) {
+        counts.added += 1;
+        continue;
+      }
+
+      if (
+        oldLevel &&
+        newLevel &&
+        JSON.stringify(oldLevel) !== JSON.stringify(newLevel)
+      ) {
+        counts.modify += 1;
+      }
+    }
+
+    return counts;
   }
 
   private static sanitizeWorkflowHistoryData(
@@ -2526,6 +2641,12 @@ export class WorkflowDbController {
           if (levels) {
             const currentPending = levels.find((l) => l.status === 'PENDING');
             if (currentPending) {
+              const requestChangeCount =
+                WorkflowDbController.getWorkflowHistoryChangeCount(
+                  h.workflowReq?.data,
+                  h.workflowReq?.oldData,
+                  h.workflowReq?.type,
+                );
               const approvers = (currentPending.approversList as string[])
                 .map((id) => {
                   const u = approverMap.get(id);
@@ -2559,6 +2680,7 @@ export class WorkflowDbController {
                 nodeName: (h.workflowReq?.data as any)?.nodeName || null,
                 nodeType: (h.workflowReq?.data as any)?.nodeType || null,
                 companyCode: h.company.companyCode,
+                changeCount: requestChangeCount,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -2579,6 +2701,11 @@ export class WorkflowDbController {
             : h.event;
         const newDataObj = WorkflowDbController.sanitizeWorkflowHistoryData(
           h.workflowReq?.data,
+          h.workflowReq?.type,
+        );
+        const changeCount = WorkflowDbController.getWorkflowHistoryChangeCount(
+          h.workflowReq?.data,
+          h.workflowReq?.oldData,
           h.workflowReq?.type,
         );
 
@@ -2606,6 +2733,7 @@ export class WorkflowDbController {
           level: h.level,
           createdAt: h.createdAt,
           remarks: WorkflowDbController.formatWorkflowHistoryRemarks(h),
+          changeCount,
           user: HistoryUserUtil.formatAuditUser(
             h.user,
             h.eventUserId,
@@ -2692,6 +2820,11 @@ export class WorkflowDbController {
             history.workflowReq.type,
           )
         : null;
+      const changeCount = WorkflowDbController.getWorkflowHistoryChangeCount(
+        requestData,
+        history.workflowReq?.oldData || requestData?.oldData || null,
+        requestType,
+      );
 
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
         viewerUserId,
@@ -2713,6 +2846,7 @@ export class WorkflowDbController {
           level: history.level,
           createdAt: history.createdAt,
           remarks: history.remarks,
+          changeCount,
           oldData,
           newData,
           user: HistoryUserUtil.formatAuditUser(

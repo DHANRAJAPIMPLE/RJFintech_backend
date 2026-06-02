@@ -24,6 +24,7 @@ export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'ALL';
 export type NotificationFetchRequest = {
   status?: NotificationFetchStatus;
   referenceType?: NotificationReferenceType;
+  isPending?: boolean;
   dateRange?: NotificationFetchDateRange;
   fromDate?: string;
   toDate?: string;
@@ -40,6 +41,7 @@ export type NotificationFetchItem = {
   type: NotificationActionType;
   refType: NotificationReferenceType | null;
   referenceId: string | null;
+  isPending: boolean;
   status: NotificationUserStatus;
   createdByname: string | null;
   createdByemail: string | null;

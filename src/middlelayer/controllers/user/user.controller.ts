@@ -160,6 +160,7 @@ export class UserController {
     const common = {
       id: item.id,
       email: item.email,
+      changeCount: item.changeCount,
     };
 
     if ('eligibleapprovers' in item) {

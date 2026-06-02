@@ -240,6 +240,12 @@ export type UserHistoryAuditUser = {
   email: string;
 };
 
+export type UserHistoryChangeCount = {
+  added: number;
+  modify: number;
+  remove: number;
+};
+
 export type UserHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
 
 export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
@@ -247,6 +253,7 @@ export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 export type UserHistoryBaseItem = {
   id: string;
   email: string;
+  changeCount: UserHistoryChangeCount;
 };
 
 export type UserHistoryActionItem = UserHistoryBaseItem & {

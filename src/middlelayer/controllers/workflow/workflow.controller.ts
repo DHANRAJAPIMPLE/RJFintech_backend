@@ -137,6 +137,7 @@ export class WorkflowController {
     const common = {
       id: item.id,
       workflowName: item.workflowName,
+      changeCount: item.changeCount,
     };
 
     if ('eligibleapprovers' in item) {

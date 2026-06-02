@@ -111,6 +111,7 @@ const formatNotification = (row: any) => ({
   type: row.notification.type,
   refType: row.notification.referenceType,
   referenceId: row.notification.referenceId,
+  isPending: row.notification.isPending ?? false,
   status: row.status,
   createdByname: row.notification.createdByUser?.name || null,
   createdByemail: row.notification.createdByUser?.email || null,
@@ -160,6 +161,10 @@ export class NotificationService {
     if (!input.referenceType && (!input.name || !input.message)) {
       throw new Error('name and message are required');
     }
+  }
+
+  private static isPendingNotificationType(type: NotificationType) {
+    return ['INITIATE', 'MODIFICATION'].includes(type);
   }
 
   private static getActorName(user: { name?: string | null; email?: string }) {
@@ -472,28 +477,10 @@ export class NotificationService {
       input,
       actorName,
     );
+    const isPending = NotificationService.isPendingNotificationType(input.type);
+    const shouldClearPreviousPending =
+      !isPending && Boolean(input.referenceType) && Boolean(input.referenceId);
     const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);
-    const existingNotification = await prisma.notification.findFirst({
-      where: {
-        companyId: input.companyId,
-        type: input.type,
-        referenceType: input.referenceType || null,
-        referenceId: input.referenceId || null,
-        createdBy: input.createdBy,
-        name: content.name,
-        message: content.message,
-        createdAt: { gte: duplicateWindowStart },
-      },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        createdByUser: {
-          select: { name: true, email: true },
-        },
-      },
-    });
-    if (existingNotification) {
-      return existingNotification;
-    }
     const requestedRecipients = NotificationService.unique(
       input.recipientUserIds || [],
     ).filter((userId) => userId !== input.createdBy);
@@ -521,6 +508,44 @@ export class NotificationService {
     }));
 
     const notification = await prisma.$transaction(async (tx) => {
+      if (shouldClearPreviousPending) {
+        await tx.notification.updateMany({
+          where: {
+            companyId: input.companyId,
+            referenceType: input.referenceType || null,
+            referenceId: input.referenceId || null,
+            isPending: true,
+          },
+          data: {
+            isPending: false,
+            updatedAt: now,
+          },
+        });
+      }
+
+      const existingNotification = await tx.notification.findFirst({
+        where: {
+          companyId: input.companyId,
+          type: input.type,
+          referenceType: input.referenceType || null,
+          referenceId: input.referenceId || null,
+          createdBy: input.createdBy,
+          name: content.name,
+          message: content.message,
+          createdAt: { gte: duplicateWindowStart },
+        },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          createdByUser: {
+            select: { name: true, email: true },
+          },
+        },
+      });
+
+      if (existingNotification) {
+        return { notification: existingNotification, shouldEmit: false };
+      }
+
       const createdNotification = await tx.notification.create({
         data: {
           id: notificationId,
@@ -530,6 +555,7 @@ export class NotificationService {
           type: input.type,
           referenceType: input.referenceType || null,
           referenceId: input.referenceId || null,
+          isPending,
           createdBy: input.createdBy,
           updatedAt: now,
         },
@@ -545,21 +571,23 @@ export class NotificationService {
         skipDuplicates: true,
       });
 
-      return createdNotification;
+      return { notification: createdNotification, shouldEmit: true };
     });
 
-    for (const notificationUser of notificationUsers) {
-      emitNotificationEvent({
-        userId: notificationUser.userId,
-        companyId: input.companyId,
-        notification: formatNotification({
-          ...notificationUser,
-          notification,
-        }),
-      });
+    if (notification.shouldEmit) {
+      for (const notificationUser of notificationUsers) {
+        emitNotificationEvent({
+          userId: notificationUser.userId,
+          companyId: input.companyId,
+          notification: formatNotification({
+            ...notificationUser,
+            notification: notification.notification,
+          }),
+        });
+      }
     }
 
-    return notification;
+    return notification.notification;
   }
 
   static async createRequestNotification(input: CreateNotificationInput) {
@@ -576,6 +604,7 @@ export class NotificationService {
     companyId: string;
     status?: string;
     referenceType?: string;
+    isPending?: boolean;
     dateRange?: string;
     fromDate?: string | Date;
     toDate?: string | Date;
@@ -600,6 +629,10 @@ export class NotificationService {
 
     if (referenceType) {
       notificationWhere.referenceType = referenceType;
+    }
+
+    if (typeof params.isPending === 'boolean') {
+      notificationWhere.isPending = params.isPending;
     }
 
     if (dateRange !== 'ALL') {
@@ -761,6 +794,7 @@ export class NotificationDbController {
         companyId,
         status,
         referenceType,
+        isPending,
         dateRange,
         fromDate,
         toDate,
@@ -777,6 +811,7 @@ export class NotificationDbController {
         companyId,
         status,
         referenceType,
+        isPending,
         dateRange,
         fromDate,
         toDate,

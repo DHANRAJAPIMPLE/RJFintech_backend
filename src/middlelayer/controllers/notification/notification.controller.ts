@@ -103,6 +103,7 @@ export class NotificationController {
       const {
         status: notificationStatus,
         referenceType,
+        isPending,
         dateRange,
         fromDate,
         toDate,
@@ -118,6 +119,7 @@ export class NotificationController {
           {
             status: notificationStatus,
             referenceType,
+            isPending,
             dateRange,
             fromDate,
             toDate,

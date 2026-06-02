@@ -203,6 +203,7 @@ model Notification {
   type              String
   referenceType     String?            @map("reference_type")
   referenceId       String?            @map("reference_id")
+  isPending         Boolean            @default(false) @map("is_pending")
   createdBy         String             @map("created_by")
   createdAt         DateTime           @default(now()) @map("created_at")
   updatedAt         DateTime           @updatedAt @map("updated_at")
