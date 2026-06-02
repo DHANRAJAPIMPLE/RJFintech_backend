@@ -49,6 +49,13 @@ const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'WORKFLOW',
   'COMPANY',
 ];
+const PENDING_NOTIFICATION_TYPES: NotificationType[] = [
+  'INITIATE',
+  'MODIFICATION',
+  'ACTIVE',
+  'INACTIVE',
+  'ARCHIVE',
+];
 
 const normalizeStatus = (value: unknown) => {
   const status = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
@@ -156,7 +163,7 @@ export class NotificationService {
   }
 
   private static isPendingNotificationType(type: NotificationType) {
-    return ['INITIATE', 'MODIFICATION'].includes(type);
+    return PENDING_NOTIFICATION_TYPES.includes(type);
   }
 
   private static stringifyTargetParts(parts: Array<string | null | undefined>) {
