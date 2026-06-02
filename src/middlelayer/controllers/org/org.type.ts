@@ -184,10 +184,10 @@ export type OrgHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
 export type OrgHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
 export type OrgHistoryBaseItem = {
+  id: string;
   newNodeName: string | null;
   nodeType: OrgNodeType | null;
   parentNodeName: string;
-  oldData?: unknown | null;
 };
 
 export type OrgHistoryActionItem = OrgHistoryBaseItem & {
@@ -215,6 +215,7 @@ export type FetchOrgHistoryResponse = {
 };
 
 export type OrgHistoryInternalItem = OrgHistoryItem & {
+  oldData?: unknown | null;
   orgReqId: string;
   companyCode: string;
   nodeId: string | null;

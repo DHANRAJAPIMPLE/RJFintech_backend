@@ -158,8 +158,8 @@ export class UserController {
     item: UserHistoryInternalItem,
   ): UserHistoryItem {
     const common = {
+      id: item.id,
       email: item.email,
-      oldData: item.oldData ?? null,
     };
 
     if ('eligibleapprovers' in item) {

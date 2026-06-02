@@ -1083,6 +1083,16 @@ export class OrgStructureDbController {
     await tx.userAccess.deleteMany({
       where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
     });
+    await tx.workflow.updateMany({
+      where: {
+        companyId: request.companyId,
+        nodeId: { in: subtreeIds },
+        status: { not: 'ARCHIVE' },
+      },
+      data: {
+        status: 'ARCHIVE',
+      },
+    });
     await tx.orgStructure.updateMany({
       where: { id: { in: subtreeIds } },
       data: { status: 'INACTIVE' },
@@ -1996,6 +2006,7 @@ export class OrgStructureDbController {
 
               const data = h.orgReq?.data as any;
               resultList.push({
+                id: h.id,
                 orgReqId: h.orgReqId,
                 type: h.orgReq?.type || null,
                 impact: h.orgReq?.impact || null,
@@ -2071,6 +2082,7 @@ export class OrgStructureDbController {
         }
 
         return {
+          id: h.id,
           orgReqId: h.orgReqId,
           type: h.orgReq?.type || null,
           impact: h.orgReq?.impact || null,
@@ -2104,6 +2116,116 @@ export class OrgStructureDbController {
         message: 'Organization structure history fetched successfully!',
         code: 200,
         data: resultList,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Fetches a single org history event with its resolved request snapshot.
+   */
+  static async getOrgHistoryDetail(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { id, companyId, companyCode, userId: viewerUserId } = req.body;
+
+      if (!id) {
+        throw new AppError('History id is required', 400);
+      }
+
+      let resolvedCompanyId = companyId;
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+          select: { id: true },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
+
+      const history = await prisma.orgHistory.findFirst({
+        where: {
+          id,
+          companyId: resolvedCompanyId,
+        },
+        include: {
+          user: {
+            include: {
+              userAccesses: {
+                where: { companyId: resolvedCompanyId },
+              },
+            },
+          },
+          orgReq: true,
+          company: { select: { companyCode: true, id: true } },
+        },
+      });
+
+      if (!history) {
+        throw new AppError('Organization history not found', 404);
+      }
+
+      const requestData = (history.orgReq?.data as any) || null;
+      const requestType = String(history.orgReq?.type || 'INITIATE').toUpperCase();
+      const displayEvent =
+        history.event === 'INITIATE' && requestType !== 'INITIATE'
+          ? 'MODIFY'
+          : history.event;
+      const oldData =
+        requestType === 'INITIATE'
+          ? null
+          : (history.orgReq?.oldData || requestData?.oldData || null);
+      const newData = requestData || null;
+
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        history.eventUserId,
+      ]);
+
+      res.status(200).json({
+        message: 'Organization structure history item fetched successfully!',
+        code: 200,
+        data: {
+          id: history.id,
+          orgReqId: history.orgReqId,
+          companyCode: history.company.companyCode,
+          type: history.orgReq?.type || null,
+          impact: history.orgReq?.impact || null,
+          event: displayEvent,
+          rawEvent: history.event,
+          level: history.level,
+          createdAt: history.createdAt,
+          remarks: history.remarks,
+          oldData,
+          newData,
+          user: HistoryUserUtil.formatAuditUser(
+            history.user,
+            history.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+          request: history.orgReq
+            ? {
+                id: history.orgReq.id,
+                type: history.orgReq.type,
+                status: history.orgReq.status,
+                workflowId: history.orgReq.workflowId,
+                createdAt: history.orgReq.createdAt,
+              }
+            : null,
+          newNodeName: requestData?.newNodeName || null,
+          nodeType: requestData?._nodeType || requestData?.nodeType || null,
+          nodePath: requestData?.nodePath || null,
+          parentNodePath: requestData?.parentNode?.nodePath || 'ROOT',
+          parentNodeName: requestData?.parentNode?.nodeName || 'ROOT',
+        },
       });
     } catch (error) {
       next(error);

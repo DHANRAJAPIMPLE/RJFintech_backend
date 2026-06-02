@@ -57,7 +57,7 @@ const normalizeWorkflowType = (value: unknown) => {
 };
 const requiredWorkflowListTypeSchema = z.preprocess(
   normalizeRequestType,
-  z.enum(['active', 'pending', 'inactive']),
+  z.enum(['active', 'pending', 'inactive', 'archive']),
 );
 const workflowTypeSchema = z.preprocess(
   normalizeWorkflowType,
@@ -83,7 +83,7 @@ export const workflowModificationSchema = z
   .object({
     type: z.preprocess(
       normalizeRequestType,
-      z.enum(['update', 'inactive', 'active']),
+      z.enum(['update', 'inactive', 'active', 'archive']),
     ),
     target: z
       .object({
@@ -127,6 +127,7 @@ export const workflowModificationSchema = z
         path: ['type'],
       });
     }
+
   });
 
 export const workflowActionSchema = z

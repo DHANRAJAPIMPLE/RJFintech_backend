@@ -10,9 +10,28 @@ export type NotificationActionType =
 
 export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 
+export type NotificationFetchDateRange =
+  | 'ALL'
+  | '7_DAYS'
+  | '15_DAYS'
+  | '1_MONTH'
+  | 'CUSTOM';
+
 export type NotificationUserStatus = 'READ' | 'UNREAD' | 'ARCHIVED';
 
 export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'ALL';
+
+export type NotificationFetchRequest = {
+  status?: NotificationFetchStatus;
+  referenceType?: NotificationReferenceType;
+  dateRange?: NotificationFetchDateRange;
+  fromDate?: string;
+  toDate?: string;
+  cursorId?: string | null;
+  cursor?: string | null;
+  offset?: number;
+  limit?: number;
+};
 
 export type NotificationFetchItem = {
   id: string;

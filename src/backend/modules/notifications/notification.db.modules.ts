@@ -14,6 +14,12 @@ type NotificationType =
   | 'INACTIVE'
   | 'ARCHIVE';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
+type NotificationFetchDateRange =
+  | 'ALL'
+  | '7_DAYS'
+  | '15_DAYS'
+  | '1_MONTH'
+  | 'CUSTOM';
 
 type CreateNotificationInput = {
   companyId: string;
@@ -54,6 +60,36 @@ const normalizeStatus = (value: unknown) => {
 const normalizeFetchStatus = (value: unknown) => {
   const status = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
   return ['READ', 'UNREAD', 'ALL'].includes(status) ? status : 'ALL';
+};
+
+const normalizeReferenceType = (value: unknown) => {
+  const referenceType =
+    typeof value === 'string' ? value.trim().toUpperCase() : '';
+  const normalizedReferenceType = referenceType as NotificationReferenceType;
+  return SUPPORTED_REFERENCE_TYPES.includes(normalizedReferenceType)
+    ? normalizedReferenceType
+    : null;
+};
+
+const normalizeDateRange = (value: unknown): NotificationFetchDateRange => {
+  let dateRange = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
+  if (typeof value === 'string') {
+    dateRange = dateRange.replace(/[\s-]+/g, '_');
+    if (dateRange === '7DAYS') dateRange = '7_DAYS';
+    if (dateRange === '15DAYS') dateRange = '15_DAYS';
+    if (dateRange === '1MONTH') dateRange = '1_MONTH';
+  }
+  return ['ALL', '7_DAYS', '15_DAYS', '1_MONTH', 'CUSTOM'].includes(
+    dateRange,
+  )
+    ? (dateRange as NotificationFetchDateRange)
+    : 'ALL';
+};
+
+const normalizeDateValue = (value: unknown) => {
+  if (typeof value !== 'string' && !(value instanceof Date)) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
 const normalizeCursorId = (value: unknown) => {
@@ -240,6 +276,11 @@ export class NotificationService {
         return {
           name: 'Workflow inactivated',
           message: `${actorName} inactivated workflow ${workflowName}`,
+        };
+      case 'WORKFLOW:ARCHIVE':
+        return {
+          name: 'Workflow archived',
+          message: `${actorName} archived workflow ${workflowName}`,
         };
       case 'COMPANY:INITIATE':
         return {
@@ -534,25 +575,74 @@ export class NotificationService {
     userId: string;
     companyId: string;
     status?: string;
+    referenceType?: string;
+    dateRange?: string;
+    fromDate?: string | Date;
+    toDate?: string | Date;
     limit: number;
     offset: number;
     cursorId?: string | null;
     includeAllCompanies?: boolean;
   }) {
     const status = normalizeFetchStatus(params.status);
+    const referenceType = normalizeReferenceType(params.referenceType);
+    const dateRange = normalizeDateRange(params.dateRange);
+    const fromDate = normalizeDateValue(params.fromDate);
+    const toDate = normalizeDateValue(params.toDate);
+    const appliedStatus = referenceType ? 'ALL' : status;
     const cursorId = normalizeCursorId(params.cursorId);
     const includeAllCompanies =
       await NotificationService.canReadAllCompanyNotifications(
         params.userId,
         params.includeAllCompanies,
       );
+    const notificationWhere: any = {};
+
+    if (referenceType) {
+      notificationWhere.referenceType = referenceType;
+    }
+
+    if (dateRange !== 'ALL') {
+      if (dateRange === '7_DAYS') {
+        notificationWhere.createdAt = {
+          ...(notificationWhere.createdAt || {}),
+          gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        };
+      } else if (dateRange === '15_DAYS') {
+        notificationWhere.createdAt = {
+          ...(notificationWhere.createdAt || {}),
+          gte: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
+        };
+      } else if (dateRange === '1_MONTH') {
+        const monthAgo = new Date();
+        monthAgo.setMonth(monthAgo.getMonth() - 1);
+        notificationWhere.createdAt = {
+          ...(notificationWhere.createdAt || {}),
+          gte: monthAgo,
+        };
+      } else if (dateRange === 'CUSTOM') {
+        if (!fromDate || !toDate) {
+          throw new Error('fromDate and toDate are required for custom date range');
+        }
+
+        notificationWhere.createdAt = {
+          ...(notificationWhere.createdAt || {}),
+          gte: fromDate,
+          lte: toDate,
+        };
+      }
+    }
+
     const baseWhere: any = {
       userId: params.userId,
       ...(includeAllCompanies ? {} : { companyId: params.companyId }),
+      ...(Object.keys(notificationWhere).length
+        ? { notification: notificationWhere }
+        : {}),
     };
     const where: any = {
       ...baseWhere,
-      ...(status === 'ALL' ? {} : { status }),
+      ...(appliedStatus === 'ALL' ? {} : { status: appliedStatus }),
     };
 
     const [count, allCount, cursorRow] = await Promise.all([
@@ -573,7 +663,7 @@ export class NotificationService {
         allCount,
         limit: params.limit,
         offset: params.offset,
-        status,
+        status: appliedStatus,
         cursorId,
         nextCursorId: null,
         hasNextPage: false,
@@ -610,7 +700,7 @@ export class NotificationService {
       allCount,
       limit: params.limit,
       offset: cursorId ? 0 : params.offset,
-      status,
+      status: appliedStatus,
       cursorId,
       nextCursorId,
       hasNextPage,
@@ -666,7 +756,16 @@ export class NotificationService {
 export class NotificationDbController {
   static async fetch(req: Request, res: Response, next: NextFunction) {
     try {
-      const { userId, companyId, status, cursorId } = req.body;
+      const {
+        userId,
+        companyId,
+        status,
+        referenceType,
+        dateRange,
+        fromDate,
+        toDate,
+        cursorId,
+      } = req.body;
       const { offset, limit } = getPagination(req.body);
 
       if (!userId || !companyId) {
@@ -677,6 +776,10 @@ export class NotificationDbController {
         userId,
         companyId,
         status,
+        referenceType,
+        dateRange,
+        fromDate,
+        toDate,
         limit,
         offset,
         cursorId,

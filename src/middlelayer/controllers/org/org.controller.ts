@@ -59,10 +59,10 @@ export class OrgController {
     item: OrgHistoryInternalItem,
   ): OrgHistoryItem {
     const common = {
+      id: item.id,
       newNodeName: item.newNodeName,
       nodeType: item.nodeType,
       parentNodeName: item.parentNodeName,
-      oldData: item.oldData ?? null,
     };
 
     if ('eligibleapprovers' in item) {

@@ -245,8 +245,8 @@ export type UserHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
 export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 
 export type UserHistoryBaseItem = {
+  id: string;
   email: string;
-  oldData?: unknown | null;
 };
 
 export type UserHistoryActionItem = UserHistoryBaseItem & {
@@ -274,6 +274,7 @@ export type FetchUserHistoryResponse = {
 };
 
 export type UserHistoryInternalItem = UserHistoryItem & {
+  oldData?: unknown | null;
   companyCode: string;
 };
 

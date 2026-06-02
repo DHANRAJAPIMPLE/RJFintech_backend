@@ -514,6 +514,7 @@ enum RequestType {
   INITIATE
   UPDATE
   INACTIVE
+  ARCHIVE
   AUTO_GENERATE
 }
 

@@ -16,6 +16,7 @@ import { authMiddleware } from '../middlewares/auth.middleware';
 import type { AuthRequest } from '../middlewares/auth.middleware';
 import { AppError } from '../../shared/middlewares/error.middleware';
 import { EditLockController } from '../controllers/edit-lock/edit-lock.controller';
+import { HistoryController } from '../controllers/history/history.controller';
 import { OrgController } from '../controllers/org/org.controller';
 import { RoleController } from '../controllers/role/role.controller';
 import { UserController } from '../controllers/user/user.controller';
@@ -71,7 +72,9 @@ const authorizeWorkflowInitiate = (
       : 'initiate';
 
   return authorize(
-    type === 'update' || type === 'inactive' ? 'modify' : 'initiate',
+    type === 'update' || type === 'inactive' || type === 'archive'
+      ? 'modify'
+      : 'initiate',
     'WORK_FLOW',
   )(req, res, next);
 };
@@ -101,7 +104,38 @@ const authorizeEditLock = (
   return authorize('modify', moduleName)(req, res, next);
 };
 
+const authorizeHistoryDetail = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toUpperCase()
+      : '';
+
+  const moduleName =
+    type === 'USER'
+      ? 'USER_ACC'
+      : type === 'ORG'
+        ? 'ORG_STR'
+        : type === 'WORKFLOW'
+          ? 'WORK_FLOW'
+          : null;
+
+  if (!moduleName) {
+    return next(new AppError('Invalid history type', 400));
+  }
+
+  return authorize('view', moduleName)(req, res, next);
+};
+
 router.post('/edit-lock', authorizeEditLock, EditLockController.toggle);
+router.post(
+  '/history/detail',
+  authorizeHistoryDetail,
+  HistoryController.fetchHistoryDetail,
+);
 
 // -------------user routes----------------------------------
 router.post(

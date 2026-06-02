@@ -4039,6 +4039,7 @@ export class UserDbController {
                 .filter(Boolean);
 
               resultList.push({
+                id: h.id,
                 email: h.email,
                 type: requestSnapshotMap.get(h.reqId)?.type || null,
                 impact: requestSnapshotMap.get(h.reqId)?.impact || null,
@@ -4109,6 +4110,7 @@ export class UserDbController {
         }
 
         return {
+          id: h.id,
           email: h.email,
           type: requestType,
           impact: h.reqId ? (requestSnapshotMap.get(h.reqId)?.impact || null) : null,
@@ -4137,6 +4139,131 @@ export class UserDbController {
         message: 'User history fetched successfully!',
         code: 200,
         data: resultList,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Fetches a single user history event with its resolved request snapshot.
+   */
+  static async getUserHistoryDetail(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { id, companyId, companyCode, userId: viewerUserId } = req.body;
+
+      if (!id) {
+        throw new AppError('History id is required', 400);
+      }
+
+      let resolvedCompanyId = companyId;
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+          select: { id: true },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
+
+      const history = await prisma.userHistory.findFirst({
+        where: {
+          id,
+          companyId: resolvedCompanyId,
+        },
+        include: {
+          user: {
+            include: {
+              userMappings: {
+                where: { companyId: resolvedCompanyId },
+              },
+              userAccesses: {
+                where: { companyId: resolvedCompanyId },
+              },
+            },
+          },
+          company: { select: { companyCode: true, id: true } },
+        },
+      });
+
+      if (!history) {
+        throw new AppError('User history not found', 404);
+      }
+
+      const onboarding = history.reqId
+        ? await prisma.userOnboarding.findFirst({
+            where: { id: history.reqId, companyId: resolvedCompanyId },
+            select: {
+              id: true,
+              data: true,
+              oldData: true,
+              type: true,
+              impact: true,
+              status: true,
+              workflowId: true,
+              approvalRemark: true,
+              createdAt: true,
+            },
+          })
+        : null;
+      const requestData = (onboarding?.data as any) || null;
+      const requestType = String(onboarding?.type || 'INITIATE').toUpperCase();
+      const isInitiate = requestType === 'INITIATE';
+      const oldData = isInitiate
+        ? null
+        : (onboarding?.oldData || requestData?.oldData || null);
+      const newData = requestData || null;
+
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        history.eventUserId,
+      ]);
+
+      const displayEvent =
+        history.event === 'INITIATE' && requestType !== 'INITIATE'
+          ? 'MODIFY'
+          : history.event;
+
+      res.status(200).json({
+        message: 'User history item fetched successfully!',
+        code: 200,
+        data: {
+          id: history.id,
+          reqId: history.reqId,
+          companyCode: history.company.companyCode,
+          type: onboarding?.type || null,
+          impact: onboarding?.impact || null,
+          event: displayEvent,
+          rawEvent: history.event,
+          level: history.level,
+          createdAt: history.createdAt,
+          remarks: history.remarks,
+          oldData,
+          newData,
+          user: HistoryUserUtil.formatAuditUser(
+            history.user,
+            history.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+          request: onboarding
+            ? {
+                id: onboarding.id,
+                type: onboarding.type,
+                status: onboarding.status,
+                workflowId: onboarding.workflowId,
+                approvalRemark: onboarding.approvalRemark,
+                createdAt: onboarding.createdAt,
+              }
+            : null,
+        },
       });
     } catch (error) {
       next(error);

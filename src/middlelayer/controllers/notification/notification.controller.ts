@@ -15,6 +15,7 @@ import type {
   MarkNotificationReadInternalResponse,
   MarkNotificationReadResponse,
   NotificationApiErrorResponse,
+  NotificationFetchRequest,
   NotificationSseEventName,
   NotificationSseEventPayloadMap,
   NotificationSseNotificationEvent,
@@ -101,6 +102,10 @@ export class NotificationController {
 
       const {
         status: notificationStatus,
+        referenceType,
+        dateRange,
+        fromDate,
+        toDate,
         cursorId: parsedCursorId,
         cursor,
         offset,
@@ -112,12 +117,20 @@ export class NotificationController {
           `${config.backendUrl}/internal/notifications/fetch`,
           {
             status: notificationStatus,
+            referenceType,
+            dateRange,
+            fromDate,
+            toDate,
             userId,
             companyId,
             cursorId,
             offset,
             limit,
             includeAllCompanies: true,
+          } satisfies NotificationFetchRequest & {
+            userId: string;
+            companyId: string;
+            includeAllCompanies: boolean;
           },
         );
 
