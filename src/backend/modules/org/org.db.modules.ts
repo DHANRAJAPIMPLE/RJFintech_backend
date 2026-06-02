@@ -2345,19 +2345,6 @@ export class OrgStructureDbController {
         nodeType: node.nodeType,
         nodePath: node.nodePath,
         isPending: pendingByNodePath.has(node.nodePath),
-        pendingRequest:
-          pendingByNodePath.has(node.nodePath) &&
-          approverRequestIds.has(pendingByNodePath.get(node.nodePath).id)
-          ? {
-              id: pendingByNodePath.get(node.nodePath).id,
-              type: pendingByNodePath.get(node.nodePath).type,
-              impact: pendingByNodePath.get(node.nodePath).impact ?? null,
-              status: pendingByNodePath.get(node.nodePath).status,
-              oldData: pendingByNodePath.get(node.nodePath).oldData ?? null,
-              newData: pendingByNodePath.get(node.nodePath).newData ?? null,
-              createdAt: pendingByNodePath.get(node.nodePath).createdAt,
-            }
-          : null,
       }));
 
       res.status(200).json({

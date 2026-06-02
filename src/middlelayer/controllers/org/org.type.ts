@@ -11,7 +11,6 @@ export type OrgActiveNode = {
   nodeType: OrgNodeType | null;
   nodePath: string;
   isPending: boolean;
-  pendingRequest?: OrgPendingRequestSnapshot | null;
 };
 
 export type OrgActiveNodeInternal = OrgActiveNode & {

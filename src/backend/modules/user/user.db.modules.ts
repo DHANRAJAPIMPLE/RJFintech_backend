@@ -1256,15 +1256,6 @@ export class UserDbController {
 
     return {
       isPending: Boolean(pendingRequest),
-      pendingRequest: pendingRequest
-        ? {
-            id: pendingRequest.id,
-            type: pendingRequest.type,
-            impact: pendingRequest.impact ?? null,
-            status: pendingRequest.status,
-            createdAt: pendingRequest.createdAt,
-          }
-        : null,
       basicDetails: {
         name: u.name,
         email: u.email,

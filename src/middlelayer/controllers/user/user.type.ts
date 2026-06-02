@@ -150,7 +150,6 @@ export type PendingRequestSnapshot = {
 
 export type UserListItem = {
   isPending: boolean;
-  pendingRequest?: PendingRequestSnapshot | null;
   basicDetails: UserListBasicDetails;
   primary: UserListAccess[];
   secondary: UserListAccess[];

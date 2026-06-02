@@ -86,7 +86,6 @@ export class UserController {
   private static formatUserListItem(user: UserListItem): UserListItem {
     return {
       isPending: user.isPending ?? false,
-      pendingRequest: user.pendingRequest ?? null,
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,
