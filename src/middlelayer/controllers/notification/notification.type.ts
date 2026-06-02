@@ -9,6 +9,7 @@ export type NotificationActionType =
   | 'ARCHIVE';
 
 export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
+export type NotificationReferenceTypeFilter = NotificationReferenceType | null;
 
 export type NotificationFetchDateRange =
   | 'ALL'
@@ -23,7 +24,7 @@ export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'ALL';
 
 export type NotificationFetchRequest = {
   status?: NotificationFetchStatus;
-  referenceType?: NotificationReferenceType;
+  referenceType?: NotificationReferenceTypeFilter;
   isPending?: boolean;
   dateRange?: NotificationFetchDateRange;
   fromDate?: string;
@@ -41,6 +42,7 @@ export type NotificationFetchItem = {
   type: NotificationActionType;
   refType: NotificationReferenceType | null;
   referenceId: string | null;
+  target: string | null;
   isPending: boolean;
   status: NotificationUserStatus;
   createdByname: string | null;

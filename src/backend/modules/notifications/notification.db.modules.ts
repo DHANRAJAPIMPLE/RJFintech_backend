@@ -104,19 +104,11 @@ const getDisplayValue = (value: unknown, fallback: string) => {
   return normalized || fallback;
 };
 
-const formatNotification = (row: any) => ({
-  id: row.id,
-  name: row.notification.name,
-  message: row.notification.message,
-  type: row.notification.type,
-  refType: row.notification.referenceType,
-  referenceId: row.notification.referenceId,
-  isPending: row.notification.isPending ?? false,
-  status: row.status,
-  createdByname: row.notification.createdByUser?.name || null,
-  createdByemail: row.notification.createdByUser?.email || null,
-  ['createat_timestamp']: row.notification.createdAt,
-});
+const isUuidLike = (value: unknown) =>
+  typeof value === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value.trim(),
+  );
 
 export class NotificationService {
   private static unique(values: Array<string | null | undefined>) {
@@ -165,6 +157,147 @@ export class NotificationService {
 
   private static isPendingNotificationType(type: NotificationType) {
     return ['INITIATE', 'MODIFICATION'].includes(type);
+  }
+
+  private static stringifyTargetParts(parts: Array<string | null | undefined>) {
+    const values = parts
+      .map((part) => (typeof part === 'string' ? part.trim() : ''))
+      .filter(Boolean);
+    return values.length > 0 ? values.join(', ') : null;
+  }
+
+  private static async resolveNotificationTarget(row: {
+    companyId: string;
+    referenceType?: string | null;
+    referenceId?: string | null;
+  }) {
+    const referenceType =
+      typeof row.referenceType === 'string'
+        ? row.referenceType.trim().toUpperCase()
+        : '';
+    const referenceId =
+      typeof row.referenceId === 'string' ? row.referenceId.trim() : '';
+    if (!referenceType || !referenceId) return null;
+
+    if (referenceType === 'USER') {
+      const onboarding = await prisma.userOnboarding.findUnique({
+        where: { id: referenceId },
+        select: {
+          data: true,
+        },
+      });
+
+      const data = onboarding?.data as any;
+      return (
+        (typeof data?.targetUserEmail === 'string' && data.targetUserEmail.trim()) ||
+        (typeof data?.basicDetails?.email === 'string' &&
+          data.basicDetails.email.trim()) ||
+        null
+      );
+    }
+
+    if (referenceType === 'ORG') {
+      const request = await prisma.orgStructureReq.findUnique({
+        where: { id: referenceId },
+        select: {
+          data: true,
+        },
+      });
+
+      const data = request?.data as any;
+      return (
+        (typeof data?.targetNodePath === 'string' &&
+          data.targetNodePath.trim()) ||
+        (typeof data?.nodePath === 'string' && data.nodePath.trim()) ||
+        (typeof data?.currentData?.nodePath === 'string' &&
+          data.currentData.nodePath.trim()) ||
+        null
+      );
+    }
+
+    if (referenceType === 'WORKFLOW') {
+      if (isUuidLike(referenceId)) {
+        const request = await prisma.workflowReq.findUnique({
+          where: { id: referenceId },
+          select: {
+            nodeId: true,
+            module: true,
+            subModule: true,
+            levelsHash: true,
+            data: true,
+          },
+        });
+
+        if (request) {
+          const orgNode = await prisma.orgStructure.findUnique({
+            where: { id: request.nodeId },
+            select: { nodePath: true },
+          });
+          const requestData = request.data as any;
+          const nodePath =
+            (typeof requestData?.nodePath === 'string' &&
+              requestData.nodePath.trim()) ||
+            orgNode?.nodePath ||
+            null;
+          return NotificationService.stringifyTargetParts([
+            nodePath,
+            request.levelsHash,
+            request.module,
+            request.subModule,
+          ]);
+        }
+      }
+
+      const workflow = await prisma.workflow.findFirst({
+        where: {
+          companyId: row.companyId,
+          levelsHash: referenceId,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          module: true,
+          subModule: true,
+          levelsHash: true,
+          orgStructure: { select: { nodePath: true } },
+        },
+      });
+
+      if (workflow) {
+        return NotificationService.stringifyTargetParts([
+          workflow.orgStructure?.nodePath || null,
+          workflow.levelsHash,
+          workflow.module,
+          workflow.subModule,
+        ]);
+      }
+    }
+
+    return null;
+  }
+
+  private static async formatNotification(
+    row: any,
+    target?: string | null,
+  ) {
+    const resolvedTarget =
+      target === undefined
+        ? await NotificationService.resolveNotificationTarget(row.notification)
+        : target;
+
+    return {
+      id: row.id,
+      name: row.notification.name,
+      message: row.notification.message,
+      type: row.notification.type,
+      refType: row.notification.referenceType,
+      referenceId: row.notification.referenceId,
+      target: resolvedTarget,
+      isPending: row.notification.isPending ?? false,
+      status: row.status,
+      createdByname: row.notification.createdByUser?.name || null,
+      createdByemail: row.notification.createdByUser?.email || null,
+      ['createat_timestamp']: row.notification.createdAt,
+    };
   }
 
   private static getActorName(user: { name?: string | null; email?: string }) {
@@ -574,15 +707,23 @@ export class NotificationService {
       return { notification: createdNotification, shouldEmit: true };
     });
 
+    const target = await NotificationService.resolveNotificationTarget(
+      notification.notification,
+    );
+
     if (notification.shouldEmit) {
       for (const notificationUser of notificationUsers) {
+        const formattedNotification = await NotificationService.formatNotification(
+          {
+            ...notificationUser,
+            notification: notification.notification,
+          },
+          target,
+        );
         emitNotificationEvent({
           userId: notificationUser.userId,
           companyId: input.companyId,
-          notification: formatNotification({
-            ...notificationUser,
-            notification: notification.notification,
-          }),
+          notification: formattedNotification,
         });
       }
     }
@@ -728,7 +869,9 @@ export class NotificationService {
       : null;
 
     return {
-      data: pageRows.map(formatNotification),
+      data: await Promise.all(
+        pageRows.map((row) => NotificationService.formatNotification(row)),
+      ),
       count,
       allCount,
       limit: params.limit,
@@ -782,7 +925,9 @@ export class NotificationService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return rows.map(formatNotification);
+    return Promise.all(
+      rows.map((row) => NotificationService.formatNotification(row)),
+    );
   }
 }
 
