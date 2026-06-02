@@ -24,8 +24,7 @@ export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'ALL';
 
 export type NotificationFetchRequest = {
   status?: NotificationFetchStatus;
-  referenceType?: NotificationReferenceTypeFilter;
-  isPending?: boolean;
+  refType?: NotificationReferenceTypeFilter;
   dateRange?: NotificationFetchDateRange;
   fromDate?: string;
   toDate?: string;

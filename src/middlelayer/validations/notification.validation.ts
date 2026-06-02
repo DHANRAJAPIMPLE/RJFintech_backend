@@ -64,36 +64,10 @@ const normalizedReadStatusSchema = z.preprocess(
   z.enum(['READ', 'UNREAD', 'ARCHIVED']).optional(),
 );
 
-const normalizedBooleanSchema = z.preprocess(
-  (value) => {
-    if (value === undefined || value === null || value === '') {
-      return undefined;
-    }
-
-    if (typeof value === 'boolean') {
-      return value;
-    }
-
-    if (typeof value === 'number') {
-      return value !== 0;
-    }
-
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      if (['true', '1', 'yes', 'y'].includes(normalized)) return true;
-      if (['false', '0', 'no', 'n'].includes(normalized)) return false;
-    }
-
-    return value;
-  },
-  z.boolean().optional(),
-);
-
 export const notificationFetchSchema = z
   .object({
     status: normalizedFetchStatusSchema,
-    referenceType: normalizedReferenceTypeSchema,
-    isPending: normalizedBooleanSchema,
+    refType: normalizedReferenceTypeSchema,
     dateRange: normalizedDateRangeSchema,
     fromDate: normalizedDateStringSchema,
     toDate: normalizedDateStringSchema,

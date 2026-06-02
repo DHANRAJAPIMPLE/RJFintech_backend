@@ -744,8 +744,7 @@ export class NotificationService {
     userId: string;
     companyId: string;
     status?: string;
-    referenceType?: string;
-    isPending?: boolean;
+    refType?: string | null;
     dateRange?: string;
     fromDate?: string | Date;
     toDate?: string | Date;
@@ -755,7 +754,7 @@ export class NotificationService {
     includeAllCompanies?: boolean;
   }) {
     const status = normalizeFetchStatus(params.status);
-    const referenceType = normalizeReferenceType(params.referenceType);
+    const referenceType = normalizeReferenceType(params.refType);
     const dateRange = normalizeDateRange(params.dateRange);
     const fromDate = normalizeDateValue(params.fromDate);
     const toDate = normalizeDateValue(params.toDate);
@@ -770,10 +769,6 @@ export class NotificationService {
 
     if (referenceType) {
       notificationWhere.referenceType = referenceType;
-    }
-
-    if (typeof params.isPending === 'boolean') {
-      notificationWhere.isPending = params.isPending;
     }
 
     if (dateRange !== 'ALL') {
@@ -938,8 +933,7 @@ export class NotificationDbController {
         userId,
         companyId,
         status,
-        referenceType,
-        isPending,
+        refType,
         dateRange,
         fromDate,
         toDate,
@@ -955,8 +949,7 @@ export class NotificationDbController {
         userId,
         companyId,
         status,
-        referenceType,
-        isPending,
+        refType,
         dateRange,
         fromDate,
         toDate,

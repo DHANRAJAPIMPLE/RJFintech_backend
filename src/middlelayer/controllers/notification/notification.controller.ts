@@ -102,8 +102,7 @@ export class NotificationController {
 
       const {
         status: notificationStatus,
-        referenceType,
-        isPending,
+        refType,
         dateRange,
         fromDate,
         toDate,
@@ -118,8 +117,7 @@ export class NotificationController {
           `${config.backendUrl}/internal/notifications/fetch`,
           {
             status: notificationStatus,
-            referenceType,
-            isPending,
+            refType,
             dateRange,
             fromDate,
             toDate,
