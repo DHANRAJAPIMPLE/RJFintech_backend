@@ -2644,29 +2644,9 @@ export class UserDbController {
       throw new AppError('No user changes were provided', 400);
     }
 
-    const oldBasicDetails: Record<string, unknown> = {};
-    for (const field of editableFields) {
-      if (
-        current.snapshot.basicDetails[field] !== proposed.basicDetails[field]
-      ) {
-        oldBasicDetails[field] = current.snapshot.basicDetails[field];
-      }
-    }
-    if (statusChanged) {
-      oldBasicDetails.status = current.snapshot.basicDetails.status;
-    }
-
-    const changedOldData: Record<string, unknown> = {};
-    if (Object.keys(oldBasicDetails).length > 0) {
-      changedOldData.basicDetails = oldBasicDetails;
-    }
-    const changedOldPermissions = [
-      ...permissionDiff.removed,
-      ...permissionDiff.updated.map((change) => change.oldData),
-    ];
-    if (changedOldPermissions.length > 0) {
-      changedOldData.permissions = changedOldPermissions;
-    }
+    const changedOldData = JSON.parse(
+      JSON.stringify(current.snapshot),
+    ) as UserDataSnapshot;
 
     const impact = await UserDbController.calculateModificationImpact(
       type,

@@ -1219,24 +1219,7 @@ export class WorkflowDbController {
       throw new AppError('Workflow update does not change any values', 400);
     }
 
-    const oldData: Record<string, unknown> = {};
-    for (const field of [
-      'name',
-      'module',
-      'subModule',
-      'nodePath',
-      'workflowType',
-      'status',
-    ]) {
-      if ((currentData as any)[field] !== (newData as any)[field]) {
-        oldData[field] = (currentData as any)[field];
-      }
-    }
-    if (JSON.stringify(currentData.levels) !== JSON.stringify(newData.levels)) {
-      oldData.levels = currentData.levels;
-      oldData.levelsHash = currentData.levelsHash;
-      oldData.alias = currentData.alias;
-    }
+    const oldData = JSON.parse(JSON.stringify(currentData)) as typeof currentData;
 
     const duplicateActive = await prisma.workflow.findUnique({
       where: {
