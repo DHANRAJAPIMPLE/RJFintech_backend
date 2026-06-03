@@ -6,6 +6,7 @@ import { getPagination } from '../../../shared/utils/pagination.util';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
+import { buildJsonPatch } from '../../utils/json-patch.util';
 
 type TextFilterOption = {
   label: string;
@@ -122,6 +123,7 @@ export class UserDbController {
       createdBy: initiatorId,
       recipientUserIds: recipients,
       includeCreatedBy: true,
+      isPending: false,
     });
   }
   private static normalizeUserRequestType(value: unknown): UserRequestType {
@@ -417,6 +419,47 @@ export class UserDbController {
       removed: removed.filter((_, index) => !pairedRemoved.has(index)),
       added: added.filter((_, index) => !pairedAdded.has(index)),
       updated,
+    };
+  }
+
+  private static buildUserHistoryChangeData(
+    current: UserDataSnapshot,
+    proposed: UserDataSnapshot,
+    permissionDiff: UserPermissionDiff,
+  ) {
+    const basicDetailsPatch = buildJsonPatch(
+      current.basicDetails,
+      proposed.basicDetails,
+    );
+    const oldData: Record<string, unknown> = {};
+    const newData: Record<string, unknown> = {};
+
+    if (basicDetailsPatch) {
+      oldData.basicDetails = basicDetailsPatch.oldData;
+      newData.basicDetails = basicDetailsPatch.newData;
+    }
+
+    const hasPermissionChanges =
+      permissionDiff.added.length > 0 ||
+      permissionDiff.removed.length > 0 ||
+      permissionDiff.updated.length > 0;
+
+    if (hasPermissionChanges) {
+      oldData.permissions = {
+        added: [],
+        removed: permissionDiff.removed,
+        updated: permissionDiff.updated.map((change) => change.oldData),
+      };
+      newData.permissions = {
+        added: permissionDiff.added,
+        removed: [],
+        updated: permissionDiff.updated.map((change) => change.newData),
+      };
+    }
+
+    return {
+      oldData: Object.keys(oldData).length > 0 ? oldData : null,
+      newData: Object.keys(newData).length > 0 ? newData : null,
     };
   }
 
@@ -2643,9 +2686,11 @@ export class UserDbController {
       throw new AppError('No user changes were provided', 400);
     }
 
-    const changedOldData = JSON.parse(
-      JSON.stringify(current.snapshot),
-    ) as UserDataSnapshot;
+    const changeData = UserDbController.buildUserHistoryChangeData(
+      current.snapshot,
+      proposed,
+      permissionDiff,
+    );
 
     const impact = await UserDbController.calculateModificationImpact(
       type,
@@ -2770,7 +2815,7 @@ export class UserDbController {
           type,
           impact,
           data: requestData as any,
-          oldData: changedOldData as any,
+          oldData: changeData.oldData as any,
           remarks: remarks || null,
           status: 'PENDING',
         },
@@ -4340,6 +4385,10 @@ export class UserDbController {
           changeCount,
           oldData,
           newData,
+          changes: {
+            oldData,
+            newData,
+          },
           user: HistoryUserUtil.formatAuditUser(
             history.user,
             history.eventUserId,
@@ -4405,6 +4454,7 @@ export class UserDbController {
           createdBy: requestInitiatorId || initiatorId,
           recipientUserIds: recipients,
           includeCreatedBy: true,
+          isPending: false,
         });
       }
       next(error);

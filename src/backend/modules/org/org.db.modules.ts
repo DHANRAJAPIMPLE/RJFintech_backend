@@ -52,6 +52,7 @@ export class OrgStructureDbController {
       createdBy: initiatorId,
       recipientUserIds: recipients,
       includeCreatedBy: true,
+      isPending: false,
     });
   }
 
@@ -2209,6 +2210,10 @@ export class OrgStructureDbController {
           remarks: history.remarks,
           oldData,
           newData,
+          changes: {
+            oldData,
+            newData,
+          },
           user: HistoryUserUtil.formatAuditUser(
             history.user,
             history.eventUserId,

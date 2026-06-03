@@ -32,6 +32,7 @@ type CreateNotificationInput = {
   createdBy: string;
   recipientUserIds?: string[];
   includeCreatedBy?: boolean;
+  isPending?: boolean;
 };
 
 const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
@@ -644,7 +645,8 @@ export class NotificationService {
       input,
       actorName,
     );
-    const isPending = NotificationService.isPendingNotificationType(input.type);
+    const isPending =
+      input.isPending ?? NotificationService.isPendingNotificationType(input.type);
     const shouldClearPreviousPending =
       !isPending && Boolean(input.referenceType) && Boolean(input.referenceId);
     const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);

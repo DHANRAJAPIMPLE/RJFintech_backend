@@ -5,6 +5,7 @@ import { AppError } from '../../../shared/middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
+import { buildJsonPatch } from '../../utils/json-patch.util';
 import {
   appendCursorWhere,
   buildPage,
@@ -256,6 +257,7 @@ export class WorkflowDbController {
       createdBy: initiatorId,
       recipientUserIds: recipients,
       includeCreatedBy: true,
+      isPending: false,
     }).catch(() => undefined);
   }
 
@@ -1220,7 +1222,7 @@ export class WorkflowDbController {
       throw new AppError('Workflow update does not change any values', 400);
     }
 
-    const oldData = JSON.parse(JSON.stringify(currentData)) as typeof currentData;
+    const changeData = buildJsonPatch(currentData, newData);
 
     const duplicateActive = await prisma.workflow.findUnique({
       where: {
@@ -1287,7 +1289,7 @@ export class WorkflowDbController {
                 : 'WORKFLOW_UPDATE',
           initiatorId,
           data: requestData as any,
-          oldData: oldData as any,
+          oldData: changeData?.oldData as any,
           alias: newData.alias,
           approvalRemark: remarks || null,
           eligibleApprovers: [],
@@ -2444,6 +2446,7 @@ export class WorkflowDbController {
           createdBy: initiatorId,
           recipientUserIds: recipients,
           includeCreatedBy: true,
+          isPending: false,
         });
       }
 
@@ -2986,6 +2989,10 @@ export class WorkflowDbController {
           changeCount,
           oldData,
           newData,
+          changes: {
+            oldData,
+            newData,
+          },
           user: HistoryUserUtil.formatAuditUser(
             history.user,
             history.eventUserId,
