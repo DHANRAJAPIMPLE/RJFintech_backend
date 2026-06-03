@@ -2808,7 +2808,7 @@ export class UserDbController {
       (type === 'INACTIVE' || type === 'ARCHIVE') &&
       current.mapping.status !== 'ACTIVE'
     ) {
-      throw new AppError('Only active users can be disabled or archived', 400);
+      throw new AppError('Only active users can be disabled or deleted', 400);
     }
 
     const pending = await prisma.userOnboarding.findFirst({

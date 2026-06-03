@@ -1635,7 +1635,7 @@ export class WorkflowDbController {
 
     if (target.status === 'ARCHIVE' && !isArchive) {
       throw new AppError(
-        `Workflow "${target.name}" is archived and cannot be modified`,
+        `Workflow "${target.name}" is deleted and cannot be modified`,
         409,
       );
     }

@@ -370,8 +370,8 @@ export class NotificationService {
         };
       case 'USER:ARCHIVE':
         return {
-          name: 'User archived',
-          message: `${actorName} archived ${userName}`,
+          name: 'User deleted',
+          message: `${actorName} deleted ${userName}`,
         };
       case 'ORG:INITIATE':
         return {
@@ -397,6 +397,21 @@ export class NotificationService {
         return {
           name: 'Organization modification',
           message: `${actorName} updated organization structure for ${orgName}`,
+        };
+      case 'ORG:INACTIVE':
+        return {
+          name: 'Organization Removed',
+          message: `${actorName} inactivated organization ${orgName}`,
+        };
+      case 'ORG:ARCHIVE':
+        return {
+          name: 'Organization deleted',
+          message: `${actorName} deleted organization ${orgName}`,
+        };
+      case 'ORG:ACTIVE':
+        return {
+          name: 'Organization activated',
+          message: `${actorName} activated organization ${orgName}`,
         };
       case 'WORKFLOW:INITIATE':
         return {
@@ -435,8 +450,8 @@ export class NotificationService {
         };
       case 'WORKFLOW:ARCHIVE':
         return {
-          name: 'Workflow archived',
-          message: `${actorName} archived workflow ${workflowName}`,
+          name: 'Workflow deleted',
+          message: `${actorName} deleted workflow ${workflowName}`,
         };
       case 'COMPANY:INITIATE':
         return {

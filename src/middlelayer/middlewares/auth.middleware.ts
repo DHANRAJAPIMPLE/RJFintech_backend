@@ -108,7 +108,7 @@ export const authMiddleware = async (
     if (!currentMapping || currentMapping.status !== 'ACTIVE') {
       clearAuthCookies(res);
       throw new AppError(
-        mapAuthError('Unauthorized - User is inactive or archived'),
+        mapAuthError('Unauthorized - User is inactive or deleted'),
         401,
       );
     }
