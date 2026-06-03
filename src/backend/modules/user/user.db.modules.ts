@@ -316,9 +316,9 @@ export class UserDbController {
   private static permissionReplacementKey(permission: UserPermissionSnapshot) {
     if (permission.accessType === 'PRIMARY') return 'PRIMARY';
 
-    return [permission.accessType, permission.nodePath, permission.roleName].join(
-      '|',
-    );
+    // Secondary permissions are treated as node-scoped overwrites so a new
+    // permission on the same node replaces the existing secondary entry.
+    return [permission.accessType, permission.nodePath].join('|');
   }
 
   private static mergePermissionMutations(
@@ -338,14 +338,11 @@ export class UserDbController {
       const exactIndex = proposed.findIndex((stored) =>
         UserDbController.permissionsEqual(stored, permission),
       );
-      const replacementIndex =
-        permission.accessType === 'PRIMARY'
-          ? proposed.findIndex(
-              (stored) =>
-                UserDbController.permissionReplacementKey(stored) ===
-                UserDbController.permissionReplacementKey(permission),
-            )
-          : -1;
+      const replacementIndex = proposed.findIndex(
+        (stored) =>
+          UserDbController.permissionReplacementKey(stored) ===
+          UserDbController.permissionReplacementKey(permission),
+      );
 
       if (operation === 'REMOVE') {
         if (permission.accessType === 'PRIMARY') {

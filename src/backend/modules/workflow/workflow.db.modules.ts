@@ -2506,7 +2506,8 @@ export class WorkflowDbController {
         }
       }
 
-      // If specific identifiers are provided, filter the history strictly
+      // If specific identifiers are provided, resolve the exact request chain
+      // first, then expand to the workflow family that request belongs to.
       if (levelsHash || module || subModule || nodePath) {
         let nodeId: string | undefined;
         if (nodePath) {
@@ -2516,21 +2517,123 @@ export class WorkflowDbController {
           nodeId = node?.id;
         }
 
-        const reqs = await prisma.workflowReq.findMany({
-          where: {
+        const nodeAccessFilter = isGlobal
+          ? {}
+          : { nodeId: { in: userNodeIds } };
+        const targetJsonFilters = [
+          module
+            ? { data: { path: ['target', 'module'], equals: module } }
+            : null,
+          subModule
+            ? { data: { path: ['target', 'subModule'], equals: subModule } }
+            : null,
+          nodePath
+            ? { data: { path: ['target', 'nodePath'], equals: nodePath } }
+            : null,
+          levelsHash
+            ? { data: { path: ['target', 'levelsHash'], equals: levelsHash } }
+            : null,
+        ].filter(Boolean);
+        const requestWhereOptions = [
+          {
             companyId: resolvedCompanyId,
             levelsHash: levelsHash || undefined,
             module: module || undefined,
             subModule: subModule || undefined,
             nodeId: nodeId || undefined,
-            // Restrict by user's nodes if not global
-            ...(isGlobal ? {} : { nodeId: { in: userNodeIds } }),
+            ...nodeAccessFilter,
           },
-          select: { id: true },
+          ...(targetJsonFilters.length > 0
+            ? [
+                {
+                  companyId: resolvedCompanyId,
+                  AND: targetJsonFilters,
+                  ...nodeAccessFilter,
+                },
+              ]
+            : []),
+        ];
+
+        const matchingReqs = await prisma.workflowReq.findMany({
+          where: { OR: requestWhereOptions as any },
+          select: { id: true, workflowId: true, data: true },
         });
 
+        const workflowIdentityFilters: any[] = [];
+        const addWorkflowIdentityFilter = (identity: any) => {
+          const filter: any = { companyId: resolvedCompanyId };
+          if (identity?.module) filter.module = identity.module;
+          if (identity?.subModule) filter.subModule = identity.subModule;
+          if (identity?.levelsHash) filter.levelsHash = identity.levelsHash;
+          if (identity?.nodePath) {
+            filter.orgStructure = { nodePath: identity.nodePath };
+          } else if (identity?.nodeId) {
+            filter.nodeId = identity.nodeId;
+          }
+          if (!isGlobal) filter.nodeId = { in: userNodeIds };
+
+          if (
+            filter.module ||
+            filter.subModule ||
+            filter.levelsHash ||
+            filter.orgStructure ||
+            filter.nodeId
+          ) {
+            workflowIdentityFilters.push(filter);
+          }
+        };
+
+        addWorkflowIdentityFilter({
+          module,
+          subModule,
+          nodePath,
+          nodeId,
+          levelsHash,
+        });
+        matchingReqs.forEach((request) => {
+          addWorkflowIdentityFilter((request.data as any)?.target);
+        });
+
+        const workflowLookupFilters = [
+          ...(matchingReqs.length > 0
+            ? [
+                {
+                  workflowReqIds: {
+                    hasSome: matchingReqs.map((request) => request.id),
+                  },
+                },
+              ]
+            : []),
+          ...workflowIdentityFilters,
+        ];
+
+        const matchingWorkflows = workflowLookupFilters.length > 0
+          ? await prisma.workflow.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                OR: workflowLookupFilters as any,
+              },
+              select: { id: true, workflowReqIds: true },
+            })
+          : [];
+
+        const workflowReqIdsFromWorkflows = Array.from(
+          new Set(
+            matchingWorkflows.flatMap((workflow) =>
+              Array.isArray(workflow.workflowReqIds)
+                ? workflow.workflowReqIds
+                : [],
+            ),
+          ),
+        );
+
+        const reqIdSet = new Set([
+          ...matchingReqs.map((request) => request.id),
+          ...workflowReqIdsFromWorkflows,
+        ]);
+
         whereCondition = {
-          workflowReqId: { in: reqs.map((r) => r.id) },
+          workflowReqId: { in: Array.from(reqIdSet) },
         };
       } else {
         // Default: Fetch all history for the company, but restricted by nodes if not global
@@ -2690,7 +2793,7 @@ export class WorkflowDbController {
                 );
 
               resultList.push({
-                id: h.id,
+                id: `pending-${h.workflowReqId}-${currentPending.level}`,
                 workflowReqId: h.workflowReqId,
                 workflowId: h.workflowReq?.workflowId || null,
                 type: h.workflowReq?.type || null,
