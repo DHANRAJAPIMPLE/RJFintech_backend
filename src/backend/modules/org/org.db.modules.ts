@@ -51,6 +51,7 @@ export class OrgStructureDbController {
       referenceName,
       createdBy: initiatorId,
       recipientUserIds: recipients,
+      includeCreatedBy: true,
     });
   }
 
@@ -1009,6 +1010,7 @@ export class OrgStructureDbController {
           notificationRecipients,
           corpAdminUserIds,
         ),
+        includeCreatedBy: true,
       });
       res.status(201).json(request);
     } catch (error) {
@@ -1684,6 +1686,7 @@ export class OrgStructureDbController {
           notificationRecipients,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
+        includeCreatedBy: true,
       });
       res.status(201).json(request);
     } catch (error) {

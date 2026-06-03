@@ -31,6 +31,7 @@ type CreateNotificationInput = {
   referenceName?: string | null;
   createdBy: string;
   recipientUserIds?: string[];
+  includeCreatedBy?: boolean;
 };
 
 const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
@@ -648,8 +649,11 @@ export class NotificationService {
       !isPending && Boolean(input.referenceType) && Boolean(input.referenceId);
     const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);
     const requestedRecipients = NotificationService.unique(
-      input.recipientUserIds || [],
-    ).filter((userId) => userId !== input.createdBy);
+      [
+        ...(input.recipientUserIds || []),
+        input.includeCreatedBy === true ? input.createdBy : null,
+      ],
+    );
     const companyRecipientUserIds =
       await NotificationService.filterActiveCompanyUserIds(
         input.companyId,
@@ -658,7 +662,9 @@ export class NotificationService {
     const recipientUserIds = NotificationService.unique([
       ...companyRecipientUserIds,
       ...saasAdmins,
-    ]).filter((userId) => userId !== input.createdBy);
+    ]).filter(
+      (userId) => input.includeCreatedBy === true || userId !== input.createdBy,
+    );
 
     if (recipientUserIds.length === 0) return null;
 

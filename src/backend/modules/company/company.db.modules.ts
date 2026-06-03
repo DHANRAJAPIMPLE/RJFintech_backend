@@ -391,6 +391,7 @@ export class CompanyDbController {
         referenceName: (onboardingData.data as any)?.company?.name,
         createdBy: initiatorId,
         recipientUserIds: notificationRecipients,
+        includeCreatedBy: true,
       });
     }
 

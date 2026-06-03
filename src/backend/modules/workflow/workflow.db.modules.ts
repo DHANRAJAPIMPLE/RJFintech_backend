@@ -255,6 +255,7 @@ export class WorkflowDbController {
       referenceName,
       createdBy: initiatorId,
       recipientUserIds: recipients,
+      includeCreatedBy: true,
     }).catch(() => undefined);
   }
 
@@ -1343,6 +1344,7 @@ export class WorkflowDbController {
         notificationRecipients,
         await NotificationService.getCorpAdminUserIds(companyId),
       ),
+      includeCreatedBy: true,
     });
 
     return request;
@@ -1749,6 +1751,7 @@ export class WorkflowDbController {
             referenceName: data?.name || 'workflow modification',
             createdBy: initiatorId,
             recipientUserIds: recipients,
+            includeCreatedBy: true,
           }).catch(() => undefined);
           throw error;
         }
@@ -1911,6 +1914,7 @@ export class WorkflowDbController {
           notificationRecipients,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
+        includeCreatedBy: true,
       });
 
       res.status(201).json(result);
@@ -2439,6 +2443,7 @@ export class WorkflowDbController {
             'workflow',
           createdBy: initiatorId,
           recipientUserIds: recipients,
+          includeCreatedBy: true,
         });
       }
 
@@ -3344,26 +3349,32 @@ export class WorkflowDbController {
                 : archiveBaseWhere,
           select: activeSelect,
         });
-        const pendingWorkflowIds =
-          visiblePendingRequestIds.length > 0
-            ? new Set(
-                (
-                  await prisma.workflowReq.findMany({
-                    where: {
-                      companyId: resolvedCompanyId,
-                      status: 'PENDING',
-                      id: { in: visiblePendingRequestIds },
-                      workflowId: {
-                        in: visibleWorkflowRows.map((row) => row.id),
-                      },
-                    },
-                    select: { workflowId: true },
-                  })
-                )
-                  .map((request) => request.workflowId)
-                  .filter((workflowId): workflowId is string => !!workflowId),
-              )
-            : new Set<string>();
+        const pendingWorkflowRequests =
+          visibleWorkflowRows.length > 0
+            ? await prisma.workflowReq.findMany({
+                where: {
+                  companyId: resolvedCompanyId,
+                  status: 'PENDING',
+                  workflowId: {
+                    in: visibleWorkflowRows.map((row) => row.id),
+                  },
+                },
+                select: { id: true, workflowId: true },
+              })
+            : [];
+        const effectivePendingWorkflowRequestIds =
+          await WorkflowDbController.filterEffectivelyPendingRequestIds(
+            'workflow_req',
+            pendingWorkflowRequests.map((request) => request.id),
+          );
+        const pendingWorkflowIds = new Set(
+          pendingWorkflowRequests
+            .filter((request) =>
+              effectivePendingWorkflowRequestIds.has(request.id),
+            )
+            .map((request) => request.workflowId)
+            .filter((workflowId): workflowId is string => !!workflowId),
+        );
         const activeRowsWithPending = WorkflowDbController.buildWorkflowTree(
           activeRows,
           visibleWorkflowRows,

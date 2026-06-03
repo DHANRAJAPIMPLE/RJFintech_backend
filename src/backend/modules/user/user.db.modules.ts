@@ -121,6 +121,7 @@ export class UserDbController {
       referenceName,
       createdBy: initiatorId,
       recipientUserIds: recipients,
+      includeCreatedBy: true,
     });
   }
   private static normalizeUserRequestType(value: unknown): UserRequestType {
@@ -2000,19 +2001,12 @@ export class UserDbController {
       const activeEmails = selectedPage.pageRows
         .map((user: any) => user.email)
         .filter(Boolean);
-      const activeApproverRequestIds =
-        await UserDbController.getCurrentApproverRequestIds(
-          'user_onboarding',
-          userId,
-          resolvedCompanyId,
-        );
-      const activePendingRequests =
-        activeEmails.length > 0 && activeApproverRequestIds.length > 0
+      const activePendingCandidates =
+        activeEmails.length > 0
           ? await prisma.userOnboarding.findMany({
               where: {
                 companyId: resolvedCompanyId,
                 status: 'PENDING',
-                id: { in: activeApproverRequestIds },
                 OR: activeEmails.flatMap((email: string) => [
                   {
                     data: {
@@ -2031,6 +2025,14 @@ export class UserDbController {
               orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             })
           : [];
+      const activeEffectivePendingIds =
+        await UserDbController.filterEffectivelyPendingRequestIds(
+          'user_onboarding',
+          activePendingCandidates.map((request: any) => request.id),
+        );
+      const activePendingRequests = activePendingCandidates.filter(
+        (request: any) => activeEffectivePendingIds.has(request.id),
+      );
       const activePendingByEmail = new Map<string, any>();
       activePendingRequests.forEach((request: any) => {
         const requestData = request.data as any;
@@ -2832,6 +2834,7 @@ export class UserDbController {
         notificationRecipients,
         corpAdminUserIds,
       ),
+      includeCreatedBy: true,
     });
 
     res.status(201).json(onboarding);
@@ -3295,6 +3298,7 @@ export class UserDbController {
         notificationRecipients,
         await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
       ),
+      includeCreatedBy: true,
     });
       res.status(201).json(onboarding);
     } catch (error) {
@@ -4400,6 +4404,7 @@ export class UserDbController {
             'user',
           createdBy: requestInitiatorId || initiatorId,
           recipientUserIds: recipients,
+          includeCreatedBy: true,
         });
       }
       next(error);
