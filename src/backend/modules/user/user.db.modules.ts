@@ -233,6 +233,15 @@ export class UserDbController {
     ].join('|');
   }
 
+  private static isPermissionRemoval(permission: any) {
+    const operation =
+      typeof permission?.operation === 'string'
+        ? permission.operation.trim().toUpperCase()
+        : '';
+
+    return permission?.remove === true || operation === 'REMOVE';
+  }
+
   private static getHistoryOldPermissions(
     oldData: any,
   ): UserPermissionSnapshot[] {
@@ -297,7 +306,7 @@ export class UserDbController {
           ? mutation.operation.trim().toUpperCase()
           : '';
 
-      if (mutation?.remove === true || operation === 'REMOVE') {
+      if (UserDbController.isPermissionRemoval(mutation)) {
         counts.remove += 1;
         continue;
       }
@@ -1889,6 +1898,8 @@ export class UserDbController {
       const approve = historyMap.get(`${historyEmail}_APPROVED`);
       const managerInfo = managerMap.get(managerEmail);
       const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
+      const type = onb.type || 'INITIATE';
+      const isInitiate = type === 'INITIATE';
 
       const primary: any[] = [];
       const secondary: any[] = [];
@@ -1896,20 +1907,41 @@ export class UserDbController {
       const incomingPermissions = Array.isArray(dataBlob?.permissions)
         ? dataBlob.permissions
         : [];
+      const existingPermissions = (existingUser?.userAccesses || []).map(
+        (access: any) => ({
+          roleCategory: access.role?.category || '',
+          roleSubCategory: access.role?.subCategory || '',
+          roleName: access.role?.roleName || access.roleCode,
+          nodeName: access.orgStructure?.nodeName || '',
+          nodePath: access.orgStructure?.nodePath || '',
+          nodeType: access.orgStructure?.nodeType || null,
+          accessCategory: access.accessCategory || null,
+          accessType: access.accessType || 'SECONDARY',
+          isGlobalAccess: access.isGlobalAccess || false,
+        }),
+      );
       const effectivePermissions =
         incomingPermissions.length > 0
-          ? incomingPermissions
-          : (existingUser?.userAccesses || []).map((access: any) => ({
-              roleCategory: access.role?.category || '',
-              roleSubCategory: access.role?.subCategory || '',
-              roleName: access.role?.roleName || access.roleCode,
-              nodeName: access.orgStructure?.nodeName || '',
-              nodePath: access.orgStructure?.nodePath || '',
-              nodeType: access.orgStructure?.nodeType || null,
-              accessCategory: access.accessCategory || null,
-              accessType: access.accessType || 'SECONDARY',
-              isGlobalAccess: access.isGlobalAccess || false,
-            }));
+          ? isInitiate || existingPermissions.length === 0
+            ? incomingPermissions.filter(
+                (permission: any) =>
+                  !UserDbController.isPermissionRemoval(permission),
+              )
+            : UserDbController.mergePermissionMutations(
+                existingPermissions,
+                incomingPermissions,
+              )
+          : existingPermissions;
+      const responseNewData =
+        isInitiate || !dataBlob
+          ? null
+          : {
+              ...dataBlob,
+              permissions: incomingPermissions.filter(
+                (permission: any) =>
+                  !UserDbController.isPermissionRemoval(permission),
+              ),
+            };
 
       effectivePermissions.forEach((p: any) => {
         const access = {
@@ -1932,14 +1964,12 @@ export class UserDbController {
         }
       });
 
-      const type = onb.type || 'INITIATE';
-      const isInitiate = type === 'INITIATE';
       return {
         id: onb.id,
         type,
         impact: onb.impact || null,
         oldData: isInitiate ? null : (onb.oldData || dataBlob?.oldData || null),
-        newData: isInitiate ? null : (dataBlob || null),
+        newData: responseNewData,
         approver: approve?.user || null,
         basicDetails: {
           name: basic.name ?? existingUser?.name ?? null,
@@ -2488,14 +2518,19 @@ export class UserDbController {
           pendingManagerEmails.add(managerEmail.toLowerCase());
         }
 
-        permissions.forEach((permission: any) => {
-          const nodePath = UserDbController.normalizeFilterText(
-            permission?.nodePath,
-          );
-          if (nodePath) {
-            pendingNodePaths.add(nodePath);
-          }
-        });
+        permissions
+          .filter(
+            (permission: any) =>
+              !UserDbController.isPermissionRemoval(permission),
+          )
+          .forEach((permission: any) => {
+            const nodePath = UserDbController.normalizeFilterText(
+              permission?.nodePath,
+            );
+            if (nodePath) {
+              pendingNodePaths.add(nodePath);
+            }
+          });
       });
 
       const [pendingManagers, pendingNodes] = await Promise.all([
@@ -2618,46 +2653,51 @@ export class UserDbController {
           );
         }
 
-        permissions.forEach((permission: any) => {
-          UserDbController.addTextFilterOption(
-            categoryOptions,
-            permission?.roleCategory,
-          );
-          UserDbController.addTextFilterOption(
-            subCategoryOptions,
-            permission?.roleSubCategory,
-          );
-
-          const pendingNodePath = UserDbController.normalizeFilterText(
-            permission?.nodePath,
-          );
-          const nodeFromDb = pendingNodePath
-            ? pendingNodeByPath.get(pendingNodePath.toLowerCase())
-            : null;
-          const node = {
-            nodeName: nodeFromDb?.nodeName || permission?.nodeName,
-            nodePath: nodeFromDb?.nodePath || permission?.nodePath,
-            nodeType: nodeFromDb?.nodeType || permission?.nodeType,
-          };
-          const isPrimary =
-            permission?.isGlobal === true ||
-            permission?.isGlobalAccess === true ||
-            permission?.accessType === 'PRIMARY';
-
-          if (isPrimary) {
-            const primaryNode = UserDbController.addNodeFilterOption(
-              primaryNodeOptions,
-              node,
+        permissions
+          .filter(
+            (permission: any) =>
+              !UserDbController.isPermissionRemoval(permission),
+          )
+          .forEach((permission: any) => {
+            UserDbController.addTextFilterOption(
+              categoryOptions,
+              permission?.roleCategory,
             );
-            addDepartment(primaryNode);
-          } else {
-            const secondaryNode = UserDbController.addNodeFilterOption(
-              secondaryNodeOptions,
-              node,
+            UserDbController.addTextFilterOption(
+              subCategoryOptions,
+              permission?.roleSubCategory,
             );
-            addDepartment(secondaryNode);
-          }
-        });
+
+            const pendingNodePath = UserDbController.normalizeFilterText(
+              permission?.nodePath,
+            );
+            const nodeFromDb = pendingNodePath
+              ? pendingNodeByPath.get(pendingNodePath.toLowerCase())
+              : null;
+            const node = {
+              nodeName: nodeFromDb?.nodeName || permission?.nodeName,
+              nodePath: nodeFromDb?.nodePath || permission?.nodePath,
+              nodeType: nodeFromDb?.nodeType || permission?.nodeType,
+            };
+            const isPrimary =
+              permission?.isGlobal === true ||
+              permission?.isGlobalAccess === true ||
+              permission?.accessType === 'PRIMARY';
+
+            if (isPrimary) {
+              const primaryNode = UserDbController.addNodeFilterOption(
+                primaryNodeOptions,
+                node,
+              );
+              addDepartment(primaryNode);
+            } else {
+              const secondaryNode = UserDbController.addNodeFilterOption(
+                secondaryNodeOptions,
+                node,
+              );
+              addDepartment(secondaryNode);
+            }
+          });
       });
 
       res.status(200).json({
