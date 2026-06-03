@@ -3135,7 +3135,6 @@ export class WorkflowDbController {
         newData = WorkflowDbController.extractWorkflowSnapshot(requestData);
       }
 
-      const changePatch = buildJsonPatch(oldData, newData);
       const changeCount = WorkflowDbController.getWorkflowHistoryChangeCount(
         requestData,
         oldData,
@@ -3165,10 +3164,6 @@ export class WorkflowDbController {
           changeCount,
           oldData,
           newData,
-          changes: {
-            oldData: changePatch?.oldData ?? oldData,
-            newData: changePatch?.newData ?? newData,
-          },
           user: HistoryUserUtil.formatAuditUser(
             history.user,
             history.eventUserId,

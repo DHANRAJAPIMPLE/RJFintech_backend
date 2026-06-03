@@ -4,7 +4,7 @@ import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
-import { buildJsonPatch, cloneJson, mergeJsonData } from '../../utils/json-patch.util';
+import { cloneJson, mergeJsonData } from '../../utils/json-patch.util';
 
 type OrgNodeStatus = 'ACTIVE' | 'INACTIVE';
 
@@ -2288,8 +2288,6 @@ export class OrgStructureDbController {
         newData = OrgStructureDbController.extractOrgSnapshot(requestData);
       }
 
-      const changePatch = buildJsonPatch(oldData, newData);
-
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
         viewerUserId,
         history.eventUserId,
@@ -2311,10 +2309,6 @@ export class OrgStructureDbController {
           remarks: history.remarks,
           oldData,
           newData,
-          changes: {
-            oldData: changePatch?.oldData ?? oldData,
-            newData: changePatch?.newData ?? newData,
-          },
           user: HistoryUserUtil.formatAuditUser(
             history.user,
             history.eventUserId,

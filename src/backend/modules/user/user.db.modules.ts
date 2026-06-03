@@ -524,6 +524,14 @@ export class UserDbController {
     };
   }
 
+  private static getUserReplayBaseSnapshot(request: any): UserDataSnapshot | null {
+    if (request?.type === 'INITIATE') {
+      return UserDbController.extractUserSnapshot(request?.data);
+    }
+
+    return UserDbController.extractUserSnapshot(request?.oldData);
+  }
+
   private static applyUserRequestSnapshot(
     current: UserDataSnapshot,
     request: any,
@@ -573,6 +581,83 @@ export class UserDbController {
     }
 
     return next;
+  }
+
+  private static buildUserSnapshotAroundRequest(
+    requests: any[],
+    selectedRequestId?: string | null,
+  ) {
+    if (!selectedRequestId) {
+      return { oldData: null, newData: null };
+    }
+
+    const sortedRequests = [...requests].sort((left, right) => {
+      const leftTime = left.createdAt.getTime();
+      const rightTime = right.createdAt.getTime();
+      if (leftTime !== rightTime) return leftTime - rightTime;
+      return left.id.localeCompare(right.id);
+    });
+
+    const selectedRequest = sortedRequests.find(
+      (request) => request.id === selectedRequestId,
+    );
+    if (!selectedRequest) {
+      return { oldData: null, newData: null };
+    }
+
+    const selectedTargetEmail =
+      UserDbController.extractUserTargetEmail(selectedRequest.data) || null;
+
+    for (const startRequest of sortedRequests) {
+      if (startRequest.createdAt > selectedRequest.createdAt) continue;
+      const startSnapshot =
+        startRequest.type === 'INITIATE'
+          ? UserDbController.extractUserSnapshot(startRequest.data)
+          : UserDbController.getUserReplayBaseSnapshot(startRequest);
+      if (!startSnapshot) continue;
+
+      let currentSnapshot: UserDataSnapshot | null = null;
+
+      for (const request of sortedRequests) {
+        if (request.createdAt < startRequest.createdAt) continue;
+        if (request.createdAt > selectedRequest.createdAt) break;
+        if (request.status === 'REJECTED' && request.id !== selectedRequestId) {
+          continue;
+        }
+
+        const requestTargetEmail =
+          UserDbController.extractUserTargetEmail(request.data) || null;
+        const currentEmail =
+          currentSnapshot?.basicDetails.email.toLowerCase() ||
+          startSnapshot.basicDetails.email.toLowerCase();
+        const startsChain = request.id === startRequest.id;
+        const matchesCurrentUser =
+          startsChain ||
+          !requestTargetEmail ||
+          requestTargetEmail === currentEmail ||
+          requestTargetEmail === selectedTargetEmail;
+
+        if (!matchesCurrentUser) continue;
+
+        const baseSnapshot: UserDataSnapshot = currentSnapshot || startSnapshot;
+        const nextSnapshot: UserDataSnapshot | null =
+          request.type === 'INITIATE'
+            ? UserDbController.extractUserSnapshot(request.data)
+            : UserDbController.applyUserRequestSnapshot(baseSnapshot, request);
+        if (!nextSnapshot) continue;
+
+        if (request.id === selectedRequestId) {
+          return {
+            oldData: currentSnapshot ? cloneJson(currentSnapshot) : null,
+            newData: nextSnapshot,
+          };
+        }
+
+        currentSnapshot = nextSnapshot;
+      }
+    }
+
+    return { oldData: null, newData: null };
   }
 
   private static rolePermissionRank(value: unknown) {
@@ -4465,55 +4550,23 @@ export class UserDbController {
         select: {
           id: true,
           data: true,
+          oldData: true,
           type: true,
           status: true,
           createdAt: true,
         },
       });
-      const targetEmail = history.email.trim().toLowerCase();
-      const historyRequests = allRequests
-        .filter((request) => {
-          const requestTargetEmail = UserDbController.extractUserTargetEmail(
-            request.data,
-          );
-          return (
-            requestTargetEmail === targetEmail &&
-            (request.status !== 'REJECTED' || request.id === onboarding?.id)
-          );
-        })
-        .sort((left, right) => {
-          const leftTime = left.createdAt.getTime();
-          const rightTime = right.createdAt.getTime();
-          if (leftTime !== rightTime) return leftTime - rightTime;
-          return left.id.localeCompare(right.id);
-        });
-
-      let currentSnapshot: UserDataSnapshot | null = null;
-      let oldData: UserDataSnapshot | null = null;
-      let newData: UserDataSnapshot | null = null;
-
-      for (const request of historyRequests) {
-        const nextSnapshot: UserDataSnapshot | null =
-          request.type === 'INITIATE' || !currentSnapshot
-            ? UserDbController.extractUserSnapshot(request.data)
-            : UserDbController.applyUserRequestSnapshot(currentSnapshot, request);
-
-        if (!nextSnapshot) continue;
-
-        if (request.id === onboarding?.id) {
-          oldData = currentSnapshot ? cloneJson(currentSnapshot) : null;
-          newData = nextSnapshot;
-          break;
-        }
-
-        currentSnapshot = nextSnapshot;
-      }
+      const replay = UserDbController.buildUserSnapshotAroundRequest(
+        allRequests,
+        onboarding?.id,
+      );
+      let oldData = replay.oldData;
+      let newData = replay.newData;
 
       const fallbackSnapshot = UserDbController.extractUserSnapshot(requestData);
       if (!newData) {
         newData = fallbackSnapshot;
       }
-      const changePatch = buildJsonPatch(oldData, newData);
       const changeCount = UserDbController.getUserHistoryChangeCount(
         requestData,
         oldData,
@@ -4547,10 +4600,6 @@ export class UserDbController {
           changeCount,
           oldData,
           newData,
-          changes: {
-            oldData: changePatch?.oldData ?? oldData,
-            newData: changePatch?.newData ?? newData,
-          },
           user: HistoryUserUtil.formatAuditUser(
             history.user,
             history.eventUserId,

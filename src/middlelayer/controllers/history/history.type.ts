@@ -27,7 +27,6 @@ export type HistoryDetailRequestSnapshot = {
 export type HistoryDetailResponseData = {
   oldData: unknown | null;
   newData: unknown | null;
-  changes?: unknown | null;
 };
 
 export type FetchHistoryDetailResponse = {

@@ -58,7 +58,6 @@ export class HistoryController {
       const responseData = {
         oldData: (detail.oldData as unknown | null) ?? null,
         newData: (detail.newData as unknown | null) ?? null,
-        changes: (detail.changes as unknown | null) ?? null,
       } as FetchHistoryDetailResponse['data'];
       const response: FetchHistoryDetailResponse = {
         message: data?.message || 'History item fetched successfully!',
