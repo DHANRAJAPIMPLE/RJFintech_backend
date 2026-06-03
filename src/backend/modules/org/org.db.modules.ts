@@ -35,30 +35,18 @@ export class OrgStructureDbController {
     message: string,
     referenceName: string,
   ) {
-    const notificationUsers = await prisma.userAccess.findMany({
-      where: {
-        companyId,
-        user: {
-          userMappings: {
-            some: { companyId, status: 'ACTIVE' },
-          },
-        },
-        OR: [
-          { isGlobalAccess: true },
-          { roleCode: { in: ['SAAS_ADMIN', 'CORP_ADMIN'] } },
-        ],
-      },
-      select: { userId: true },
-    });
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      companyId,
+    );
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
-      notificationUsers.map((row) => row.userId),
+      corpAdminUserIds,
     );
     await NotificationService.createRequestNotification({
       companyId,
       type: 'MODIFICATION',
-      name: 'Organization modification blocked',
-      message,
+      name: 'Organization modification failed',
+      message: `Organization modification failed: ${message}`,
       referenceType: 'ORG',
       referenceName,
       createdBy: initiatorId,
@@ -1002,6 +990,9 @@ export class OrgStructureDbController {
           'initiated',
           targetNodePath,
         );
+      const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+        companyId,
+      );
       await NotificationService.createRequestNotification({
         companyId,
         type: OrgStructureDbController.getOrgNotificationType(
@@ -1014,7 +1005,10 @@ export class OrgStructureDbController {
         referenceId: request.id,
         referenceName: targetNodePath,
         createdBy: initiatorId,
-        recipientUserIds: notificationRecipients,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+          corpAdminUserIds,
+        ),
       });
       res.status(201).json(request);
     } catch (error) {
@@ -1022,14 +1016,13 @@ export class OrgStructureDbController {
       const companyId = req.body?.companyId;
       const targetNodePath = req.body?.targetNodePath;
       if (
-        error instanceof AppError &&
         typeof initiatorId === 'string' &&
         typeof companyId === 'string'
       ) {
         await OrgStructureDbController.notifyConflict(
           companyId,
           initiatorId,
-          error.message,
+          error instanceof Error ? error.message : 'Unexpected error',
           String(targetNodePath || 'organization node'),
         );
       }
@@ -1454,14 +1447,17 @@ export class OrgStructureDbController {
             notificationRecipients,
             requestInitiatorId,
           );
-        const orgNotificationContent =
-          requestType === 'UPDATE' && result?.status
-            ? OrgStructureDbController.getOrgNotificationContent(
-                requestType,
-                result.status === 'REJECTED' ? 'rejected' : 'approved',
-                notificationSubject,
-              )
-            : null;
+      const orgNotificationContent =
+        requestType === 'UPDATE' && result?.status
+          ? OrgStructureDbController.getOrgNotificationContent(
+              requestType,
+              result.status === 'REJECTED' ? 'rejected' : 'approved',
+              notificationSubject,
+            )
+          : null;
+        const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+          notificationCompanyId,
+        );
 
         await NotificationService.createRequestNotification({
           companyId: notificationCompanyId,
@@ -1474,7 +1470,10 @@ export class OrgStructureDbController {
           referenceId: id,
           referenceName: notificationSubject,
           createdBy: approverId,
-          recipientUserIds: notificationRecipientUserIds,
+          recipientUserIds: NotificationService.mergeRecipientUserIds(
+            notificationRecipientUserIds,
+            corpAdminUserIds,
+          ),
         });
       }
 
@@ -1524,14 +1523,13 @@ export class OrgStructureDbController {
         resolvedCompanyId = company?.id;
       }
       if (
-        error instanceof AppError &&
         typeof initiatorId === 'string' &&
         typeof resolvedCompanyId === 'string'
       ) {
         await OrgStructureDbController.notifyConflict(
           resolvedCompanyId,
           initiatorId,
-          error.message,
+          error instanceof Error ? error.message : 'Unexpected error',
           String(
             req.body?.targetNodePath ||
               req.body?.data?.newNodeName ||
@@ -1682,7 +1680,10 @@ export class OrgStructureDbController {
         referenceId: request.id,
         referenceName: rest.data?.newNodeName,
         createdBy: initiatorId,
-        recipientUserIds: notificationRecipients,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+          await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
+        ),
       });
       res.status(201).json(request);
     } catch (error) {

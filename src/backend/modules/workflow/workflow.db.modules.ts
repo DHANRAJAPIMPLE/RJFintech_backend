@@ -238,30 +238,18 @@ export class WorkflowDbController {
     referenceName: string,
     referenceId?: string | null,
   ) {
-    const notificationUsers = await prisma.userAccess.findMany({
-      where: {
-        companyId,
-        user: {
-          userMappings: {
-            some: { companyId, status: 'ACTIVE' },
-          },
-        },
-        OR: [
-          { isGlobalAccess: true },
-          { roleCode: { in: ['SAAS_ADMIN', 'CORP_ADMIN'] } },
-        ],
-      },
-      select: { userId: true },
-    });
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      companyId,
+    );
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
-      notificationUsers.map((row) => row.userId),
+      corpAdminUserIds,
     );
     await NotificationService.createRequestNotification({
       companyId,
       type: 'MODIFICATION',
-      name: 'Workflow request blocked',
-      message,
+      name: 'Workflow request failed',
+      message: `Workflow request failed: ${message}`,
       referenceType: 'WORKFLOW',
       referenceId: referenceId || null,
       referenceName,
@@ -1368,7 +1356,10 @@ export class WorkflowDbController {
       referenceId: request.id,
       referenceName: newData.name,
       createdBy: initiatorId,
-      recipientUserIds: notificationRecipients,
+      recipientUserIds: NotificationService.mergeRecipientUserIds(
+        notificationRecipients,
+        await NotificationService.getCorpAdminUserIds(companyId),
+      ),
     });
 
     return request;
@@ -1933,7 +1924,10 @@ export class WorkflowDbController {
         referenceId: result.id,
         referenceName: workflowData?.name,
         createdBy: initiatorId,
-        recipientUserIds: notificationRecipients,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+          await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
+        ),
       });
 
       res.status(201).json(result);
@@ -1950,14 +1944,13 @@ export class WorkflowDbController {
         resolvedCompanyId = company?.id;
       }
       if (
-        error instanceof AppError &&
         typeof initiatorId === 'string' &&
         typeof resolvedCompanyId === 'string'
       ) {
         await WorkflowDbController.notifyConflict(
           resolvedCompanyId,
           initiatorId,
-          error.message,
+          error instanceof Error ? error.message : 'Unexpected error',
           String(refName),
           req.body?.target?.levelsHash || null,
         );
@@ -2363,6 +2356,9 @@ export class WorkflowDbController {
 
       const requestInitiatorId =
         await NotificationService.getRequestInitiatorId(id, 'workflow_req');
+      const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+        request.companyId,
+      );
       const notificationRecipientUserIds =
         NotificationService.mergeRecipientUserIds(
           notificationRecipients,
@@ -2398,7 +2394,10 @@ export class WorkflowDbController {
         referenceId: request.id,
         referenceName: workflowReferenceName,
         createdBy: approverId,
-        recipientUserIds: notificationRecipientUserIds,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipientUserIds,
+          corpAdminUserIds,
+        ),
       });
 
       if (
@@ -2419,6 +2418,47 @@ export class WorkflowDbController {
         data: result,
       });
     } catch (error) {
+      const requestId = req.body?.id;
+      const companyId = req.body?.companyId;
+      const initiatorId =
+        typeof requestId === 'string' && typeof companyId === 'string'
+          ? await NotificationService.getRequestInitiatorId(
+              requestId,
+              'workflow_req',
+            )
+          : null;
+
+      if (
+        initiatorId &&
+        typeof companyId === 'string' &&
+        typeof requestId === 'string'
+      ) {
+        const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+          companyId,
+        );
+        const recipients = NotificationService.mergeRecipientUserIds(
+          initiatorId,
+          corpAdminUserIds,
+        );
+        await NotificationService.createRequestNotification({
+          companyId,
+          type: 'MODIFICATION',
+          name: 'Workflow request failed',
+          message: `Workflow request failed: ${
+            error instanceof Error ? error.message : 'Unexpected error'
+          }`,
+          referenceType: 'WORKFLOW',
+          referenceId: requestId,
+          referenceName:
+            req.body?.data?.name ||
+            req.body?.alias ||
+            req.body?.target?.levelsHash ||
+            'workflow',
+          createdBy: initiatorId,
+          recipientUserIds: recipients,
+        });
+      }
+
       next(error);
     }
   }

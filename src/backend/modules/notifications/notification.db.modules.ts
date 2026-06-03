@@ -105,6 +105,15 @@ const normalizeCursorId = (value: unknown) => {
   return cursorId || null;
 };
 
+const formatDateTime = (value: Date | string | null | undefined): string => {
+  if (!value) return 'N/A';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return 'N/A';
+
+  const pad = (input: number) => String(input).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+};
+
 const getDisplayValue = (value: unknown, fallback: string) => {
   if (typeof value !== 'string') return fallback;
   const normalized = value.trim();
@@ -303,7 +312,7 @@ export class NotificationService {
       status: row.status,
       createdByname: row.notification.createdByUser?.name || null,
       createdByemail: row.notification.createdByUser?.email || null,
-      ['createat_timestamp']: row.notification.createdAt,
+      ['createat_timestamp']: formatDateTime(row.notification.createdAt),
     };
   }
 
@@ -518,6 +527,23 @@ export class NotificationService {
     });
 
     return Boolean(access);
+  }
+
+  static async getCorpAdminUserIds(companyId: string) {
+    const accesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        roleCode: 'CORP_ADMIN',
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+      },
+      select: { userId: true },
+    });
+
+    return NotificationService.unique(accesses.map((access) => access.userId));
   }
 
   private static getHistoryConfig(reqTable: string) {
@@ -819,9 +845,13 @@ export class NotificationService {
       ...baseWhere,
       ...(status === 'ALL' ? {} : { status }),
     };
+    const unreadWhere: any = {
+      ...baseWhere,
+      status: 'UNREAD',
+    };
 
-    const [count, allCount, cursorRow] = await Promise.all([
-      prisma.notificationUser.count({ where }),
+    const [unreadCount, allCount, cursorRow] = await Promise.all([
+      prisma.notificationUser.count({ where: unreadWhere }),
       prisma.notificationUser.count({ where: baseWhere }),
       cursorId
         ? prisma.notificationUser.findFirst({
@@ -834,7 +864,8 @@ export class NotificationService {
     if (cursorId && !cursorRow) {
       return {
         data: [],
-        count,
+        count: unreadCount,
+        unreadCount,
         allCount,
         limit: params.limit,
         offset: params.offset,
@@ -873,7 +904,8 @@ export class NotificationService {
       data: await Promise.all(
         pageRows.map((row) => NotificationService.formatNotification(row)),
       ),
-      count,
+      count: unreadCount,
+      unreadCount,
       allCount,
       limit: params.limit,
       offset: cursorId ? 0 : params.offset,

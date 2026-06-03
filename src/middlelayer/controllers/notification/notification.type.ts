@@ -52,6 +52,8 @@ export type NotificationFetchItem = {
 export type FetchNotificationsResponse = {
   data: NotificationFetchItem[];
   count: number;
+  unreadCount: number;
+  allCount: number;
   limit: number;
   offset: number;
   status: NotificationFetchStatus;

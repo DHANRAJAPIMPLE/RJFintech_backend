@@ -105,30 +105,18 @@ export class UserDbController {
     message: string,
     referenceName: string,
   ) {
-    const notificationUsers = await prisma.userAccess.findMany({
-      where: {
-        companyId,
-        user: {
-          userMappings: {
-            some: { companyId, status: 'ACTIVE' },
-          },
-        },
-        OR: [
-          { isGlobalAccess: true },
-          { roleCode: { in: ['SAAS_ADMIN', 'CORP_ADMIN'] } },
-        ],
-      },
-      select: { userId: true },
-    });
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      companyId,
+    );
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
-      notificationUsers.map((row) => row.userId),
+      corpAdminUserIds,
     );
     await NotificationService.createRequestNotification({
       companyId,
       type: 'MODIFICATION',
-      name: 'User modification blocked',
-      message,
+      name: 'User modification failed',
+      message: `User modification failed: ${message}`,
       referenceType: 'USER',
       referenceName,
       createdBy: initiatorId,
@@ -2851,6 +2839,9 @@ export class UserDbController {
       'initiated',
       userReferenceName,
     );
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      companyId,
+    );
     await NotificationService.createRequestNotification({
       companyId,
       type: UserDbController.getUserNotificationType(type, 'PENDING'),
@@ -2860,7 +2851,10 @@ export class UserDbController {
       referenceId: onboarding.id,
       referenceName: userReferenceName,
       createdBy: initiatorId,
-      recipientUserIds: notificationRecipients,
+      recipientUserIds: NotificationService.mergeRecipientUserIds(
+        notificationRecipients,
+        corpAdminUserIds,
+      ),
     });
 
     res.status(201).json(onboarding);
@@ -3126,14 +3120,13 @@ export class UserDbController {
           const companyId = req.body?.companyId;
           const targetEmail = req.body?.targetEmail || req.body?.targetUserEmail;
           if (
-            error instanceof AppError &&
             typeof initiatorId === 'string' &&
             typeof companyId === 'string'
           ) {
             await UserDbController.notifyConflict(
               companyId,
               initiatorId,
-              error.message,
+              error instanceof Error ? error.message : 'Unexpected error',
               String(targetEmail || 'user'),
             );
           }
@@ -3321,7 +3314,10 @@ export class UserDbController {
       referenceId: onboarding.id,
       referenceName: userReferenceName,
       createdBy: initiatorId,
-      recipientUserIds: notificationRecipients,
+      recipientUserIds: NotificationService.mergeRecipientUserIds(
+        notificationRecipients,
+        await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
+      ),
     });
       res.status(201).json(onboarding);
     } catch (error) {
@@ -3339,14 +3335,13 @@ export class UserDbController {
         req.body?.targetUserEmail ||
         req.body?.data?.basicDetails?.email;
       if (
-        error instanceof AppError &&
         typeof initiatorId === 'string' &&
         typeof resolvedCompanyId === 'string'
       ) {
         await UserDbController.notifyConflict(
           resolvedCompanyId,
           initiatorId,
-          error.message,
+          error instanceof Error ? error.message : 'Unexpected error',
           String(targetEmail || 'user'),
         );
       }
@@ -3903,6 +3898,9 @@ export class UserDbController {
           notificationRecipients,
           requestInitiatorId,
         );
+      const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+        onboarding.companyId,
+      );
       const notificationLookupEmail =
         result?.status === 'REJECTED' ? historyEmail : email || historyEmail;
       const notificationUser = notificationLookupEmail
@@ -3937,7 +3935,10 @@ export class UserDbController {
         referenceId: id,
         referenceName: notificationReferenceName,
         createdBy: approverId,
-        recipientUserIds: notificationRecipientUserIds,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipientUserIds,
+          corpAdminUserIds,
+        ),
       });
 
       res.status(200).json({
@@ -4377,6 +4378,53 @@ export class UserDbController {
         },
       });
     } catch (error) {
+      const initiatorId = req.body?.initiatorId;
+      let resolvedCompanyId = req.body?.companyId as string | undefined;
+      if (!resolvedCompanyId && typeof req.body?.companyCode === 'string') {
+        const company = await prisma.company.findUnique({
+          where: { companyCode: req.body.companyCode },
+          select: { id: true },
+        });
+        resolvedCompanyId = company?.id;
+      }
+
+      const requestId = req.body?.id;
+      if (
+        typeof initiatorId === 'string' &&
+        typeof resolvedCompanyId === 'string' &&
+        typeof requestId === 'string'
+      ) {
+        const requestInitiatorId =
+          await NotificationService.getRequestInitiatorId(
+            requestId,
+            'user_onboarding',
+          );
+        const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+          resolvedCompanyId,
+        );
+        const recipients = NotificationService.mergeRecipientUserIds(
+          requestInitiatorId || initiatorId,
+          corpAdminUserIds,
+        );
+
+        await NotificationService.createRequestNotification({
+          companyId: resolvedCompanyId,
+          type: 'MODIFICATION',
+          name: 'User request failed',
+          message: `User request failed: ${
+            error instanceof Error ? error.message : 'Unexpected error'
+          }`,
+          referenceType: 'USER',
+          referenceId: requestId,
+          referenceName:
+            req.body?.targetEmail ||
+            req.body?.targetUserEmail ||
+            req.body?.data?.basicDetails?.email ||
+            'user',
+          createdBy: requestInitiatorId || initiatorId,
+          recipientUserIds: recipients,
+        });
+      }
       next(error);
     }
   }
