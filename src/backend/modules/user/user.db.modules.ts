@@ -233,6 +233,26 @@ export class UserDbController {
     ].join('|');
   }
 
+  private static getHistoryOldPermissions(
+    oldData: any,
+  ): UserPermissionSnapshot[] {
+    const permissions = oldData?.permissions;
+    if (Array.isArray(permissions)) {
+      return permissions.map((permission) =>
+        UserDbController.normalizePermission(permission),
+      );
+    }
+
+    if (!permissions || typeof permissions !== 'object') {
+      return [];
+    }
+
+    return [
+      ...(Array.isArray(permissions.removed) ? permissions.removed : []),
+      ...(Array.isArray(permissions.updated) ? permissions.updated : []),
+    ].map((permission) => UserDbController.normalizePermission(permission));
+  }
+
   private static getUserHistoryChangeCount(
     requestData: any,
     oldData: any,
@@ -258,9 +278,7 @@ export class UserDbController {
       };
     }
 
-    const oldPermissions = Array.isArray(oldData?.permissions)
-      ? oldData.permissions
-      : [];
+    const oldPermissions = UserDbController.getHistoryOldPermissions(oldData);
     const oldPermissionKeys = new Set(
       oldPermissions.map((permission: any) =>
         UserDbController.permissionMutationKey(permission),
@@ -280,6 +298,20 @@ export class UserDbController {
           : '';
 
       if (mutation?.remove === true || operation === 'REMOVE') {
+        counts.remove += 1;
+        continue;
+      }
+
+      const normalizedMutation =
+        UserDbController.normalizePermission(mutation);
+      const replacedPrimary = oldPermissions.find(
+        (permission) => permission.accessType === 'PRIMARY',
+      );
+      if (
+        normalizedMutation.accessType === 'PRIMARY' &&
+        replacedPrimary &&
+        !UserDbController.permissionsEqual(replacedPrimary, normalizedMutation)
+      ) {
         counts.remove += 1;
         continue;
       }
@@ -322,9 +354,13 @@ export class UserDbController {
   private static permissionReplacementKey(permission: UserPermissionSnapshot) {
     if (permission.accessType === 'PRIMARY') return 'PRIMARY';
 
-    // Secondary permissions are treated as node-scoped overwrites so a new
-    // permission on the same node replaces the existing secondary entry.
-    return [permission.accessType, permission.nodePath].join('|');
+    // Secondary permissions are role-scoped because one node can grant several
+    // system-access roles to the same user.
+    return [
+      permission.accessType,
+      permission.roleName,
+      permission.nodePath,
+    ].join('|');
   }
 
   private static mergePermissionMutations(

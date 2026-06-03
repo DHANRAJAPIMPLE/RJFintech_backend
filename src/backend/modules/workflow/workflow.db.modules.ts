@@ -469,6 +469,25 @@ export class WorkflowDbController {
     return data?.target ?? data?.newData ?? data?.data ?? data ?? {};
   }
 
+  private static normalizeWorkflowSnapshotDataSource(data: any) {
+    return data?.newData ?? data?.data ?? data ?? {};
+  }
+
+  private static normalizeWorkflowLevelsPayload(levelsSource: any) {
+    if (Array.isArray(levelsSource)) {
+      return levelsSource.reduce((payload: Record<string, any>, level: any) => {
+        payload[`l${level.level}`] = {
+          approver1: level.approver1,
+          approver2: level.approver2 || null,
+          type: level.approverType || level.type || 'OR',
+        };
+        return payload;
+      }, {});
+    }
+
+    return levelsSource || {};
+  }
+
   private static extractWorkflowTarget(data: any) {
     const source = WorkflowDbController.normalizeWorkflowSnapshotSource(data);
     const target = source?.target || {};
@@ -490,26 +509,26 @@ export class WorkflowDbController {
     };
   }
 
-  private static extractWorkflowSnapshot(data: any) {
-    const source = WorkflowDbController.normalizeWorkflowSnapshotSource(data);
+  private static extractWorkflowSnapshot(data: any, fallback: any = {}) {
+    const source =
+      WorkflowDbController.normalizeWorkflowSnapshotDataSource(data);
     const target = source?.target || {};
-    const levelsSource = source?.levels || {};
-    const levels =
-      Array.isArray(levelsSource)
-        ? levelsSource.reduce((payload: Record<string, any>, level: any) => {
-            payload[`l${level.level}`] = {
-              approver1: level.approver1,
-              approver2: level.approver2 || null,
-              type: level.approverType || level.type || 'OR',
-            };
-            return payload;
-          }, {})
-        : levelsSource;
+    const levels = WorkflowDbController.normalizeWorkflowLevelsPayload(
+      source?.levels ?? fallback?.levels,
+    );
 
-    const module = source?.module || target?.module || null;
-    const subModule = source?.subModule || target?.subModule || null;
-    const nodePath = source?.nodePath || target?.nodePath || null;
-    const levelsHash = source?.levelsHash || target?.levelsHash || null;
+    const module = source?.module || fallback?.module || target?.module || null;
+    const subModule =
+      source?.subModule || fallback?.subModule || target?.subModule || null;
+    const nodePath =
+      source?.nodePath ||
+      fallback?.nodePath ||
+      source?.orgStructure?.nodePath ||
+      fallback?.orgStructure?.nodePath ||
+      target?.nodePath ||
+      null;
+    const levelsHash =
+      source?.levelsHash || fallback?.levelsHash || target?.levelsHash || null;
 
     if (!module || !subModule || !nodePath || !levelsHash) {
       return null;
@@ -517,45 +536,111 @@ export class WorkflowDbController {
 
     return {
       name: source?.name || '',
-      alias: source?.alias || '',
-      workflowType: source?.workflowType || 'NODE',
+      alias: source?.alias || fallback?.alias || '',
+      workflowType: source?.workflowType || fallback?.workflowType || 'NODE',
       module,
       subModule,
       nodePath,
       levels,
       levelsHash,
-      status: source?.status || 'ACTIVE',
+      status: source?.status || fallback?.status || 'ACTIVE',
     };
   }
 
   private static applyWorkflowRequestSnapshot(current: any, request: any) {
-    const source = WorkflowDbController.normalizeWorkflowSnapshotSource(
+    const source = WorkflowDbController.normalizeWorkflowSnapshotDataSource(
       request?.data,
     );
+    const fallback = {
+      alias: request?.alias,
+      module: request?.module,
+      subModule: request?.subModule,
+      levelsHash: request?.levelsHash,
+    };
     if (request.type === 'INITIATE' || !current) {
-      return WorkflowDbController.extractWorkflowSnapshot(source);
+      return WorkflowDbController.extractWorkflowSnapshot(source, fallback);
     }
 
     const next = cloneJson(current);
-    const merged = mergeJsonData(next, source);
+    const {
+      target: _target,
+      type: _type,
+      remarks: _remarks,
+      ...snapshotPatch
+    } = source || {};
+    const merged = mergeJsonData(next, snapshotPatch);
     if (source?.target?.nodePath || source?.nodePath) {
-      merged.nodePath = source?.target?.nodePath || source?.nodePath || merged.nodePath;
+      merged.nodePath = source?.nodePath || source?.target?.nodePath || merged.nodePath;
     }
-    if (source?.target?.module || source?.module) {
-      merged.module = source?.target?.module || source?.module || merged.module;
+    if (source?.target?.module || source?.module || request?.module) {
+      merged.module =
+        source?.module || request?.module || source?.target?.module || merged.module;
     }
-    if (source?.target?.subModule || source?.subModule) {
+    if (source?.target?.subModule || source?.subModule || request?.subModule) {
       merged.subModule =
-        source?.target?.subModule || source?.subModule || merged.subModule;
+        source?.subModule ||
+        request?.subModule ||
+        source?.target?.subModule ||
+        merged.subModule;
     }
-    if (source?.target?.levelsHash || source?.levelsHash) {
+    if (source?.target?.levelsHash || source?.levelsHash || request?.levelsHash) {
       merged.levelsHash =
-        source?.target?.levelsHash || source?.levelsHash || merged.levelsHash;
+        source?.levelsHash ||
+        request?.levelsHash ||
+        source?.target?.levelsHash ||
+        merged.levelsHash;
     }
-    if (source?.workflowType || source?.type) {
-      merged.workflowType = source.workflowType || source.type || merged.workflowType;
+    if (source?.alias || request?.alias) {
+      merged.alias = source?.alias || request?.alias || merged.alias;
+    }
+    if (source?.workflowType) {
+      merged.workflowType = source.workflowType || merged.workflowType;
     }
     return merged;
+  }
+
+  private static buildWorkflowOldSnapshotFromPatch(
+    requestData: any,
+    oldPatch: any,
+    fallback: any = {},
+  ) {
+    if (!oldPatch || typeof oldPatch !== 'object' || Array.isArray(oldPatch)) {
+      return null;
+    }
+
+    const nextSnapshot =
+      WorkflowDbController.extractWorkflowSnapshot(requestData, fallback);
+    if (!nextSnapshot) return null;
+
+    return WorkflowDbController.extractWorkflowSnapshot(
+      mergeJsonData(cloneJson(nextSnapshot), oldPatch),
+      fallback,
+    );
+  }
+
+  private static buildWorkflowRequestSnapshotFallback(
+    request: any,
+    relatedWorkflow?: any,
+  ) {
+    const requestData = (request?.data as any) || {};
+    return {
+      alias: request?.alias || relatedWorkflow?.alias || null,
+      module: request?.module || relatedWorkflow?.module || null,
+      subModule: request?.subModule || relatedWorkflow?.subModule || null,
+      levelsHash: request?.levelsHash || relatedWorkflow?.levelsHash || null,
+      nodePath:
+        requestData?.nodePath ||
+        requestData?.target?.nodePath ||
+        relatedWorkflow?.orgStructure?.nodePath ||
+        null,
+      levels:
+        requestData?.levels ||
+        (relatedWorkflow
+          ? WorkflowDbController.toLevelsPayload(relatedWorkflow.levels)
+          : undefined),
+      workflowType: relatedWorkflow?.type || undefined,
+      status: requestData?.status || relatedWorkflow?.status || undefined,
+    };
   }
 
   private static getWorkflowHistoryChangeCount(
@@ -3047,11 +3132,36 @@ export class WorkflowDbController {
         history.event === 'INITIATE' && requestType !== 'INITIATE'
           ? 'MODIFY'
           : history.event;
+      const relatedWorkflow = history.workflowReqId
+        ? await prisma.workflow.findFirst({
+            where: {
+              companyId: resolvedCompanyId,
+              workflowReqIds: { has: history.workflowReqId },
+            },
+            include: {
+              levels: { orderBy: { level: 'asc' } },
+              orgStructure: {
+                select: {
+                  nodePath: true,
+                  nodeName: true,
+                  nodeType: true,
+                },
+              },
+            },
+          })
+        : null;
+      const selectedRequestFallback =
+        WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+          history.workflowReq,
+          relatedWorkflow,
+        );
       const allRequests = await prisma.workflowReq.findMany({
         where: { companyId: resolvedCompanyId },
         select: {
           id: true,
           data: true,
+          oldData: true,
+          alias: true,
           type: true,
           status: true,
           createdAt: true,
@@ -3113,17 +3223,37 @@ export class WorkflowDbController {
 
       for (const request of historyRequests) {
         const nextSnapshot: Record<string, unknown> | null =
-          request.type === 'INITIATE' || !currentSnapshot
-            ? WorkflowDbController.extractWorkflowSnapshot(request.data)
-            : WorkflowDbController.applyWorkflowRequestSnapshot(
-                currentSnapshot,
-                request,
-              );
+          request.type === 'INITIATE'
+            ? WorkflowDbController.extractWorkflowSnapshot(
+                request.data,
+                WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+                  request,
+                ),
+              )
+            : currentSnapshot
+              ? WorkflowDbController.applyWorkflowRequestSnapshot(
+                  currentSnapshot,
+                  request,
+                )
+              : WorkflowDbController.extractWorkflowSnapshot(
+                  request.data,
+                  WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+                    request,
+                  ),
+                );
 
         if (!nextSnapshot) continue;
 
         if (request.id === history.workflowReqId) {
-          oldData = currentSnapshot ? cloneJson(currentSnapshot) : null;
+          oldData = currentSnapshot
+            ? cloneJson(currentSnapshot)
+            : WorkflowDbController.buildWorkflowOldSnapshotFromPatch(
+                request.data,
+                request.oldData,
+                WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+                  request,
+                ),
+              );
           newData = nextSnapshot;
           break;
         }
@@ -3132,7 +3262,17 @@ export class WorkflowDbController {
       }
 
       if (!newData) {
-        newData = WorkflowDbController.extractWorkflowSnapshot(requestData);
+        newData = WorkflowDbController.extractWorkflowSnapshot(
+          requestData,
+          selectedRequestFallback,
+        );
+      }
+      if (!oldData && requestType !== 'INITIATE') {
+        oldData = WorkflowDbController.buildWorkflowOldSnapshotFromPatch(
+          requestData,
+          history.workflowReq?.oldData,
+          selectedRequestFallback,
+        );
       }
 
       const changeCount = WorkflowDbController.getWorkflowHistoryChangeCount(
