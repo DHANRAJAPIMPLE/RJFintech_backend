@@ -765,7 +765,6 @@ export class NotificationService {
     const dateRange = normalizeDateRange(params.dateRange);
     const fromDate = normalizeDateValue(params.fromDate);
     const toDate = normalizeDateValue(params.toDate);
-    const appliedStatus = referenceType ? 'ALL' : status;
     const cursorId = normalizeCursorId(params.cursorId);
     const includeAllCompanies =
       await NotificationService.canReadAllCompanyNotifications(
@@ -818,7 +817,7 @@ export class NotificationService {
     };
     const where: any = {
       ...baseWhere,
-      ...(appliedStatus === 'ALL' ? {} : { status: appliedStatus }),
+      ...(status === 'ALL' ? {} : { status }),
     };
 
     const [count, allCount, cursorRow] = await Promise.all([
@@ -839,7 +838,7 @@ export class NotificationService {
         allCount,
         limit: params.limit,
         offset: params.offset,
-        status: appliedStatus,
+        status,
         cursorId,
         nextCursorId: null,
         hasNextPage: false,
@@ -878,7 +877,7 @@ export class NotificationService {
       allCount,
       limit: params.limit,
       offset: cursorId ? 0 : params.offset,
-      status: appliedStatus,
+      status,
       cursorId,
       nextCursorId,
       hasNextPage,
