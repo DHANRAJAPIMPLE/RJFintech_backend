@@ -4,6 +4,7 @@ import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
+import { buildJsonPatch, cloneJson, mergeJsonData } from '../../utils/json-patch.util';
 
 type OrgNodeStatus = 'ACTIVE' | 'INACTIVE';
 
@@ -93,6 +94,52 @@ export class OrgStructureDbController {
     if (normalizedStatus === 'APPROVED') return 'ONBOARDED' as const;
 
     return 'INITIATE' as const;
+  }
+
+  private static normalizeOrgSnapshotSource(data: any) {
+    return data?.newData ?? data?.data ?? data ?? {};
+  }
+
+  private static extractOrgTargetPath(data: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const targetPath =
+      source?.targetNodePath ||
+      source?.nodePath ||
+      source?.currentData?.nodePath ||
+      source?.parentNode?.nodePath ||
+      null;
+
+    return typeof targetPath === 'string' && targetPath.trim()
+      ? targetPath.trim()
+      : null;
+  }
+
+  private static extractOrgSnapshot(data: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const targetPath = OrgStructureDbController.extractOrgTargetPath(source);
+    if (!targetPath) return null;
+
+    return {
+      newNodeName: source?.newNodeName || source?.nodeName || '',
+      nodeType: source?.nodeType || source?._nodeType || 'DEPARTMENT',
+      nodePath: source?.nodePath || targetPath,
+      parentNode: source?.parentNode || {
+        nodeName: source?.parentNodeName || 'ROOT',
+        nodePath: source?.parentNodePath || 'ROOT',
+      },
+      status: source?.status || 'ACTIVE',
+    };
+  }
+
+  private static applyOrgRequestSnapshot(current: any, request: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(
+      request?.data,
+    );
+    if (request.type === 'INITIATE' || !current) {
+      return OrgStructureDbController.extractOrgSnapshot(source);
+    }
+
+    return mergeJsonData(cloneJson(current), source);
   }
 
   private static resolveRequestedNodePath(data: any, fallback?: string | null) {
@@ -2183,11 +2230,65 @@ export class OrgStructureDbController {
         history.event === 'INITIATE' && requestType !== 'INITIATE'
           ? 'MODIFY'
           : history.event;
-      const oldData =
-        requestType === 'INITIATE'
-          ? null
-          : (history.orgReq?.oldData || requestData?.oldData || null);
-      const newData = requestData || null;
+
+      const allRequests = await prisma.orgStructureReq.findMany({
+        where: { companyId: resolvedCompanyId },
+        select: {
+          id: true,
+          data: true,
+          type: true,
+          status: true,
+          createdAt: true,
+        },
+      });
+      const targetNodePath = OrgStructureDbController.extractOrgTargetPath(
+        requestData,
+      );
+      const historyRequests = allRequests
+        .filter((request) => {
+          const requestTargetNodePath =
+            OrgStructureDbController.extractOrgTargetPath(request.data);
+          return (
+            requestTargetNodePath === targetNodePath &&
+            (request.status !== 'REJECTED' || request.id === history.orgReqId)
+          );
+        })
+        .sort((left, right) => {
+          const leftTime = left.createdAt.getTime();
+          const rightTime = right.createdAt.getTime();
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return left.id.localeCompare(right.id);
+        });
+
+      let currentSnapshot: Record<string, unknown> | null = null;
+      let oldData: Record<string, unknown> | null = null;
+      let newData: Record<string, unknown> | null = null;
+
+      for (const request of historyRequests) {
+        const nextSnapshot: Record<string, unknown> | null =
+          request.type === 'INITIATE' || !currentSnapshot
+            ? OrgStructureDbController.extractOrgSnapshot(request.data)
+            : OrgStructureDbController.applyOrgRequestSnapshot(
+                currentSnapshot,
+                request,
+              );
+
+        if (!nextSnapshot) continue;
+
+        if (request.id === history.orgReqId) {
+          oldData = currentSnapshot ? cloneJson(currentSnapshot) : null;
+          newData = nextSnapshot;
+          break;
+        }
+
+        currentSnapshot = nextSnapshot;
+      }
+
+      if (!newData) {
+        newData = OrgStructureDbController.extractOrgSnapshot(requestData);
+      }
+
+      const changePatch = buildJsonPatch(oldData, newData);
 
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
         viewerUserId,
@@ -2211,8 +2312,8 @@ export class OrgStructureDbController {
           oldData,
           newData,
           changes: {
-            oldData,
-            newData,
+            oldData: changePatch?.oldData ?? oldData,
+            newData: changePatch?.newData ?? newData,
           },
           user: HistoryUserUtil.formatAuditUser(
             history.user,

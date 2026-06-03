@@ -14,6 +14,30 @@ const isPlainObject = (value: unknown): value is JsonObject => {
   );
 };
 
+export const cloneJson = <T>(value: T): T => {
+  if (value === undefined) return value;
+  return JSON.parse(JSON.stringify(value)) as T;
+};
+
+export const mergeJsonData = <T>(base: T, patch: unknown): T => {
+  if (!isPlainObject(base) || !isPlainObject(patch)) {
+    return cloneJson((patch as T) ?? base);
+  }
+
+  const result: JsonObject = cloneJson(base);
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    const current = result[key];
+    if (isPlainObject(current) && isPlainObject(value)) {
+      result[key] = mergeJsonData(current, value);
+      continue;
+    }
+    result[key] = cloneJson(value);
+  }
+
+  return result as T;
+};
+
 export const buildJsonPatch = <T = unknown>(
   previous: T,
   next: T,

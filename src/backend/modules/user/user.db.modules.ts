@@ -6,7 +6,10 @@ import { getPagination } from '../../../shared/utils/pagination.util';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
-import { buildJsonPatch } from '../../utils/json-patch.util';
+import {
+  buildJsonPatch,
+  cloneJson,
+} from '../../utils/json-patch.util';
 
 type TextFilterOption = {
   label: string;
@@ -461,6 +464,115 @@ export class UserDbController {
       oldData: Object.keys(oldData).length > 0 ? oldData : null,
       newData: Object.keys(newData).length > 0 ? newData : null,
     };
+  }
+
+  private static normalizeUserSnapshotSource(data: any) {
+    return data?.newData ?? data?.data ?? data ?? {};
+  }
+
+  private static extractUserTargetEmail(data: any): string | null {
+    const source = UserDbController.normalizeUserSnapshotSource(data);
+    const candidates = [
+      data?.targetUserEmail,
+      source?.targetUserEmail,
+      source?.basicDetails?.email,
+      source?.data?.basicDetails?.email,
+      source?.newData?.basicDetails?.email,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim().toLowerCase();
+      }
+    }
+
+    return null;
+  }
+
+  private static extractUserSnapshot(data: any): UserDataSnapshot | null {
+    const source = UserDbController.normalizeUserSnapshotSource(data);
+    const basicDetails = source?.basicDetails || source?.data?.basicDetails;
+    const permissions = Array.isArray(source?.permissions)
+      ? source.permissions
+      : Array.isArray(source?.data?.permissions)
+        ? source.data.permissions
+        : [];
+
+    if (!basicDetails) {
+      return null;
+    }
+
+    return {
+      basicDetails: {
+        name: basicDetails.name || '',
+        email: basicDetails.email || '',
+        phone: basicDetails.phone || '',
+        designation: basicDetails.designation ?? null,
+        employeeId: basicDetails.employeeId ?? null,
+        reportingManager: basicDetails.reportingManager ?? null,
+        status: basicDetails.status || 'ACTIVE',
+      },
+      permissions: permissions.map((permission: any) => ({
+        accessType: permission.accessType || 'SECONDARY',
+        roleName: permission.roleName || '',
+        roleCategory: permission.roleCategory || '',
+        roleSubCategory: permission.roleSubCategory || '',
+        nodeName: permission.nodeName || '',
+        nodePath: permission.nodePath || '',
+        accessCategory: permission.accessCategory || null,
+      })),
+    };
+  }
+
+  private static applyUserRequestSnapshot(
+    current: UserDataSnapshot,
+    request: any,
+  ): UserDataSnapshot {
+    const requestData = UserDbController.normalizeUserSnapshotSource(
+      request?.data,
+    );
+    const next: UserDataSnapshot = cloneJson(current);
+
+    if (request.type === 'ARCHIVE') {
+      next.permissions = [];
+      next.basicDetails.status = 'ARCHIVE';
+    } else {
+      const permissionMutations = Array.isArray(requestData?.permissions)
+        ? requestData.permissions
+        : [];
+
+      if (permissionMutations.length > 0) {
+        next.permissions = UserDbController.mergePermissionMutations(
+          next.permissions,
+          permissionMutations,
+        );
+      }
+
+      const changedDetails =
+        requestData?.basicDetails || requestData?.data?.basicDetails || {};
+      const editableFields = [
+        'name',
+        'email',
+        'phone',
+        'designation',
+        'employeeId',
+        'reportingManager',
+      ] as const;
+      for (const field of editableFields) {
+        if (changedDetails[field] !== undefined) {
+          next.basicDetails[field] = changedDetails[field];
+        }
+      }
+
+      if (request.type === 'ACTIVE') next.basicDetails.status = 'ACTIVE';
+      if (request.type === 'INACTIVE') next.basicDetails.status = 'INACTIVE';
+      if (request.type === 'ARCHIVE') next.basicDetails.status = 'ARCHIVE';
+      if (changedDetails.status !== undefined) {
+        next.basicDetails.status = changedDetails.status;
+      }
+    }
+
+    return next;
   }
 
   private static rolePermissionRank(value: unknown) {
@@ -4342,19 +4454,69 @@ export class UserDbController {
               workflowId: true,
               approvalRemark: true,
               createdAt: true,
-            },
-          })
+          },
+        })
         : null;
       const requestData = (onboarding?.data as any) || null;
       const requestType = String(onboarding?.type || 'INITIATE').toUpperCase();
-      const isInitiate = requestType === 'INITIATE';
-      const oldData = isInitiate
-        ? null
-        : (onboarding?.oldData || requestData?.oldData || null);
-      const newData = requestData || null;
+
+      const allRequests = await prisma.userOnboarding.findMany({
+        where: { companyId: resolvedCompanyId },
+        select: {
+          id: true,
+          data: true,
+          type: true,
+          status: true,
+          createdAt: true,
+        },
+      });
+      const targetEmail = history.email.trim().toLowerCase();
+      const historyRequests = allRequests
+        .filter((request) => {
+          const requestTargetEmail = UserDbController.extractUserTargetEmail(
+            request.data,
+          );
+          return (
+            requestTargetEmail === targetEmail &&
+            (request.status !== 'REJECTED' || request.id === onboarding?.id)
+          );
+        })
+        .sort((left, right) => {
+          const leftTime = left.createdAt.getTime();
+          const rightTime = right.createdAt.getTime();
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return left.id.localeCompare(right.id);
+        });
+
+      let currentSnapshot: UserDataSnapshot | null = null;
+      let oldData: UserDataSnapshot | null = null;
+      let newData: UserDataSnapshot | null = null;
+
+      for (const request of historyRequests) {
+        const nextSnapshot: UserDataSnapshot | null =
+          request.type === 'INITIATE' || !currentSnapshot
+            ? UserDbController.extractUserSnapshot(request.data)
+            : UserDbController.applyUserRequestSnapshot(currentSnapshot, request);
+
+        if (!nextSnapshot) continue;
+
+        if (request.id === onboarding?.id) {
+          oldData = currentSnapshot ? cloneJson(currentSnapshot) : null;
+          newData = nextSnapshot;
+          break;
+        }
+
+        currentSnapshot = nextSnapshot;
+      }
+
+      const fallbackSnapshot = UserDbController.extractUserSnapshot(requestData);
+      if (!newData) {
+        newData = fallbackSnapshot;
+      }
+      const changePatch = buildJsonPatch(oldData, newData);
       const changeCount = UserDbController.getUserHistoryChangeCount(
         requestData,
-        onboarding?.oldData || requestData?.oldData || null,
+        oldData,
         requestType,
       );
 
@@ -4386,8 +4548,8 @@ export class UserDbController {
           oldData,
           newData,
           changes: {
-            oldData,
-            newData,
+            oldData: changePatch?.oldData ?? oldData,
+            newData: changePatch?.newData ?? newData,
           },
           user: HistoryUserUtil.formatAuditUser(
             history.user,

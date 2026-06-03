@@ -5,7 +5,11 @@ import { AppError } from '../../../shared/middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
-import { buildJsonPatch } from '../../utils/json-patch.util';
+import {
+  buildJsonPatch,
+  cloneJson,
+  mergeJsonData,
+} from '../../utils/json-patch.util';
 import {
   appendCursorWhere,
   buildPage,
@@ -459,6 +463,99 @@ export class WorkflowDbController {
       .filter(([levelNumber]) => Number.isFinite(levelNumber));
 
     return new Map(entries);
+  }
+
+  private static normalizeWorkflowSnapshotSource(data: any) {
+    return data?.target ?? data?.newData ?? data?.data ?? data ?? {};
+  }
+
+  private static extractWorkflowTarget(data: any) {
+    const source = WorkflowDbController.normalizeWorkflowSnapshotSource(data);
+    const target = source?.target || {};
+    const nodePath =
+      target?.nodePath || source?.nodePath || source?.orgStructure?.nodePath || null;
+    const module = target?.module || source?.module || null;
+    const subModule = target?.subModule || source?.subModule || null;
+    const levelsHash = target?.levelsHash || source?.levelsHash || null;
+
+    if (!module || !subModule || !nodePath || !levelsHash) {
+      return null;
+    }
+
+    return {
+      module,
+      subModule,
+      nodePath,
+      levelsHash,
+    };
+  }
+
+  private static extractWorkflowSnapshot(data: any) {
+    const source = WorkflowDbController.normalizeWorkflowSnapshotSource(data);
+    const target = source?.target || {};
+    const levelsSource = source?.levels || {};
+    const levels =
+      Array.isArray(levelsSource)
+        ? levelsSource.reduce((payload: Record<string, any>, level: any) => {
+            payload[`l${level.level}`] = {
+              approver1: level.approver1,
+              approver2: level.approver2 || null,
+              type: level.approverType || level.type || 'OR',
+            };
+            return payload;
+          }, {})
+        : levelsSource;
+
+    const module = source?.module || target?.module || null;
+    const subModule = source?.subModule || target?.subModule || null;
+    const nodePath = source?.nodePath || target?.nodePath || null;
+    const levelsHash = source?.levelsHash || target?.levelsHash || null;
+
+    if (!module || !subModule || !nodePath || !levelsHash) {
+      return null;
+    }
+
+    return {
+      name: source?.name || '',
+      alias: source?.alias || '',
+      workflowType: source?.workflowType || 'NODE',
+      module,
+      subModule,
+      nodePath,
+      levels,
+      levelsHash,
+      status: source?.status || 'ACTIVE',
+    };
+  }
+
+  private static applyWorkflowRequestSnapshot(current: any, request: any) {
+    const source = WorkflowDbController.normalizeWorkflowSnapshotSource(
+      request?.data,
+    );
+    if (request.type === 'INITIATE' || !current) {
+      return WorkflowDbController.extractWorkflowSnapshot(source);
+    }
+
+    const next = cloneJson(current);
+    const merged = mergeJsonData(next, source);
+    if (source?.target?.nodePath || source?.nodePath) {
+      merged.nodePath = source?.target?.nodePath || source?.nodePath || merged.nodePath;
+    }
+    if (source?.target?.module || source?.module) {
+      merged.module = source?.target?.module || source?.module || merged.module;
+    }
+    if (source?.target?.subModule || source?.subModule) {
+      merged.subModule =
+        source?.target?.subModule || source?.subModule || merged.subModule;
+    }
+    if (source?.target?.levelsHash || source?.levelsHash) {
+      merged.levelsHash =
+        source?.target?.levelsHash || source?.levelsHash || merged.levelsHash;
+    }
+    if (source?.workflowType || source?.type) {
+      merged.workflowType = source.workflowType || source.type || merged.workflowType;
+    }
+    return merged;
   }
 
   private static getWorkflowHistoryChangeCount(
@@ -2950,19 +3047,98 @@ export class WorkflowDbController {
         history.event === 'INITIATE' && requestType !== 'INITIATE'
           ? 'MODIFY'
           : history.event;
-      const oldData =
-        requestType === 'INITIATE'
-          ? null
-          : (history.workflowReq?.oldData || requestData?.oldData || null);
-      const newData = history.workflowReq
-        ? WorkflowDbController.sanitizeWorkflowHistoryData(
-            history.workflowReq.data,
-            history.workflowReq.type,
-          )
-        : null;
+      const allRequests = await prisma.workflowReq.findMany({
+        where: { companyId: resolvedCompanyId },
+        select: {
+          id: true,
+          data: true,
+          type: true,
+          status: true,
+          createdAt: true,
+          module: true,
+          subModule: true,
+          levelsHash: true,
+          nodeId: true,
+        },
+      });
+      const targetInfo =
+        WorkflowDbController.extractWorkflowTarget(requestData) ||
+        WorkflowDbController.extractWorkflowTarget({
+          target: {
+            module: history.workflowReq?.module,
+            subModule: history.workflowReq?.subModule,
+            nodePath: (requestData?.target?.nodePath as string | undefined) ||
+              requestData?.nodePath ||
+              null,
+            levelsHash: history.workflowReq?.levelsHash,
+          },
+        });
+      const historyRequests = allRequests
+        .filter((request) => {
+          const requestTarget =
+            WorkflowDbController.extractWorkflowTarget(request.data) ||
+            WorkflowDbController.extractWorkflowTarget({
+              target: {
+                module: request.module,
+                subModule: request.subModule,
+                nodePath:
+                  (request.data as any)?.target?.nodePath ||
+                  (request.data as any)?.nodePath ||
+                  null,
+                levelsHash: request.levelsHash,
+              },
+            });
+
+          return (
+            requestTarget &&
+            targetInfo &&
+            requestTarget.module === targetInfo.module &&
+            requestTarget.subModule === targetInfo.subModule &&
+            requestTarget.nodePath === targetInfo.nodePath &&
+            requestTarget.levelsHash === targetInfo.levelsHash &&
+            (request.status !== 'REJECTED' ||
+              request.id === history.workflowReqId)
+          );
+        })
+        .sort((left, right) => {
+          const leftTime = left.createdAt.getTime();
+          const rightTime = right.createdAt.getTime();
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return left.id.localeCompare(right.id);
+        });
+
+      let currentSnapshot: Record<string, unknown> | null = null;
+      let oldData: Record<string, unknown> | null = null;
+      let newData: Record<string, unknown> | null = null;
+
+      for (const request of historyRequests) {
+        const nextSnapshot: Record<string, unknown> | null =
+          request.type === 'INITIATE' || !currentSnapshot
+            ? WorkflowDbController.extractWorkflowSnapshot(request.data)
+            : WorkflowDbController.applyWorkflowRequestSnapshot(
+                currentSnapshot,
+                request,
+              );
+
+        if (!nextSnapshot) continue;
+
+        if (request.id === history.workflowReqId) {
+          oldData = currentSnapshot ? cloneJson(currentSnapshot) : null;
+          newData = nextSnapshot;
+          break;
+        }
+
+        currentSnapshot = nextSnapshot;
+      }
+
+      if (!newData) {
+        newData = WorkflowDbController.extractWorkflowSnapshot(requestData);
+      }
+
+      const changePatch = buildJsonPatch(oldData, newData);
       const changeCount = WorkflowDbController.getWorkflowHistoryChangeCount(
         requestData,
-        history.workflowReq?.oldData || requestData?.oldData || null,
+        oldData,
         requestType,
       );
 
@@ -2990,8 +3166,8 @@ export class WorkflowDbController {
           oldData,
           newData,
           changes: {
-            oldData,
-            newData,
+            oldData: changePatch?.oldData ?? oldData,
+            newData: changePatch?.newData ?? newData,
           },
           user: HistoryUserUtil.formatAuditUser(
             history.user,
