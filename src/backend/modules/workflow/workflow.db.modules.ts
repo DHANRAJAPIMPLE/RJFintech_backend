@@ -3010,7 +3010,7 @@ export class WorkflowDbController {
                 );
 
               resultList.push({
-                id: `${h.workflowReqId}-${currentPending.level}`,
+                id: `${h.workflowReqId}`,
                 workflowReqId: h.workflowReqId,
                 workflowId: h.workflowReq?.workflowId || null,
                 type: h.workflowReq?.type || null,
