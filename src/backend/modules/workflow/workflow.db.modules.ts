@@ -512,7 +512,27 @@ export class WorkflowDbController {
       }, {});
     }
 
-    return levelsSource || {};
+    if (levelsSource && typeof levelsSource === 'object') {
+      return Object.entries(levelsSource).reduce(
+        (payload: Record<string, any>, [key, level]) => {
+          if (!level || typeof level !== 'object') {
+            payload[key] = level;
+            return payload;
+          }
+
+          const configured = level as any;
+          payload[key] = {
+            approver1: configured.approver1 ?? null,
+            approver2: configured.approver2 ?? null,
+            type: configured.type ?? configured.approverType ?? 'OR',
+          };
+          return payload;
+        },
+        {},
+      );
+    }
+
+    return {};
   }
 
   private static extractWorkflowTarget(data: any) {
@@ -620,8 +640,8 @@ export class WorkflowDbController {
     }
     if (source?.target?.levelsHash || source?.levelsHash || request?.levelsHash) {
       merged.levelsHash =
-        source?.levelsHash ||
         request?.levelsHash ||
+        source?.levelsHash ||
         source?.target?.levelsHash ||
         merged.levelsHash;
     }
@@ -630,6 +650,11 @@ export class WorkflowDbController {
     }
     if (source?.workflowType) {
       merged.workflowType = source.workflowType || merged.workflowType;
+    }
+    if (source?.levels) {
+      merged.levels = WorkflowDbController.normalizeWorkflowLevelsPayload(
+        source.levels,
+      );
     }
     return merged;
   }
@@ -702,15 +727,14 @@ export class WorkflowDbController {
       subModule: relatedWorkflow?.subModule || request?.subModule || null,
       levelsHash: relatedWorkflow?.levelsHash || request?.levelsHash || null,
       nodePath:
+        relatedWorkflow?.orgStructure?.nodePath ||
         requestData?.nodePath ||
         requestData?.target?.nodePath ||
-        relatedWorkflow?.orgStructure?.nodePath ||
         null,
       levels:
-        requestData?.levels ||
-        (relatedWorkflow
+        relatedWorkflow
           ? WorkflowDbController.toLevelsPayload(relatedWorkflow.levels)
-          : undefined),
+          : requestData?.levels,
       workflowType: relatedWorkflow?.type || undefined,
       status: requestData?.status || relatedWorkflow?.status || undefined,
     };
@@ -3442,6 +3466,25 @@ export class WorkflowDbController {
           selectedRequestFallback,
           history.workflowReq?.oldData,
         );
+      }
+      if (
+        requestType !== 'INITIATE' &&
+        history.workflowReq?.status === 'PENDING' &&
+        relatedWorkflow
+      ) {
+        const currentTargetSnapshot =
+          WorkflowDbController.extractWorkflowSnapshot(
+            selectedRequestFallback,
+            selectedRequestFallback,
+          );
+        if (currentTargetSnapshot) {
+          oldData = currentTargetSnapshot;
+          newData =
+            WorkflowDbController.applyWorkflowRequestSnapshot(
+              currentTargetSnapshot,
+              history.workflowReq,
+            ) || newData;
+        }
       }
 
       const changeCount = WorkflowDbController.getWorkflowHistoryChangeCount(
