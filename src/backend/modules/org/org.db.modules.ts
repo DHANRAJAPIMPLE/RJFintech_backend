@@ -1632,6 +1632,7 @@ export class OrgStructureDbController {
             corpAdminUserIds,
           ),
           includeCreatedBy: true,
+          isPending: result?.status === 'PARTIAL_APPROVED',
         });
       }
 
@@ -2550,15 +2551,13 @@ export class OrgStructureDbController {
       );
 
       // 4. Remove internal UUIDs and format for the tree UI
-      const safeNodes = nodes
-        .filter((node) => !pendingByNodePath.has(node.nodePath))
-        .map((node) => ({
+      const safeNodes = nodes.map((node) => ({
           id: node.id,
           nodeId: node.id,
           nodeName: node.nodeName,
           nodeType: node.nodeType,
           nodePath: node.nodePath,
-          isPending: false,
+          isPending: pendingByNodePath.has(node.nodePath),
         }));
 
       res.status(200).json({

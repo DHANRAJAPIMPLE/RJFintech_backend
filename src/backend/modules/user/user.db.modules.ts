@@ -4604,6 +4604,7 @@ export class UserDbController {
           notificationRecipientUserIds,
           corpAdminUserIds,
         ),
+        isPending: result?.status === 'PARTIAL_APPROVED',
       });
 
       res.status(200).json({

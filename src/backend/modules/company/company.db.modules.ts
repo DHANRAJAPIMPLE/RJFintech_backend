@@ -850,6 +850,7 @@ export class CompanyDbController {
           referenceName: notificationSubject,
           createdBy: approverId,
           recipientUserIds: notificationRecipientUserIds,
+          isPending: false,
         });
       }
 
