@@ -6,11 +6,16 @@ export type OrgNodeType =
   | 'PLANT'
   | 'LOCATION';
 
+export type OrgNodeStatus = 'ACTIVE' | 'INACTIVE';
+
 export type OrgActiveNode = {
   nodeName: string;
   nodeType: OrgNodeType | null;
   nodePath: string;
   isPending: boolean;
+  status?: OrgNodeStatus;
+  isAutoDeleted?: boolean;
+  linkedOrgStructure?: OrgActiveNode[];
 };
 
 export type OrgActiveNodeInternal = OrgActiveNode & {
@@ -178,7 +183,13 @@ export type OrgHistoryAuditUser = {
   email: string;
 };
 
-export type OrgHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
+export type OrgHistoryEvent =
+  | 'INITIATE'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'MODIFY'
+  | 'AUTO_GENERATE'
+  | 'AUTO_DELETE';
 
 export type OrgHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 

@@ -114,6 +114,37 @@ export class WorkflowDbController {
     return parentByWorkflowId;
   }
 
+  private static async getAutoDeletedWorkflowIds(
+    client: any,
+    companyId: string,
+  ) {
+    const rows = await client.workflowReqHistory.findMany({
+      where: {
+        companyId,
+        event: 'AUTO_DELETE',
+        workflowReq: {
+          workflowId: { not: null },
+        },
+      },
+      select: {
+        workflowReq: {
+          select: {
+            workflowId: true,
+          },
+        },
+      },
+    });
+
+    return new Set<string>(
+      rows
+        .map((row: any) => row.workflowReq?.workflowId)
+        .filter(
+          (workflowId: unknown): workflowId is string =>
+            typeof workflowId === 'string' && workflowId.length > 0,
+        ),
+    );
+  }
+
   private static collectWorkflowDescendantIds(
     parentByWorkflowId: Map<string, string>,
     rootWorkflowId: string,
@@ -279,6 +310,7 @@ export class WorkflowDbController {
     allRows: any[],
     parentByWorkflowId: Map<string, string>,
     pendingWorkflowIds: Set<string>,
+    autoDeletedWorkflowIds: Set<string> = new Set<string>(),
   ) {
     const rowsById = new Map(allRows.map((row) => [row.id, row]));
     const childrenByParentId = new Map<string, string[]>();
@@ -318,6 +350,7 @@ export class WorkflowDbController {
         descendants.push({
           ...childRow,
           isPending: pendingWorkflowIds.has(childRow.id),
+          isAutoDeleted: autoDeletedWorkflowIds.has(childRow.id),
           pendingRequest: childRow.pendingRequest ?? null,
         });
         descendants.push(...collectDescendants(childRow, visited));
@@ -340,11 +373,36 @@ export class WorkflowDbController {
       return {
         ...restRow,
         isPending: pendingWorkflowIds.has(row.id),
+        isAutoDeleted: autoDeletedWorkflowIds.has(row.id),
         linkedOrgStructure,
       };
     };
 
     return roots.map((root) => buildNode(rowsById.get(root.id) || root));
+  }
+
+  private static buildLinkedOrgStructure(
+    orgNodes: Array<{
+      nodePath: string;
+      nodeName: string;
+      nodeType: string;
+    }>,
+    rootNodePath?: string | null,
+  ) {
+    if (!rootNodePath) return [];
+
+    return orgNodes
+      .filter(
+        (node) =>
+          node.nodePath !== rootNodePath &&
+          node.nodePath.startsWith(`${rootNodePath}.`),
+      )
+      .sort((left, right) => left.nodePath.localeCompare(right.nodePath))
+      .map((node) => ({
+        nodePath: node.nodePath,
+        nodeName: node.nodeName,
+        nodeType: node.nodeType,
+      }));
   }
 
   private static formatConflictDate(value: Date | string | null | undefined) {
@@ -785,7 +843,7 @@ export class WorkflowDbController {
     }
 
     const data = { ...(value as Record<string, unknown>) };
-    if (requestType === 'AUTO_GENERATE') {
+    if (requestType === 'AUTO_GENERATE' || requestType === 'AUTO_DELETE') {
       [
         'sourceWorkflowId',
         'sourceNodeId',
@@ -807,7 +865,9 @@ export class WorkflowDbController {
   }
 
   private static formatWorkflowHistoryRemarks(history: any) {
-    if (history?.event !== 'AUTO_GENERATE') return history?.remarks ?? null;
+    if (history?.event !== 'AUTO_GENERATE' && history?.event !== 'AUTO_DELETE') {
+      return history?.remarks ?? null;
+    }
 
     const data = (history.workflowReq?.data || {}) as Record<string, any>;
     const workflowName = data.name || 'workflow';
@@ -818,6 +878,10 @@ export class WorkflowDbController {
     const sourceNodePath = data.sourceNodePath
       ? ` (${data.sourceNodePath})`
       : '';
+
+    if (history?.event === 'AUTO_DELETE') {
+      return `Auto-deleted workflow ${workflowName} for node ${nodeName}${nodePath} due to ${sourceWorkflowName} on ${sourceNodeName}${sourceNodePath}`;
+    }
 
     return `Auto-generated workflow ${workflowName} for node ${nodeName}${nodePath} from ${sourceWorkflowName} on ${sourceNodeName}${sourceNodePath}`;
   }
@@ -3883,15 +3947,32 @@ export class WorkflowDbController {
 
       if (type === 'active' || type === 'inactive' || type === 'archive') {
         const activeRows = pageData.pageRows as any[];
-        const visibleWorkflowRows = await prisma.workflow.findMany({
-          where:
-            type === 'active'
-              ? activeBaseWhere
-              : type === 'inactive'
-                ? inactiveBaseWhere
-                : archiveBaseWhere,
-          select: activeSelect,
-        });
+        const autoDeletedWorkflowIds =
+          type === 'active'
+            ? await WorkflowDbController.getAutoDeletedWorkflowIds(
+                prisma,
+                resolvedCompanyId,
+              )
+            : new Set<string>();
+        const visibleWorkflowRows =
+          type === 'active'
+            ? [
+                ...(await prisma.workflow.findMany({
+                  where: activeBaseWhere,
+                  select: activeSelect,
+                })),
+                ...(await prisma.workflow.findMany({
+                  where: archiveBaseWhere,
+                  select: activeSelect,
+                })),
+              ]
+            : await prisma.workflow.findMany({
+                where:
+                  type === 'inactive'
+                    ? inactiveBaseWhere
+                    : archiveBaseWhere,
+                select: activeSelect,
+              });
         const visibleWorkflowIds = new Set(
           visibleWorkflowRows.map((row) => row.id),
         );
@@ -3985,6 +4066,7 @@ export class WorkflowDbController {
           visibleWorkflowRows,
           autoGeneratedParentByWorkflowId,
           pendingWorkflowIds,
+          autoDeletedWorkflowIds,
         );
 
         return res.status(200).json({
@@ -4043,7 +4125,7 @@ export class WorkflowDbController {
         new Set(pendingRequestsRaw.map((req) => req.nodeId)),
       ) as string[];
 
-      const [workflowDetails, targetWorkflowDetails, nodeDetails] =
+      const [workflowDetails, targetWorkflowDetails, nodeDetails, allOrgNodes] =
         await Promise.all([
           prisma.workflow.findMany({
             where: { id: { in: workflowIds } },
@@ -4115,6 +4197,17 @@ export class WorkflowDbController {
               nodeType: true,
             },
           }),
+          prisma.orgStructure.findMany({
+            where: {
+              companyId: resolvedCompanyId,
+              status: 'ACTIVE',
+            },
+            select: {
+              nodePath: true,
+              nodeName: true,
+              nodeType: true,
+            },
+          }),
         ]);
 
       const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
@@ -4138,6 +4231,10 @@ export class WorkflowDbController {
         const initiatorTimestamp = historyEntry?.createdAt || req.createdAt;
         const node = nodeMap.get(req.nodeId);
         const nodeType = node?.nodeType || null;
+        const linkedOrgStructure = WorkflowDbController.buildLinkedOrgStructure(
+          allOrgNodes,
+          node?.nodePath || (req.data as any)?.nodePath || null,
+        );
 
         // Resolve workflow name, alias, and master data (target match first)
         const target = (req.data as any)?.target;
@@ -4214,6 +4311,7 @@ export class WorkflowDbController {
           nodePath: node?.nodePath || (req.data as any)?.nodePath || null,
           workflowName,
           alias,
+          linkedOrgStructure,
         };
       });
 

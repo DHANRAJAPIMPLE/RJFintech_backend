@@ -12,7 +12,8 @@ type NotificationType =
   | 'MODIFICATION'
   | 'ACTIVE'
   | 'INACTIVE'
-  | 'ARCHIVE';
+  | 'ARCHIVE'
+  | 'AUTO_DELETE';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 type NotificationFetchDateRange =
   | 'ALL'
@@ -44,6 +45,7 @@ const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
   'ACTIVE',
   'INACTIVE',
   'ARCHIVE',
+  'AUTO_DELETE',
 ];
 const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'USER',
@@ -408,6 +410,11 @@ export class NotificationService {
           name: 'Organization deleted',
           message: `${actorName} deleted organization ${orgName}`,
         };
+      case 'ORG:AUTO_DELETE':
+        return {
+          name: 'Organization auto-deleted',
+          message: `${actorName} auto-deleted organization ${orgName}`,
+        };
       case 'ORG:ACTIVE':
         return {
           name: 'Organization activated',
@@ -452,6 +459,11 @@ export class NotificationService {
         return {
           name: 'Workflow deleted',
           message: `${actorName} deleted workflow ${workflowName}`,
+        };
+      case 'WORKFLOW:AUTO_DELETE':
+        return {
+          name: 'Workflow auto-deleted',
+          message: `${actorName} auto-deleted workflow ${workflowName}`,
         };
       case 'COMPANY:INITIATE':
         return {

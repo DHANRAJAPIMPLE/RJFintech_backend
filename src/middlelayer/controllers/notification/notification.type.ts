@@ -6,7 +6,8 @@ export type NotificationActionType =
   | 'MODIFICATION'
   | 'ACTIVE'
   | 'INACTIVE'
-  | 'ARCHIVE';
+  | 'ARCHIVE'
+  | 'AUTO_DELETE';
 
 export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 export type NotificationReferenceTypeFilter = NotificationReferenceType | null;

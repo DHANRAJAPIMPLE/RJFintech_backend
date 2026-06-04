@@ -125,6 +125,9 @@ export class WorkflowController {
       nodeName: workflow.nodeName,
       nodePath: workflow.nodePath,
       workflowName: workflow.workflowName,
+      linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map((child) =>
+        WorkflowController.formatLinkedOrgStructure(child),
+      ),
     };
   }
 

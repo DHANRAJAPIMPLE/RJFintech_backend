@@ -496,17 +496,31 @@ export class UserController {
       }
 
       // 4. Logic: Validate Permissions (Roles and Nodes)
-      for (const permission of permissions) {
-        const { data: roles, ok: rolesOk } = await internalPost<any>(
-          `${config.backendUrl}/internal/roles/fetch`,
-          {
+      const { data: roles, ok: rolesOk } = await internalPost<any>(
+        `${config.backendUrl}/internal/roles/fetch`,
+        {
+          permissions: permissions.map((permission) => ({
             roleName: permission.roleName,
             roleCategory: permission.roleCategory,
             roleSubCategory: permission.roleSubCategory,
-          },
-        );
+          })),
+        },
+      );
 
-        if (!rolesOk || !Array.isArray(roles) || roles.length === 0) {
+      if (!rolesOk || !Array.isArray(roles)) {
+        throw new AppError('Unable to validate roles', 400);
+      }
+
+      const roleLookup = new Set(
+        roles.map(
+          (role: any) =>
+            `${role.roleName || ''}|${role.category || ''}|${role.subCategory || ''}`,
+        ),
+      );
+
+      for (const permission of permissions) {
+        const roleKey = `${permission.roleName}|${permission.roleCategory}|${permission.roleSubCategory}`;
+        if (!roleLookup.has(roleKey)) {
           throw new AppError(`Role '${permission.roleName}' not found`, 400);
         }
 

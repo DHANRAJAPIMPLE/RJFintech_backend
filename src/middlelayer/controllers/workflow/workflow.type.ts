@@ -122,6 +122,7 @@ export type WorkflowPendingItem = {
   nodeName: string | null;
   nodePath: string | null;
   workflowName: string;
+  linkedOrgStructure?: WorkflowLinkedOrgStructureItem[];
 };
 
 export type WorkflowPendingRequestSnapshot = {
@@ -206,7 +207,8 @@ export type WorkflowHistoryEvent =
   | 'APPROVED'
   | 'REJECTED'
   | 'MODIFY'
-  | 'AUTO_GENERATE';
+  | 'AUTO_GENERATE'
+  | 'AUTO_DELETE';
 
 export type WorkflowHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 

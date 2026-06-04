@@ -27,6 +27,22 @@ type OrgInactivationNotification = {
   workflowNames: string[];
 };
 
+type OrgAutoDeletedWorkflowNotification = {
+  workflowName: string;
+  nodeName: string;
+  nodePath: string;
+};
+
+type OrgLinkedStructureNode = {
+  nodePath: string;
+  nodeName: string;
+  nodeType: string;
+  status: OrgNodeStatus;
+  isPending: boolean;
+  isAutoDeleted: boolean;
+  linkedOrgStructure?: OrgLinkedStructureNode[];
+};
+
 /**
  * Controller for managing the organizational hierarchy (nodes) for companies.
  * Handles the creation, approval, and retrieval of organization units (Roots, Groups, Locations, etc.)
@@ -63,6 +79,35 @@ export class OrgStructureDbController {
       includeCreatedBy: true,
       isPending: false,
     });
+  }
+
+  private static buildLinkedOrgStructure(
+    orgNodes: Array<{
+      nodePath: string;
+      nodeName: string;
+      nodeType: string;
+      status: OrgNodeStatus;
+    }>,
+    rootNodePath?: string | null,
+    pendingNodePaths?: Set<string>,
+  ): OrgLinkedStructureNode[] {
+    if (!rootNodePath) return [];
+
+    return orgNodes
+      .filter(
+        (node) =>
+          node.nodePath !== rootNodePath &&
+          node.nodePath.startsWith(`${rootNodePath}.`),
+      )
+      .sort((left, right) => left.nodePath.localeCompare(right.nodePath))
+      .map((node) => ({
+        nodePath: node.nodePath,
+        nodeName: node.nodeName,
+        nodeType: node.nodeType,
+        status: node.status,
+        isPending: pendingNodePaths?.has(node.nodePath) ?? false,
+        isAutoDeleted: node.status !== 'ACTIVE',
+      }));
   }
 
   private static pathSegment(value: string) {
@@ -329,6 +374,16 @@ export class OrgStructureDbController {
         },
       });
 
+      await tx.orgHistory.create({
+        data: {
+          orgReqId: orgReqId,
+          companyId,
+          event: 'AUTO_GENERATE',
+          eventUserId: actorId,
+          remarks: `Auto-generated workflow ${source.name} for node ${newNode.nodeName} (${newNode.nodePath}) from parent workflow ${source.name} on ${parentNode.nodeName} (${parentNode.nodePath})`,
+        },
+      });
+
       generated.push({
         workflowName: workflow.name,
         alias: workflow.alias,
@@ -402,6 +457,42 @@ export class OrgStructureDbController {
       referenceName: generatedWorkflows[0]?.nodeName || 'workflow',
       createdBy: params.createdBy,
       recipientUserIds,
+    });
+  }
+
+  private static async notifyAutoDeletedWorkflows(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    deletedWorkflows: Array<{
+      workflowName: string;
+      nodeName: string;
+      nodePath: string;
+    }>;
+  }) {
+    if (params.deletedWorkflows.length === 0) return;
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      await NotificationService.getRequestInitiatorId(
+        params.orgReqId,
+        'org_structure_req',
+      ),
+      await NotificationService.getCorpAdminUserIds(params.companyId),
+    );
+    const deletedSummary = params.deletedWorkflows
+      .slice(0, 5)
+      .map((workflow) => `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`)
+      .join(', ');
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'AUTO_DELETE',
+      referenceType: 'WORKFLOW',
+      referenceId: params.orgReqId,
+      referenceName: deletedSummary || 'workflow',
+      createdBy: params.createdBy,
+      recipientUserIds,
+      includeCreatedBy: true,
     });
   }
 
@@ -1155,7 +1246,9 @@ export class OrgStructureDbController {
     request: any,
     notificationState?: {
       inactivation: OrgInactivationNotification | null;
+      autoDeletedWorkflows?: OrgAutoDeletedWorkflowNotification[];
     },
+    actorId?: string,
   ) {
     const requestData = request.data as any;
     const oldData = (request.oldData || requestData.oldData) as {
@@ -1199,6 +1292,29 @@ export class OrgStructureDbController {
       targetNodePath,
     );
     const subtreeIds = subtree.map((subtreeNode: any) => subtreeNode.id);
+    const autoDeletedWorkflowRows = await tx.workflow.findMany({
+      where: {
+        companyId: request.companyId,
+        nodeId: { in: subtreeIds },
+        status: { not: 'ARCHIVE' },
+      },
+      select: {
+        id: true,
+        name: true,
+        alias: true,
+        module: true,
+        subModule: true,
+        type: true,
+        workflowReqIds: true,
+        orgStructure: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+            nodeType: true,
+          },
+        },
+      },
+    });
     if (notificationState) {
       notificationState.inactivation =
         await OrgStructureDbController.getOrgInactivationNotification(
@@ -1206,6 +1322,13 @@ export class OrgStructureDbController {
           request.companyId,
           targetNodePath,
         );
+      notificationState.autoDeletedWorkflows = autoDeletedWorkflowRows.map(
+        (workflow: any) => ({
+          workflowName: workflow.name,
+          nodeName: workflow.orgStructure?.nodeName || targetNodePath,
+          nodePath: workflow.orgStructure?.nodePath || targetNodePath,
+        }),
+      );
     }
     await tx.userAccess.deleteMany({
       where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
@@ -1220,6 +1343,39 @@ export class OrgStructureDbController {
         status: 'ARCHIVE',
       },
     });
+    if (actorId) {
+      await Promise.all(
+        autoDeletedWorkflowRows.map((workflow: any) => {
+          const requestId = Array.isArray(workflow.workflowReqIds)
+            ? [...workflow.workflowReqIds].filter((id) => typeof id === 'string').pop()
+            : null;
+          if (!requestId) return Promise.resolve();
+
+          const remarks = `Auto-deleted workflow ${workflow.name} (${workflow.orgStructure?.nodePath || targetNodePath}) because organization node ${node.nodeName} (${targetNodePath}) was inactivated.`;
+
+          return Promise.all([
+            tx.workflowReqHistory.create({
+              data: {
+                workflowReqId: requestId,
+                companyId: request.companyId,
+                event: 'AUTO_DELETE',
+                eventUserId: actorId,
+                remarks,
+              },
+            }),
+            tx.orgHistory.create({
+              data: {
+                orgReqId: request.id,
+                companyId: request.companyId,
+                event: 'AUTO_DELETE',
+                eventUserId: actorId,
+                remarks,
+              },
+            }),
+          ]);
+        }),
+      );
+    }
     await tx.orgStructure.updateMany({
       where: { id: { in: subtreeIds } },
       data: { status: 'INACTIVE' },
@@ -1299,8 +1455,12 @@ export class OrgStructureDbController {
       let notificationRecipients: string[] = [];
       let notificationSubject = 'Organization request';
       let userAccessImpactNotification: any = null;
-      const orgLifecycleNotification = {
-        inactivation: null as OrgInactivationNotification | null,
+      const orgLifecycleNotification: {
+        inactivation: OrgInactivationNotification | null;
+        autoDeletedWorkflows: OrgAutoDeletedWorkflowNotification[];
+      } = {
+        inactivation: null,
+        autoDeletedWorkflows: [],
       };
       let autoGeneratedWorkflowNotifications: Array<{
         workflowName: string;
@@ -1467,6 +1627,7 @@ export class OrgStructureDbController {
               tx,
               request,
               orgLifecycleNotification,
+              approverId,
             );
             const updated = await tx.orgStructureReq.update({
               where: { id },
@@ -1663,6 +1824,22 @@ export class OrgStructureDbController {
           orgReqId: id,
           createdBy: approverId,
           generatedWorkflows: autoGeneratedWorkflowNotifications,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type === 'UPDATE' &&
+        String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+        orgLifecycleNotification.autoDeletedWorkflows &&
+        orgLifecycleNotification.autoDeletedWorkflows.length > 0
+      ) {
+        await OrgStructureDbController.notifyAutoDeletedWorkflows({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          deletedWorkflows: orgLifecycleNotification.autoDeletedWorkflows,
         });
       }
 
@@ -2473,11 +2650,12 @@ export class OrgStructureDbController {
         resolvedCompanyId = company.id;
       }
 
-      // 1. Fetch active nodes in the hierarchy
-      const nodes = await prisma.orgStructure.findMany({
-        where: { companyId: resolvedCompanyId, status: 'ACTIVE' },
+      // 1. Fetch all nodes in the hierarchy so child paths can be linked
+      const allNodes = await prisma.orgStructure.findMany({
+        where: { companyId: resolvedCompanyId },
         orderBy: { nodePath: 'asc' },
       });
+      const activeNodes = allNodes.filter((node) => node.status === 'ACTIVE');
 
       // 2. Fetch pending requests for parallel tracking
       const pendingRequestsRaw = await prisma.orgStructureReq.findMany({
@@ -2550,15 +2728,38 @@ export class OrgStructureDbController {
         (request: any) => approverRequestIds.has(request.id),
       );
 
+      const pendingNodePaths = new Set<string>();
+      pendingRequests.forEach((request: any) => {
+        const requestData = request.data as any;
+        const targetPath =
+          requestData?.targetNodePath ||
+          requestData?.currentData?.nodePath ||
+          requestData?.nodePath ||
+          (typeof requestData?.parentNode?.nodePath === 'string' &&
+          typeof requestData?.newNodeName === 'string'
+            ? `${requestData.parentNode.nodePath}.${requestData.newNodeName}`
+            : null);
+        if (typeof targetPath === 'string' && targetPath.length > 0) {
+          pendingNodePaths.add(targetPath);
+        }
+      });
+
       // 4. Remove internal UUIDs and format for the tree UI
-      const safeNodes = nodes.map((node) => ({
-          id: node.id,
-          nodeId: node.id,
-          nodeName: node.nodeName,
-          nodeType: node.nodeType,
-          nodePath: node.nodePath,
-          isPending: pendingByNodePath.has(node.nodePath),
-        }));
+      const safeNodes = activeNodes.map((node) => ({
+        id: node.id,
+        nodeId: node.id,
+        nodeName: node.nodeName,
+        nodeType: node.nodeType,
+        nodePath: node.nodePath,
+        status: node.status,
+        isPending: pendingByNodePath.has(node.nodePath),
+        isAutoDeleted: node.status !== 'ACTIVE',
+        linkedOrgStructure: OrgStructureDbController.buildLinkedOrgStructure(
+          allNodes as any,
+          node.nodePath,
+          pendingNodePaths,
+        ),
+      }));
 
       res.status(200).json({
         message: 'Organization structure fetched successfully!',
