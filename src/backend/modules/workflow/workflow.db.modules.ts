@@ -20,6 +20,7 @@ import {
 } from '../../../shared/utils/cursor-pagination.util';
 
 type WorkflowTarget = {
+  id?: string;
   name?: string;
   module: string;
   subModule: string;
@@ -1166,54 +1167,6 @@ export class WorkflowDbController {
     }
   }
 
-  private static async assertSelectedWorkflowNotPendingModification(
-    client: any,
-    companyId: string,
-    parentLevelsHash?: string | null,
-  ) {
-    const selectedWorkflow = await client.workflow.findFirst({
-      where: {
-        companyId,
-        module: 'SYSTEM_ACCESS',
-        subModule: 'WORK_FLOW',
-        status: 'ACTIVE',
-        ...(parentLevelsHash
-          ? { levelsHash: parentLevelsHash }
-          : { name: { contains: 'DEFAULT' } }),
-      },
-      orderBy: parentLevelsHash ? undefined : { createdAt: 'desc' },
-      select: {
-        name: true,
-        module: true,
-        subModule: true,
-        levelsHash: true,
-        orgStructure: { select: { nodePath: true } },
-      },
-    });
-
-    if (!selectedWorkflow && parentLevelsHash) {
-      throw new AppError(
-        `Workflow with hash '${parentLevelsHash}' not found for this company`,
-        404,
-      );
-    }
-    if (!selectedWorkflow) return;
-
-    await WorkflowDbController.assertTargetNotPendingModification(
-      client,
-      companyId,
-      {
-        name: selectedWorkflow.name,
-        module: selectedWorkflow.module,
-        subModule: selectedWorkflow.subModule,
-        nodePath: selectedWorkflow.orgStructure.nodePath,
-        levelsHash: selectedWorkflow.levelsHash,
-      },
-      'Selected approval workflow has a pending modification',
-      selectedWorkflow.name,
-    );
-  }
-
   private static async assertTargetNotPendingModification(
     client: any,
     companyId: string,
@@ -1229,6 +1182,7 @@ export class WorkflowDbController {
       },
       select: {
         id: true,
+        workflowId: true,
         alias: true,
         data: true,
         createdAt: true,
@@ -1249,6 +1203,7 @@ export class WorkflowDbController {
     const pendingTargetRequest = pendingRequests.find(
       (request: {
         id: string;
+        workflowId: string | null;
         data: unknown;
         alias: string | null;
         initiatorId: string | null;
@@ -1266,6 +1221,9 @@ export class WorkflowDbController {
           (latestEvent === 'APPROVED' && !hasRemainingEligibleApprovers)
         ) {
           return false;
+        }
+        if (target.id && request.workflowId === target.id) {
+          return true;
         }
         const pendingTarget = (request.data as any)?.target;
         // Conflict matching is based on the actual target workflow identity,
@@ -1420,7 +1378,7 @@ export class WorkflowDbController {
     await WorkflowDbController.assertTargetNotPendingModification(
       prisma,
       companyId,
-      requestedTarget,
+      { ...requestedTarget, id: target.id },
       'Workflow already has a pending modification',
       target.name,
     );
@@ -1431,11 +1389,6 @@ export class WorkflowDbController {
         target.id,
         target.name,
         target.alias,
-      ),
-      WorkflowDbController.assertSelectedWorkflowNotPendingModification(
-        prisma,
-        companyId,
-        parentLevelsHash,
       ),
     ]);
 
@@ -1557,6 +1510,7 @@ export class WorkflowDbController {
           module: newData.module,
           subModule: newData.subModule,
           levelsHash: newData.levelsHash,
+          workflowId: target.id,
           type: persistedType,
           impact:
             type === 'INACTIVE'
@@ -1588,12 +1542,6 @@ export class WorkflowDbController {
         },
       );
       notificationRecipients = approval.eligibleApprovers;
-      await tx.workflowReq.update({
-        where: { id: created.id },
-        data: {
-          workflowId: approval.workflowId,
-        },
-      });
       await tx.workflowReqHistory.create({
         data: {
           workflowReqId: created.id,
@@ -2105,12 +2053,6 @@ export class WorkflowDbController {
         throw new AppError(`Already pending: ${alreadyPending.id}`, 409);
       }
 
-      await WorkflowDbController.assertSelectedWorkflowNotPendingModification(
-        prisma,
-        resolvedCompanyId,
-        parentLevelsHash,
-      );
-
       // Fetch all global access users for this company to ensure they are in the master eligible list
       const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
         prisma as any,
@@ -2558,10 +2500,17 @@ export class WorkflowDbController {
                 });
               }
             }
-            if (levelData.length > 0) {
-              await tx.workflowLevel.createMany({ data: levelData });
-            }
           }
+          if (levelData.length > 0) {
+            await tx.workflowLevel.createMany({ data: levelData });
+          }
+
+          await tx.workflowReq.update({
+            where: { id },
+            data: {
+              workflowId: workflow.id,
+            },
+          });
 
           // 5. Finalize the request status
           const updated = await tx.workflowReq.update({
