@@ -1335,6 +1335,7 @@ export class WorkflowDbController {
       where: {
         companyId,
         nodePath: requestedTarget.nodePath,
+        status: 'ACTIVE',
       },
       select: { id: true },
     });
@@ -1649,6 +1650,7 @@ export class WorkflowDbController {
       where: {
         companyId: request.companyId,
         nodePath: requestedTarget.nodePath,
+        status: 'ACTIVE',
       },
       select: { id: true },
     });
@@ -1872,7 +1874,7 @@ export class WorkflowDbController {
     let nodeId: string | undefined;
     if (nodePath) {
       const node = await prisma.orgStructure.findFirst({
-        where: { companyId, nodePath },
+        where: { companyId, nodePath, status: 'ACTIVE' },
         select: { id: true },
       });
       nodeId = node?.id;
@@ -2697,6 +2699,7 @@ export class WorkflowDbController {
       const {
         companyCode,
         companyId,
+        id,
         levelsHash,
         module,
         subModule,
@@ -2742,9 +2745,54 @@ export class WorkflowDbController {
         }
       }
 
-      // If specific identifiers are provided, resolve the exact request chain
-      // first, then expand to the workflow family that request belongs to.
-      if (levelsHash || module || subModule || nodePath) {
+      const nodeAccessFilter = isGlobal
+        ? {}
+        : { nodeId: { in: userNodeIds } };
+      const historyLookupId = WorkflowDbController.normalizeHistoryLookupId(id);
+
+      if (typeof historyLookupId === 'string' && historyLookupId) {
+        const directRequest = await prisma.workflowReq.findFirst({
+          where: {
+            id: historyLookupId,
+            companyId: resolvedCompanyId,
+            ...nodeAccessFilter,
+          },
+          select: { id: true },
+        });
+
+        const requestIds = new Set<string>();
+        if (directRequest) {
+          requestIds.add(directRequest.id);
+        } else {
+          const workflow = await prisma.workflow.findFirst({
+            where: {
+              id: historyLookupId,
+              companyId: resolvedCompanyId,
+              ...nodeAccessFilter,
+            },
+            select: { id: true, workflowReqIds: true },
+          });
+
+          if (workflow) {
+            (workflow.workflowReqIds || []).forEach((requestId) =>
+              requestIds.add(requestId),
+            );
+            const linkedRequests = await prisma.workflowReq.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                workflowId: workflow.id,
+                ...nodeAccessFilter,
+              },
+              select: { id: true },
+            });
+            linkedRequests.forEach((request) => requestIds.add(request.id));
+          }
+        }
+
+        whereCondition = {
+          workflowReqId: { in: Array.from(requestIds) },
+        };
+      } else if (levelsHash || module || subModule || nodePath) {
         let nodeId: string | undefined;
         if (nodePath) {
           const node = await prisma.orgStructure.findFirst({
@@ -2753,9 +2801,6 @@ export class WorkflowDbController {
           nodeId = node?.id;
         }
 
-        const nodeAccessFilter = isGlobal
-          ? {}
-          : { nodeId: { in: userNodeIds } };
         const targetJsonFilters = [
           module
             ? { data: { path: ['target', 'module'], equals: module } }
@@ -3296,16 +3341,52 @@ export class WorkflowDbController {
             },
           })
         : null;
-      const relatedWorkflow = targetWorkflow || linkedWorkflow;
+      const directWorkflow =
+        history.workflowReq?.workflowId &&
+        requestType !== 'INITIATE'
+          ? await prisma.workflow.findFirst({
+              where: {
+                id: history.workflowReq.workflowId,
+                companyId: resolvedCompanyId,
+              },
+              include: {
+                levels: { orderBy: { level: 'asc' } },
+                orgStructure: {
+                  select: {
+                    nodePath: true,
+                    nodeName: true,
+                    nodeType: true,
+                  },
+                },
+              },
+            })
+          : null;
+      const relatedWorkflow = targetWorkflow || linkedWorkflow || directWorkflow;
       const selectedRequestFallback =
         WorkflowDbController.buildWorkflowRequestSnapshotFallback(
           history.workflowReq,
           relatedWorkflow,
         );
+      const relatedWorkflowReqIds = new Set<string>(
+        Array.isArray(relatedWorkflow?.workflowReqIds)
+          ? relatedWorkflow.workflowReqIds
+          : [],
+      );
       const allRequests = await prisma.workflowReq.findMany({
-        where: { companyId: resolvedCompanyId },
+        where:
+          relatedWorkflow && relatedWorkflowReqIds.size > 0
+            ? {
+                companyId: resolvedCompanyId,
+                OR: [
+                  { id: history.workflowReqId },
+                  { id: { in: Array.from(relatedWorkflowReqIds) } },
+                  { workflowId: relatedWorkflow.id },
+                ],
+              }
+            : { companyId: resolvedCompanyId },
         select: {
           id: true,
+          workflowId: true,
           data: true,
           oldData: true,
           alias: true,
@@ -3320,6 +3401,14 @@ export class WorkflowDbController {
       });
       const historyRequests = allRequests
         .filter((request) => {
+          if (relatedWorkflow) {
+            return (
+              request.id === history.workflowReqId ||
+              request.workflowId === relatedWorkflow.id ||
+              relatedWorkflowReqIds.has(request.id)
+            );
+          }
+
           const requestTarget =
             WorkflowDbController.extractWorkflowTarget(request.data) ||
             WorkflowDbController.extractWorkflowTarget({
@@ -3559,6 +3648,7 @@ export class WorkflowDbController {
         companyId: resolvedCompanyId,
         status,
         AND: [
+          { orgStructure: { is: { status: 'ACTIVE' } } },
           ...(isGlobal
             ? []
             : [
@@ -3612,7 +3702,7 @@ export class WorkflowDbController {
       const autoGeneratedWorkflowIds = Array.from(
         autoGeneratedParentByWorkflowId.keys(),
       );
-      const activeWhere =
+      let activeWhere =
         autoGeneratedWorkflowIds.length > 0
           ? {
               ...activeBaseWhere,
@@ -3633,6 +3723,99 @@ export class WorkflowDbController {
               NOT: { id: { in: autoGeneratedWorkflowIds } },
             }
           : archiveBaseWhere;
+      const activeWorkflowCandidates = await prisma.workflow.findMany({
+        where: activeWhere,
+        select: {
+          id: true,
+          module: true,
+          subModule: true,
+          levelsHash: true,
+          orgStructure: { select: { nodePath: true } },
+        },
+      });
+      const activeWorkflowByIdentity = new Map<string, string>();
+      const activeWorkflowIds = new Set<string>();
+      activeWorkflowCandidates.forEach((workflow) => {
+        const nodePath = workflow.orgStructure?.nodePath;
+        if (!nodePath) return;
+        activeWorkflowIds.add(workflow.id);
+        activeWorkflowByIdentity.set(
+          [workflow.module, workflow.subModule, nodePath, workflow.levelsHash].join('|'),
+          workflow.id,
+        );
+      });
+      const pendingWorkflowRequestsForActive =
+        activeWorkflowCandidates.length > 0
+          ? await prisma.workflowReq.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                status: 'PENDING',
+                type: { in: ['UPDATE', 'INACTIVE', 'ARCHIVE'] },
+              },
+              select: {
+                id: true,
+                workflowId: true,
+                module: true,
+                subModule: true,
+                levelsHash: true,
+                data: true,
+              },
+            })
+          : [];
+      const effectivePendingWorkflowIdsForActive =
+        await WorkflowDbController.filterEffectivelyPendingRequestIds(
+          'workflow_req',
+          pendingWorkflowRequestsForActive.map((request) => request.id),
+        );
+      const pendingActiveWorkflowIds = new Set(
+        pendingWorkflowRequestsForActive
+          .filter((request) =>
+            effectivePendingWorkflowIdsForActive.has(request.id),
+          )
+          .flatMap((request) => {
+            const requestTarget =
+              WorkflowDbController.extractWorkflowTarget(request.data) || {
+                module: request.module,
+                subModule: request.subModule,
+                nodePath:
+                  (request.data as any)?.nodePath ||
+                  (request.data as any)?.target?.nodePath ||
+                  null,
+                levelsHash: request.levelsHash,
+              };
+            if (
+              requestTarget?.module &&
+              requestTarget?.subModule &&
+              requestTarget?.nodePath &&
+              requestTarget?.levelsHash
+            ) {
+              const workflowId = activeWorkflowByIdentity.get(
+                [
+                  requestTarget.module,
+                  requestTarget.subModule,
+                  requestTarget.nodePath,
+                  requestTarget.levelsHash,
+                ].join('|'),
+              );
+              if (workflowId) return [workflowId];
+            }
+
+            if (request.workflowId && activeWorkflowIds.has(request.workflowId)) {
+              return [request.workflowId];
+            }
+
+            return [];
+          }),
+      );
+      if (pendingActiveWorkflowIds.size > 0) {
+        activeWhere = {
+          ...activeWhere,
+          AND: [
+            ...((activeWhere as any).AND || []),
+            { id: { notIn: Array.from(pendingActiveWorkflowIds) } },
+          ],
+        };
+      }
       const visiblePendingRequestIds =
         await WorkflowDbController.getCurrentViewerRequestIds(
           userId,

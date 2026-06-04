@@ -59,6 +59,7 @@ export type WorkflowActiveLevel = {
 export type WorkflowLinkedOrgStructureItem = WorkflowOrgStructure;
 
 export type WorkflowActiveItem = {
+  id?: string;
   name: string;
   alias: string;
   workflowType: WorkflowType;
@@ -103,6 +104,8 @@ export type WorkflowInitiator = {
 };
 
 export type WorkflowPendingItem = {
+  id: string;
+  workflowId?: string | null;
   data: WorkflowPendingRequestData;
   type?: 'INITIATE' | 'UPDATE' | 'INACTIVE' | 'ACTIVE' | 'ARCHIVE';
   impact?: string | null;

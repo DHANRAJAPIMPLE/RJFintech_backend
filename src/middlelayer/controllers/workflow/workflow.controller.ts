@@ -60,6 +60,7 @@ export class WorkflowController {
     workflow: WorkflowActiveItem | WorkflowActiveInternalItem,
   ): WorkflowActiveItem {
     return {
+      id: workflow.id,
       name: workflow.name,
       alias: workflow.alias,
       workflowType:
@@ -90,6 +91,8 @@ export class WorkflowController {
     workflow: WorkflowPendingInternalItem,
   ): WorkflowPendingItem {
     return {
+      id: workflow.id,
+      workflowId: workflow.workflowId ?? null,
       data: {
         name: workflow.data.name,
         workflowType:
@@ -451,7 +454,7 @@ export class WorkflowController {
     next: NextFunction,
   ) {
     try {
-      const { levelsHash, module, subModule, nodePath } = zodParse(
+      const { id, levelsHash, module, subModule, nodePath } = zodParse(
         workflowHistorySchema,
         req.body,
       );
@@ -466,6 +469,7 @@ export class WorkflowController {
           `${config.backendUrl}/internal/workflow/history`,
           {
             companyId,
+            id,
             levelsHash,
             module,
             subModule,

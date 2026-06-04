@@ -33,10 +33,14 @@ type ManagerFilterOption = {
 };
 
 type CompanyNodeWorkflowOption = {
+  id?: string;
   levelsHash: string;
   name: string;
   alias: string;
   status?: string;
+  module?: string;
+  subModule?: string;
+  nodePath?: string;
 };
 
 type UserRequestType =
@@ -569,14 +573,6 @@ export class UserDbController {
     };
   }
 
-  private static getUserReplayBaseSnapshot(request: any): UserDataSnapshot | null {
-    if (request?.type === 'INITIATE') {
-      return UserDbController.extractUserSnapshot(request?.data);
-    }
-
-    return UserDbController.extractUserSnapshot(request?.oldData);
-  }
-
   private static applyUserRequestSnapshot(
     current: UserDataSnapshot,
     request: any,
@@ -655,10 +651,14 @@ export class UserDbController {
 
     for (const startRequest of sortedRequests) {
       if (startRequest.createdAt > selectedRequest.createdAt) continue;
-      const startSnapshot =
-        startRequest.type === 'INITIATE'
-          ? UserDbController.extractUserSnapshot(startRequest.data)
-          : UserDbController.getUserReplayBaseSnapshot(startRequest);
+      if (startRequest.type !== 'INITIATE') continue;
+
+      // Replay must begin from the original INITIATE snapshot. The stored
+      // `oldData` payload is a diff, so using it as a base would drop removed
+      // permissions and flatten the historical "old" state.
+      const startSnapshot = UserDbController.extractUserSnapshot(
+        startRequest.data,
+      );
       if (!startSnapshot) continue;
 
       let currentSnapshot: UserDataSnapshot | null = null;
@@ -833,6 +833,7 @@ export class UserDbController {
             companyId,
             nodePath: rawPermission.nodePath,
             nodeName: rawPermission.nodeName,
+            status: 'ACTIVE',
           },
         }),
       ]);
@@ -844,6 +845,86 @@ export class UserDbController {
         throw new AppError(`Node '${rawPermission.nodePath}' not found`, 400);
       }
     }
+  }
+
+  private static async expandInitiatePermissionsForChildNodes(
+    companyId: string,
+    permissions: any[],
+  ) {
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+      return [];
+    }
+
+    const explicitPermissionKeys = new Set(
+      permissions
+        .filter((permission) => !UserDbController.isPermissionRemoval(permission))
+        .map((permission) =>
+          [
+            permission?.roleName || '',
+            permission?.nodePath || '',
+          ].join('|'),
+        ),
+    );
+    const expandedPermissions: any[] = [];
+    const generatedPermissionKeys = new Set<string>();
+
+    for (const permission of permissions) {
+      expandedPermissions.push(permission);
+
+      if (
+        UserDbController.isPermissionRemoval(permission) ||
+        permission?.roleName === 'Corp Admin' ||
+        (permission?.accessCategory !== 'ALL_CHILD' &&
+          permission?.accessCategory !== 'IMMEDIATE_CHILD') ||
+        typeof permission?.nodePath !== 'string'
+      ) {
+        continue;
+      }
+
+      const children = await prisma.orgStructure.findMany({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+          ...(permission.accessCategory === 'ALL_CHILD'
+            ? { nodePath: { startsWith: `${permission.nodePath}.` } }
+            : { parent: { nodePath: permission.nodePath } }),
+        },
+        select: {
+          nodeName: true,
+          nodePath: true,
+          nodeType: true,
+        },
+        orderBy: { nodePath: 'asc' },
+      });
+
+      for (const child of children) {
+        const permissionKey = [
+          permission.roleName || '',
+          child.nodePath || '',
+        ].join('|');
+        if (
+          explicitPermissionKeys.has(permissionKey) ||
+          generatedPermissionKeys.has(permissionKey)
+        ) {
+          continue;
+        }
+
+        generatedPermissionKeys.add(permissionKey);
+        expandedPermissions.push({
+          ...permission,
+          accessType: 'SECONDARY',
+          nodeName: child.nodeName,
+          nodePath: child.nodePath,
+          nodeType: child.nodeType,
+          accessCategory:
+            permission.accessCategory === 'IMMEDIATE_CHILD'
+              ? 'NODE'
+              : 'ALL_CHILD',
+        });
+      }
+    }
+
+    return expandedPermissions;
   }
 
   private static async validateReportingManagerChange(
@@ -1089,12 +1170,25 @@ export class UserDbController {
       },
       orderBy: { createdAt: 'desc' },
       select: {
+        id: true,
         levelsHash: true,
         name: true,
         alias: true,
         status: true,
+        module: true,
+        subModule: true,
+        orgStructure: {
+          select: { nodePath: true },
+        },
       },
-    });
+    }).then((workflow) =>
+      workflow
+        ? {
+            ...workflow,
+            nodePath: workflow.orgStructure?.nodePath,
+          }
+        : null,
+    );
   }
 
   private static withDefaultWorkflowOption<
@@ -1109,6 +1203,161 @@ export class UserDbController {
           ? workflows
           : [defaultWorkflow],
     };
+  }
+
+  private static workflowIdentityKey(target: {
+    module?: string | null;
+    subModule?: string | null;
+    nodePath?: string | null;
+    levelsHash?: string | null;
+  }) {
+    if (
+      !target.module ||
+      !target.subModule ||
+      !target.nodePath ||
+      !target.levelsHash
+    ) {
+      return null;
+    }
+
+    return [
+      target.module,
+      target.subModule,
+      target.nodePath,
+      target.levelsHash,
+    ].join('|');
+  }
+
+  private static extractWorkflowRequestTarget(request: any) {
+    const data = request?.data as any;
+    const target = data?.target || {};
+    const nodePath =
+      target?.nodePath || data?.nodePath || data?.orgStructure?.nodePath || null;
+    const module = target?.module || data?.module || request?.module || null;
+    const subModule =
+      target?.subModule || data?.subModule || request?.subModule || null;
+    const levelsHash =
+      target?.levelsHash || data?.levelsHash || request?.levelsHash || null;
+
+    if (!module || !subModule || !nodePath || !levelsHash) {
+      return null;
+    }
+
+    return { module, subModule, nodePath, levelsHash };
+  }
+
+  private static extractOrgRequestTargetPath(request: any) {
+    const data = request?.data as any;
+    return (
+      data?.targetNodePath ||
+      data?.currentData?.nodePath ||
+      data?.nodePath ||
+      null
+    );
+  }
+
+  private static async getPendingOrgNodePathsForFetch(companyId: string) {
+    const pendingRequests = await prisma.orgStructureReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: ['UPDATE', 'INACTIVE', 'ARCHIVE'] },
+      },
+      select: { id: true, data: true },
+    });
+    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
+      'org_structure_req',
+      pendingRequests.map((request) => request.id),
+    );
+
+    return new Set(
+      pendingRequests
+        .filter((request) => effectiveIds.has(request.id))
+        .map((request) => UserDbController.extractOrgRequestTargetPath(request))
+        .filter((nodePath): nodePath is string => typeof nodePath === 'string'),
+    );
+  }
+
+  private static async getPendingWorkflowKeysForFetch(companyId: string) {
+    const activeWorkflows = await prisma.workflow.findMany({
+      where: { companyId, status: 'ACTIVE' },
+      select: {
+        id: true,
+        module: true,
+        subModule: true,
+        levelsHash: true,
+        orgStructure: { select: { nodePath: true, status: true } },
+      },
+    });
+    const activeWorkflowKeys = new Set(
+      activeWorkflows
+        .filter((workflow) => workflow.orgStructure?.status === 'ACTIVE')
+        .map((workflow) =>
+          UserDbController.workflowIdentityKey({
+            module: workflow.module,
+            subModule: workflow.subModule,
+            nodePath: workflow.orgStructure?.nodePath,
+            levelsHash: workflow.levelsHash,
+          }),
+        )
+        .filter((key): key is string => Boolean(key)),
+    );
+    const activeWorkflowKeyById = new Map(
+      activeWorkflows
+        .map((workflow) => [
+          workflow.id,
+          UserDbController.workflowIdentityKey({
+            module: workflow.module,
+            subModule: workflow.subModule,
+            nodePath: workflow.orgStructure?.nodePath,
+            levelsHash: workflow.levelsHash,
+          }),
+        ])
+        .filter((entry): entry is [string, string] => Boolean(entry[1])),
+    );
+
+    const pendingRequests = await prisma.workflowReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: ['UPDATE', 'INACTIVE', 'ARCHIVE'] },
+      },
+      select: {
+        id: true,
+        workflowId: true,
+        module: true,
+        subModule: true,
+        levelsHash: true,
+        data: true,
+      },
+    });
+    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
+      'workflow_req',
+      pendingRequests.map((request) => request.id),
+    );
+    const pendingKeys = new Set<string>();
+
+    pendingRequests
+      .filter((request) => effectiveIds.has(request.id))
+      .forEach((request) => {
+        const target = UserDbController.extractWorkflowRequestTarget(request);
+        const targetKey = target
+          ? UserDbController.workflowIdentityKey(target)
+          : null;
+        if (targetKey && activeWorkflowKeys.has(targetKey)) {
+          pendingKeys.add(targetKey);
+          return;
+        }
+
+        const workflowKey = request.workflowId
+          ? activeWorkflowKeyById.get(request.workflowId)
+          : null;
+        if (workflowKey && activeWorkflowKeys.has(workflowKey)) {
+          pendingKeys.add(workflowKey);
+        }
+      });
+
+    return pendingKeys;
   }
 
   private static normalizePageDirection(value: unknown): 'next' | 'prev' {
@@ -1404,6 +1653,21 @@ export class UserDbController {
     nodePath: string,
     levelsHash?: string | null,
   ) {
+    if (!levelsHash) return;
+
+    const selectedWorkflow = await prisma.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'USER_ACC',
+        status: 'ACTIVE',
+        levelsHash,
+        orgStructure: { nodePath },
+      },
+      include: { orgStructure: { select: { nodePath: true } } },
+    });
+    if (!selectedWorkflow) return;
+
     const pendingWorkflowRequests = await prisma.workflowReq.findMany({
       where: {
         companyId,
@@ -1444,14 +1708,10 @@ export class UserDbController {
         return false;
       }
 
-      // Only block the same node's user initiation; ancestor/root workflow
-      // modifications should not freeze every descendant node initiation.
-      const nodeConflict = targetNodePath === nodePath;
-      const workflowConflict = levelsHash
-        ? targetLevelsHash === levelsHash
-        : false;
-
-      return nodeConflict || workflowConflict;
+      return (
+        targetNodePath === selectedWorkflow.orgStructure?.nodePath &&
+        targetLevelsHash === selectedWorkflow.levelsHash
+      );
     });
 
     if (!blocking) return;
@@ -1470,17 +1730,18 @@ export class UserDbController {
     companyId: string,
     levelsHash?: string | null,
   ) {
+    // When no workflow is explicitly selected, do not apply the selected-workflow
+    // conflict check. This guard should only protect the workflow the user chose.
+    if (!levelsHash) return;
+
     const selectedWorkflow = await prisma.workflow.findFirst({
       where: {
         companyId,
         module: 'SYSTEM_ACCESS',
         subModule: 'USER_ACC',
         status: 'ACTIVE',
-        ...(levelsHash
-          ? { levelsHash }
-          : { name: { contains: 'DEFAULT' } }),
+        levelsHash,
       },
-      orderBy: levelsHash ? undefined : { createdAt: 'desc' },
       include: { orgStructure: { select: { nodePath: true } } },
     });
     if (!selectedWorkflow) return;
@@ -1873,6 +2134,7 @@ export class UserDbController {
                       nodeName: true,
                       nodePath: true,
                       nodeType: true,
+                      status: true,
                     },
                   },
                 },
@@ -1883,6 +2145,38 @@ export class UserDbController {
     const existingUserMap = new Map(
       existingUsers.map((user) => [String(user.email || '').toLowerCase(), user]),
     );
+    const incomingNodePaths = Array.from(
+      new Set(
+        pendingOnboardings
+          .flatMap((onb: any) => {
+            const permissions = (onb.data as any)?.permissions;
+            return Array.isArray(permissions)
+              ? permissions.map((permission: any) => permission?.nodePath)
+              : [];
+          })
+          .filter(
+            (nodePath: any): nodePath is string =>
+              typeof nodePath === 'string' && nodePath.trim().length > 0,
+          ),
+      ),
+    );
+    const activeIncomingNodes =
+      incomingNodePaths.length > 0
+        ? await prisma.orgStructure.findMany({
+            where: {
+              companyId: resolvedCompanyId,
+              status: 'ACTIVE',
+              nodePath: { in: incomingNodePaths },
+            },
+            select: { nodePath: true },
+          })
+        : [];
+    const activeIncomingNodePaths = new Set(
+      activeIncomingNodes.map((node) => node.nodePath),
+    );
+    const hasActivePermissionNode = (permission: any) =>
+      typeof permission?.nodePath !== 'string' ||
+      activeIncomingNodePaths.has(permission.nodePath);
 
     return pendingOnboardings.map((onb: any) => {
       const dataBlob = onb.data as any;
@@ -1918,6 +2212,7 @@ export class UserDbController {
           accessCategory: access.accessCategory || null,
           accessType: access.accessType || 'SECONDARY',
           isGlobalAccess: access.isGlobalAccess || false,
+          nodeStatus: access.orgStructure?.status || null,
         }),
       );
       const effectivePermissions =
@@ -1925,13 +2220,18 @@ export class UserDbController {
           ? isInitiate || existingPermissions.length === 0
             ? incomingPermissions.filter(
                 (permission: any) =>
-                  !UserDbController.isPermissionRemoval(permission),
+                  !UserDbController.isPermissionRemoval(permission) &&
+                  hasActivePermissionNode(permission),
               )
             : UserDbController.mergePermissionMutations(
-                existingPermissions,
-                incomingPermissions,
+                existingPermissions.filter(
+                  (permission: any) => permission.nodeStatus === 'ACTIVE',
+                ),
+                incomingPermissions.filter(hasActivePermissionNode),
               )
-          : existingPermissions;
+          : existingPermissions.filter(
+              (permission: any) => permission.nodeStatus === 'ACTIVE',
+            );
       const responseNewData =
         isInitiate || !dataBlob
           ? null
@@ -1939,7 +2239,8 @@ export class UserDbController {
               ...dataBlob,
               permissions: incomingPermissions.filter(
                 (permission: any) =>
-                  !UserDbController.isPermissionRemoval(permission),
+                  !UserDbController.isPermissionRemoval(permission) &&
+                  hasActivePermissionNode(permission),
               ),
             };
 
@@ -3462,6 +3763,10 @@ export class UserDbController {
         email,
       });
       const permissions = onboardingData.data?.permissions || [];
+      await UserDbController.validateChangedPermissions(
+        resolvedCompanyId,
+        Array.isArray(permissions) ? permissions : [],
+      );
       const requestedNodePaths = Array.from(
       new Set(
         (Array.isArray(permissions) ? permissions : [])
@@ -3523,6 +3828,15 @@ export class UserDbController {
       (id) => id !== initiatorId,
     );
       let notificationRecipients = onboardingData.eligibleApprovers;
+
+      onboardingData.data = {
+        ...(onboardingData.data || {}),
+        permissions:
+          await UserDbController.expandInitiatePermissionsForChildNodes(
+            resolvedCompanyId,
+            permissions,
+          ),
+      };
 
       const onboarding = await prisma.$transaction(async (tx) => {
       let groupId: string | null = null;
@@ -3931,6 +4245,7 @@ export class UserDbController {
             const rootNode = await tx.orgStructure.findFirst({
               where: {
                 companyId: company.id,
+                status: 'ACTIVE',
                 ...(globalPerm?.nodePath
                   ? { nodePath: globalPerm.nodePath }
                   : { nodeType: 'ROOT' }),
@@ -3981,8 +4296,8 @@ export class UserDbController {
                 where: { roleName },
               });
 
-              const node = await tx.orgStructure.findUnique({
-                where: { nodePath },
+              const node = await tx.orgStructure.findFirst({
+                where: { nodePath, companyId: company.id, status: 'ACTIVE' },
               });
 
               if (role && node) {
@@ -4069,40 +4384,6 @@ export class UserDbController {
                   }
                 }
 
-                // ─── B. DOWNWARD PROPAGATION: New user to existing child nodes ───
-                if (
-                  finalCategory === 'ALL_CHILD' ||
-                  finalCategory === 'IMMEDIATE_CHILD'
-                ) {
-                  const children = await tx.orgStructure.findMany({
-                    where: {
-                      companyId: company.id,
-                      ...(finalCategory === 'ALL_CHILD'
-                        ? { nodePath: { startsWith: `${nodePath}.` } }
-                        : { parent: { nodePath } }),
-                    },
-                  });
-
-                  if (children.length > 0) {
-                    const childAccesses = children.map((child) => ({
-                      userId: user.id,
-                      roleCode: role.roleCode,
-                      nodeId: child.id,
-                      accessType: 'SECONDARY' as any,
-                      accessCategory:
-                        finalCategory === 'IMMEDIATE_CHILD'
-                          ? ('NODE' as any)
-                          : ('ALL_CHILD' as any),
-                      companyId: company.id,
-                      isGlobalAccess: false,
-                    }));
-
-                    await tx.userAccess.createMany({
-                      data: childAccesses,
-                      skipDuplicates: true,
-                    });
-                  }
-                }
               }
             }
           }
@@ -4785,27 +5066,10 @@ export class UserDbController {
       const { userId, companyId, subCategory } = req.body;
       const workflowSubCategory =
         UserDbController.normalizeFilterText(subCategory);
-
-      const visibleWorkflowRequestIds = new Set(
-        await UserDbController.getCurrentApproverRequestIds(
-          'workflow_req',
-          userId,
-          companyId,
-        ),
-      );
-      if (userId) {
-        const initiatedWorkflowRequests = await prisma.workflowReq.findMany({
-          where: {
-            companyId,
-            status: 'PENDING',
-            initiatorId: userId,
-          },
-          select: { id: true },
-        });
-        initiatedWorkflowRequests.forEach((request) =>
-          visibleWorkflowRequestIds.add(request.id),
-        );
-      }
+      const [pendingOrgNodePaths, pendingWorkflowKeys] = await Promise.all([
+        UserDbController.getPendingOrgNodePathsForFetch(companyId),
+        UserDbController.getPendingWorkflowKeysForFetch(companyId),
+      ]);
 
       const userMapping = await prisma.userMapping.findUnique({
         where: {
@@ -4838,12 +5102,25 @@ export class UserDbController {
         companyId,
         workflowSubCategory,
       );
+      const visibleDefaultWorkflow =
+        defaultWorkflow &&
+        !pendingWorkflowKeys.has(
+          UserDbController.workflowIdentityKey({
+            module: defaultWorkflow.module,
+            subModule: defaultWorkflow.subModule,
+            nodePath: defaultWorkflow.nodePath,
+            levelsHash: defaultWorkflow.levelsHash,
+          }) || '',
+        )
+          ? defaultWorkflow
+          : null;
 
       if (globalAccess) {
         const companyNodes = await prisma.orgStructure.findMany({
           where: {
             companyId,
             status: 'ACTIVE',
+            nodePath: { notIn: Array.from(pendingOrgNodePaths) },
           },
           select: {
             nodeName: true,
@@ -4856,9 +5133,12 @@ export class UserDbController {
                   ? { subModule: workflowSubCategory }
                   : {}),
                 status: 'ACTIVE',
+                orgStructure: { status: 'ACTIVE' },
               },
               select: {
                 id: true,
+                module: true,
+                subModule: true,
                 levelsHash: true,
                 name: true,
                 alias: true,
@@ -4870,8 +5150,21 @@ export class UserDbController {
 
         const nodes = companyNodes.map((node) => {
           const nodeWithWorkflows = UserDbController.withDefaultWorkflowOption(
-            node,
-            defaultWorkflow,
+            {
+              ...node,
+              workflows: node.workflows.filter(
+                (workflow) =>
+                  !pendingWorkflowKeys.has(
+                    UserDbController.workflowIdentityKey({
+                      module: workflow.module,
+                      subModule: workflow.subModule,
+                      nodePath: node.nodePath,
+                      levelsHash: workflow.levelsHash,
+                    }) || '',
+                  ),
+              ),
+            },
+            visibleDefaultWorkflow,
           );
 
           return {
@@ -4881,9 +5174,7 @@ export class UserDbController {
               name: workflow.name,
               alias: workflow.alias,
               status: workflow.status,
-              isPending:
-                Boolean(workflow.id) &&
-                visibleWorkflowRequestIds.has(workflow.id),
+              isPending: false,
             })),
             roleName: globalAccess.role?.roleName || globalAccess.roleCode,
           };
@@ -4901,6 +5192,10 @@ export class UserDbController {
           where: {
             userId,
             companyId,
+            orgStructure: {
+              status: 'ACTIVE',
+              nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+            },
             role: {
               subCategory: workflowSubCategory,
             },
@@ -4921,9 +5216,12 @@ export class UserDbController {
               where: {
                 subModule: workflowSubCategory,
                 status: 'ACTIVE',
+                orgStructure: { status: 'ACTIVE' },
               },
               select: {
                 id: true,
+                module: true,
+                subModule: true,
                 levelsHash: true,
                 name: true,
                 alias: true,
@@ -4938,8 +5236,21 @@ export class UserDbController {
         const nodes = userAccesses
           .map((ua) => {
             const nodeWithWorkflows = UserDbController.withDefaultWorkflowOption(
-              ua.orgStructure,
-              defaultWorkflow,
+              {
+                ...ua.orgStructure,
+                workflows: ua.orgStructure.workflows.filter(
+                  (workflow) =>
+                    !pendingWorkflowKeys.has(
+                      UserDbController.workflowIdentityKey({
+                        module: workflow.module,
+                        subModule: workflow.subModule,
+                        nodePath: ua.orgStructure.nodePath,
+                        levelsHash: workflow.levelsHash,
+                      }) || '',
+                    ),
+                ),
+              },
+              visibleDefaultWorkflow,
             );
 
             return {
@@ -4949,9 +5260,7 @@ export class UserDbController {
                 name: workflow.name,
                 alias: workflow.alias,
                 status: workflow.status,
-                isPending:
-                  Boolean(workflow.id) &&
-                  visibleWorkflowRequestIds.has(workflow.id),
+                isPending: false,
               })),
               roleName: ua.role?.roleName || ua.roleCode,
             };
@@ -4990,6 +5299,7 @@ export class UserDbController {
         where: {
           orgStructure: {
             nodePath: nodePath,
+            status: 'ACTIVE',
           },
           ...(companyId ? { companyId } : {}),
         },

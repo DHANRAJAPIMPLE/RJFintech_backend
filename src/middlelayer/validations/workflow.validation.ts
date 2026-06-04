@@ -144,6 +144,7 @@ export const workflowActionSchema = z
 
 export const workflowHistorySchema = z
   .object({
+    id: z.string().min(1, 'Workflow id is required').optional(),
     levelsHash: z.string().min(1, 'Levels hash is required').optional(),
     module: z.string().optional(),
     subModule: z.string().optional(),

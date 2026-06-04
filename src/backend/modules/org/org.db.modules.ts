@@ -837,6 +837,7 @@ export class OrgStructureDbController {
     return client.orgStructure.findMany({
       where: {
         companyId,
+        status: 'ACTIVE',
         OR: [{ nodePath }, { nodePath: { startsWith: `${nodePath}.` } }],
       },
       orderBy: { nodePath: 'asc' },
@@ -1244,8 +1245,8 @@ export class OrgStructureDbController {
    */
   static async getOrgNodeByPath(req: Request, res: Response) {
     const { nodePath } = req.body;
-    const node = await prisma.orgStructure.findUnique({
-      where: { nodePath },
+    const node = await prisma.orgStructure.findFirst({
+      where: { nodePath, status: 'ACTIVE' },
     });
     res.json(node);
   }
@@ -1257,7 +1258,7 @@ export class OrgStructureDbController {
     const { nodePath, companyId } = req.body;
 
     const node = await prisma.orgStructure.findFirst({
-      where: { nodePath, companyId },
+      where: { nodePath, companyId, status: 'ACTIVE' },
     });
     res.json(node);
   }
@@ -2504,7 +2505,7 @@ export class OrgStructureDbController {
         new Set(pendingRequests.map((req) => req.workflowId).filter(Boolean)),
       ) as string[];
       const workflowDetails = await prisma.workflow.findMany({
-        where: { id: { in: workflowIds } },
+        where: { id: { in: workflowIds }, status: 'ACTIVE' },
         select: { id: true, name: true, alias: true },
       });
       const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
@@ -2549,14 +2550,16 @@ export class OrgStructureDbController {
       );
 
       // 4. Remove internal UUIDs and format for the tree UI
-      const safeNodes = nodes.map((node) => ({
-        id: node.id,
-        nodeId: node.id,
-        nodeName: node.nodeName,
-        nodeType: node.nodeType,
-        nodePath: node.nodePath,
-        isPending: pendingByNodePath.has(node.nodePath),
-      }));
+      const safeNodes = nodes
+        .filter((node) => !pendingByNodePath.has(node.nodePath))
+        .map((node) => ({
+          id: node.id,
+          nodeId: node.id,
+          nodeName: node.nodeName,
+          nodeType: node.nodeType,
+          nodePath: node.nodePath,
+          isPending: false,
+        }));
 
       res.status(200).json({
         message: 'Organization structure fetched successfully!',
