@@ -404,8 +404,6 @@ model WorkflowReq {
   companyId         String               @map("company_id")
   nodeId            String               @map("node_id")
   module            String
-  workflowReq       String?              @map("workflow_req")
-  targetWorkflowReq String?              @map("target_workflow_req")
   type              RequestType          @default(INITIATE)
   impact            String               @default("NO_ISSUES")
   subModule         String               @map("sub_module")

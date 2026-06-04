@@ -185,6 +185,54 @@ export class UserDbController {
     return name || email || fallback;
   }
 
+  private static permissionSummaryKey(permission: any) {
+    const roleName =
+      typeof permission?.roleName === 'string' ? permission.roleName.trim() : '';
+    const nodePath =
+      typeof permission?.nodePath === 'string' ? permission.nodePath.trim() : '';
+    return `${roleName}|${nodePath}`;
+  }
+
+  private static formatInitiatePermissionSummary(
+    originalPermissions: any[],
+    expandedPermissions: any[],
+  ) {
+    if (!Array.isArray(expandedPermissions) || expandedPermissions.length === 0) {
+      return null;
+    }
+
+    const originalKeys = new Set(
+      originalPermissions.map((permission) =>
+        UserDbController.permissionSummaryKey(permission),
+      ),
+    );
+    const generatedPermissions = expandedPermissions.filter(
+      (permission) =>
+        !originalKeys.has(UserDbController.permissionSummaryKey(permission)),
+    );
+
+    if (generatedPermissions.length === 0) {
+      return `${expandedPermissions.length} role assignment(s)`;
+    }
+
+    const generatedRoleNames = Array.from(
+      new Set(
+        generatedPermissions
+          .map((permission) =>
+            typeof permission?.roleName === 'string'
+              ? permission.roleName.trim()
+              : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+    const preview = generatedRoleNames.slice(0, 3).join(', ');
+    const remaining = Math.max(generatedRoleNames.length - 3, 0);
+    const remainingText = remaining > 0 ? ` and ${remaining} more` : '';
+
+    return `${expandedPermissions.length} role assignment(s), including ${generatedPermissions.length} auto-generated role assignment(s)${preview ? `: ${preview}${remainingText}` : ''}`;
+  }
+
   private static getUserNotificationType(
     type: string | null | undefined,
     status: string | null | undefined,
@@ -648,6 +696,12 @@ export class UserDbController {
 
     const selectedTargetEmail =
       UserDbController.extractUserTargetEmail(selectedRequest.data) || null;
+    if (selectedRequest.type === 'INITIATE') {
+      return {
+        oldData: null,
+        newData: UserDbController.extractUserSnapshot(selectedRequest.data),
+      };
+    }
 
     for (const startRequest of sortedRequests) {
       if (startRequest.createdAt > selectedRequest.createdAt) continue;
@@ -660,6 +714,12 @@ export class UserDbController {
         startRequest.data,
       );
       if (!startSnapshot) continue;
+      const startTargetEmail =
+        UserDbController.extractUserTargetEmail(startRequest.data) ||
+        startSnapshot.basicDetails.email.toLowerCase();
+      if (selectedTargetEmail && startTargetEmail !== selectedTargetEmail) {
+        continue;
+      }
 
       let currentSnapshot: UserDataSnapshot | null = null;
 
@@ -3763,6 +3823,9 @@ export class UserDbController {
         email,
       });
       const permissions = onboardingData.data?.permissions || [];
+      const originalPermissions = Array.isArray(permissions)
+        ? [...permissions]
+        : [];
       await UserDbController.validateChangedPermissions(
         resolvedCompanyId,
         Array.isArray(permissions) ? permissions : [],
@@ -3837,6 +3900,11 @@ export class UserDbController {
             permissions,
           ),
       };
+      const expandedInitiatePermissions = Array.isArray(
+        onboardingData.data?.permissions,
+      )
+        ? [...onboardingData.data.permissions]
+        : [];
 
       const onboarding = await prisma.$transaction(async (tx) => {
       let groupId: string | null = null;
@@ -3931,6 +3999,23 @@ export class UserDbController {
         await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
       ),
       includeCreatedBy: true,
+      message: (() => {
+        const summary = UserDbController.formatInitiatePermissionSummary(
+          originalPermissions,
+          expandedInitiatePermissions,
+        );
+        return summary
+          ? `${UserDbController.getUserNotificationContent(
+              'INITIATE',
+              'initiated',
+              userReferenceName,
+            ).message} with ${summary}`
+          : UserDbController.getUserNotificationContent(
+              'INITIATE',
+              'initiated',
+              userReferenceName,
+            ).message;
+      })(),
     });
       res.status(201).json(onboarding);
     } catch (error) {
