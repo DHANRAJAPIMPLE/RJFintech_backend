@@ -15,7 +15,6 @@ export type UserCompanyNodeWorkflow = {
   name: string;
   alias: string;
   status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
-  isPending: boolean;
 };
 
 export type UserCompanyNode = {

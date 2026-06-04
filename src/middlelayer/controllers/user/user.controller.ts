@@ -844,7 +844,6 @@ export class UserController {
           name: workflow.name,
           alias: workflow.alias,
           status: workflow.status,
-          isPending: workflow.isPending ?? false,
         })),
         roleName: node.roleName || node.roleCode || '',
       }));
