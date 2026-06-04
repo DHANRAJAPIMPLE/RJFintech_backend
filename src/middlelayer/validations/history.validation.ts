@@ -13,7 +13,7 @@ const normalizedHistoryTypeSchema = z.preprocess(
 
 export const historyDetailSchema = z
   .object({
-    id: z.string().uuid('Invalid history ID'),
+    id: z.string().trim().min(1, 'History ID is required'),
     type: normalizedHistoryTypeSchema,
   })
   .strict();

@@ -536,6 +536,14 @@ export class WorkflowDbController {
     };
   }
 
+  private static normalizeHistoryLookupId(value: unknown) {
+    if (typeof value !== 'string') return value;
+    const pendingMatch = value.match(
+      /^pending-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-\d+)?$/i,
+    );
+    return pendingMatch?.[1] || value;
+  }
+
   private static extractWorkflowSnapshot(data: any, fallback: any = {}) {
     const source =
       WorkflowDbController.normalizeWorkflowSnapshotDataSource(data);
@@ -562,7 +570,7 @@ export class WorkflowDbController {
     }
 
     return {
-      name: source?.name || '',
+      name: source?.name || fallback?.name || '',
       alias: source?.alias || fallback?.alias || '',
       workflowType: source?.workflowType || fallback?.workflowType || 'NODE',
       module,
@@ -639,10 +647,47 @@ export class WorkflowDbController {
       WorkflowDbController.extractWorkflowSnapshot(requestData, fallback);
     if (!nextSnapshot) return null;
 
+    const patchedSnapshot = mergeJsonData(cloneJson(nextSnapshot), oldPatch);
+
     return WorkflowDbController.extractWorkflowSnapshot(
-      mergeJsonData(cloneJson(nextSnapshot), oldPatch),
+      WorkflowDbController.repairWorkflowSnapshotWithFallback(
+        patchedSnapshot,
+        fallback,
+        oldPatch,
+      ),
       fallback,
     );
+  }
+
+  private static repairWorkflowSnapshotWithFallback(
+    snapshot: any,
+    fallback: any = {},
+    explicitPatch: any = {},
+  ) {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      return snapshot;
+    }
+
+    const repaired = cloneJson(snapshot);
+    const hasEmptyLevels =
+      !repaired.levels ||
+      (typeof repaired.levels === 'object' &&
+        !Array.isArray(repaired.levels) &&
+        Object.keys(repaired.levels).length === 0);
+    if (fallback?.levels && hasEmptyLevels) {
+      repaired.levels = cloneJson(fallback.levels);
+    }
+    if (fallback?.workflowType && !explicitPatch?.workflowType) {
+      repaired.workflowType = fallback.workflowType;
+    }
+    if (fallback?.alias && !repaired.alias) {
+      repaired.alias = fallback.alias;
+    }
+    if (fallback?.name && !repaired.name) {
+      repaired.name = fallback.name;
+    }
+
+    return repaired;
   }
 
   private static buildWorkflowRequestSnapshotFallback(
@@ -651,10 +696,11 @@ export class WorkflowDbController {
   ) {
     const requestData = (request?.data as any) || {};
     return {
-      alias: request?.alias || relatedWorkflow?.alias || null,
-      module: request?.module || relatedWorkflow?.module || null,
-      subModule: request?.subModule || relatedWorkflow?.subModule || null,
-      levelsHash: request?.levelsHash || relatedWorkflow?.levelsHash || null,
+      alias: relatedWorkflow?.alias || request?.alias || null,
+      name: relatedWorkflow?.name || requestData?.target?.name || null,
+      module: relatedWorkflow?.module || request?.module || null,
+      subModule: relatedWorkflow?.subModule || request?.subModule || null,
+      levelsHash: relatedWorkflow?.levelsHash || request?.levelsHash || null,
       nodePath:
         requestData?.nodePath ||
         requestData?.target?.nodePath ||
@@ -3133,24 +3179,91 @@ export class WorkflowDbController {
         throw new AppError('companyCode or companyId is required', 400);
       }
 
-      const history = await prisma.workflowReqHistory.findFirst({
+      const historyLookupId = WorkflowDbController.normalizeHistoryLookupId(id);
+      const approverLookup = await prisma.workflowApprover.findFirst({
         where: {
-          id,
+          id: historyLookupId as string,
+          reqTable: 'workflow_req',
+        },
+        select: { reqId: true, level: true },
+      });
+      const requestLookupId = approverLookup?.reqId || historyLookupId;
+      const historyInclude = {
+        user: {
+          include: {
+            userAccesses: true,
+          },
+        },
+        workflowReq: true,
+        company: { select: { companyCode: true, id: true } },
+      } as const;
+      let history: any = await prisma.workflowReqHistory.findFirst({
+        where: {
+          id: historyLookupId as string,
           companyId: resolvedCompanyId,
         },
-        include: {
-          user: {
-            include: {
-              userAccesses: true,
-            },
-          },
-          workflowReq: true,
-          company: { select: { companyCode: true, id: true } },
-        },
+        include: historyInclude,
       });
+      if (!history) {
+        history = await prisma.workflowReqHistory.findFirst({
+          where: {
+            workflowReqId: requestLookupId as string,
+            companyId: resolvedCompanyId,
+            event: 'INITIATE',
+          },
+          orderBy: { createdAt: 'asc' },
+          include: historyInclude,
+        });
+      }
+      if (!history) {
+        history = await prisma.workflowReqHistory.findFirst({
+          where: {
+            workflowReqId: requestLookupId as string,
+            companyId: resolvedCompanyId,
+          },
+          orderBy: { createdAt: 'asc' },
+          include: historyInclude,
+        });
+      }
 
       if (!history) {
-        throw new AppError('Workflow history not found', 404);
+        const workflowReq = await prisma.workflowReq.findFirst({
+          where: {
+            id: requestLookupId as string,
+            companyId: resolvedCompanyId,
+          },
+          include: {
+            company: { select: { companyCode: true, id: true } },
+          },
+        });
+
+        if (!workflowReq) {
+          throw new AppError('Workflow history not found', 404);
+        }
+
+        const eventUserId = workflowReq.initiatorId || viewerUserId || '';
+        const eventUser = eventUserId
+          ? await prisma.user.findUnique({
+              where: { id: eventUserId },
+              include: {
+                userAccesses: true,
+              },
+            })
+          : null;
+
+        history = {
+          id: workflowReq.id,
+          workflowReqId: workflowReq.id,
+          companyId: workflowReq.companyId,
+          level: approverLookup?.level || null,
+          event: 'INITIATE',
+          eventUserId,
+          createdAt: workflowReq.createdAt,
+          remarks: workflowReq.approvalRemark,
+          workflowReq,
+          company: workflowReq.company,
+          user: eventUser,
+        } as any;
       }
 
       const requestData = (history.workflowReq?.data as any) || null;
@@ -3159,7 +3272,40 @@ export class WorkflowDbController {
         history.event === 'INITIATE' && requestType !== 'INITIATE'
           ? 'MODIFY'
           : history.event;
-      const relatedWorkflow = history.workflowReqId
+      const targetInfo =
+        WorkflowDbController.extractWorkflowTarget(requestData) ||
+        WorkflowDbController.extractWorkflowTarget({
+          target: {
+            module: history.workflowReq?.module,
+            subModule: history.workflowReq?.subModule,
+            nodePath: (requestData?.target?.nodePath as string | undefined) ||
+              requestData?.nodePath ||
+              null,
+            levelsHash: history.workflowReq?.levelsHash,
+          },
+        });
+      const targetWorkflow = targetInfo
+        ? await prisma.workflow.findFirst({
+            where: {
+              companyId: resolvedCompanyId,
+              module: targetInfo.module,
+              subModule: targetInfo.subModule,
+              levelsHash: targetInfo.levelsHash,
+              orgStructure: { nodePath: targetInfo.nodePath },
+            } as any,
+            include: {
+              levels: { orderBy: { level: 'asc' } },
+              orgStructure: {
+                select: {
+                  nodePath: true,
+                  nodeName: true,
+                  nodeType: true,
+                },
+              },
+            },
+          })
+        : null;
+      const linkedWorkflow = history.workflowReqId
         ? await prisma.workflow.findFirst({
             where: {
               companyId: resolvedCompanyId,
@@ -3177,6 +3323,7 @@ export class WorkflowDbController {
             },
           })
         : null;
+      const relatedWorkflow = targetWorkflow || linkedWorkflow;
       const selectedRequestFallback =
         WorkflowDbController.buildWorkflowRequestSnapshotFallback(
           history.workflowReq,
@@ -3198,18 +3345,6 @@ export class WorkflowDbController {
           nodeId: true,
         },
       });
-      const targetInfo =
-        WorkflowDbController.extractWorkflowTarget(requestData) ||
-        WorkflowDbController.extractWorkflowTarget({
-          target: {
-            module: history.workflowReq?.module,
-            subModule: history.workflowReq?.subModule,
-            nodePath: (requestData?.target?.nodePath as string | undefined) ||
-              requestData?.nodePath ||
-              null,
-            levelsHash: history.workflowReq?.levelsHash,
-          },
-        });
       const historyRequests = allRequests
         .filter((request) => {
           const requestTarget =
@@ -3299,6 +3434,13 @@ export class WorkflowDbController {
           requestData,
           history.workflowReq?.oldData,
           selectedRequestFallback,
+        );
+      }
+      if (oldData && requestType !== 'INITIATE') {
+        oldData = WorkflowDbController.repairWorkflowSnapshotWithFallback(
+          oldData,
+          selectedRequestFallback,
+          history.workflowReq?.oldData,
         );
       }
 
@@ -3735,8 +3877,9 @@ export class WorkflowDbController {
               effectivePendingWorkflowRequestIds.has(request.id),
             )
             .flatMap((request) => {
-              const requestTarget =
-                WorkflowDbController.extractWorkflowTarget(request.data) || {
+              const explicitRequestTarget =
+                WorkflowDbController.extractWorkflowTarget(request.data);
+              const requestTarget = explicitRequestTarget || {
                   module: request.module,
                   subModule: request.subModule,
                   nodePath:
@@ -3763,6 +3906,10 @@ export class WorkflowDbController {
               const workflowId = visibleWorkflowByIdentity.get(requestIdentity);
               if (workflowId) {
                 return [workflowId];
+              }
+
+              if (explicitRequestTarget) {
+                return [];
               }
 
               if (
