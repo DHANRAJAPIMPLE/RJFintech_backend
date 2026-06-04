@@ -281,6 +281,7 @@ export class WorkflowDbController {
   ) {
     const rowsById = new Map(allRows.map((row) => [row.id, row]));
     const childrenByParentId = new Map<string, string[]>();
+    const pendingTreeIds = new Set<string>();
 
     allRows.forEach((row) => {
       const parentId = parentByWorkflowId.get(row.id);
@@ -288,6 +289,32 @@ export class WorkflowDbController {
       const children = childrenByParentId.get(parentId) || [];
       children.push(row.id);
       childrenByParentId.set(parentId, children);
+    });
+
+    const pendingStatusCache = new Map<string, boolean>();
+    const resolvePendingStatus = (rowId: string, visiting = new Set<string>()) => {
+      const cached = pendingStatusCache.get(rowId);
+      if (cached !== undefined) return cached;
+      if (visiting.has(rowId)) return pendingWorkflowIds.has(rowId);
+
+      visiting.add(rowId);
+      const childIds = childrenByParentId.get(rowId) || [];
+      const hasPendingChild = childIds.some((childId) => {
+        if (!rowsById.has(childId)) return false;
+        return resolvePendingStatus(childId, visiting);
+      });
+      visiting.delete(rowId);
+
+      const hasPending = pendingWorkflowIds.has(rowId) || hasPendingChild;
+      pendingStatusCache.set(rowId, hasPending);
+      if (hasPending) {
+        pendingTreeIds.add(rowId);
+      }
+      return hasPending;
+    };
+
+    allRows.forEach((row) => {
+      resolvePendingStatus(row.id);
     });
 
     const sortIds = (ids: string[]) =>
@@ -316,7 +343,7 @@ export class WorkflowDbController {
         visited.add(childRow.id);
         descendants.push({
           ...childRow,
-          isPending: pendingWorkflowIds.has(childRow.id),
+          isPending: pendingTreeIds.has(childRow.id),
           pendingRequest: childRow.pendingRequest ?? null,
         });
         descendants.push(...collectDescendants(childRow, visited));
@@ -338,7 +365,7 @@ export class WorkflowDbController {
 
       return {
         ...restRow,
-        isPending: pendingWorkflowIds.has(row.id),
+        isPending: pendingTreeIds.has(row.id),
         linkedOrgStructure,
       };
     };
@@ -3667,17 +3694,34 @@ export class WorkflowDbController {
                 : archiveBaseWhere,
           select: activeSelect,
         });
+        const visibleWorkflowIds = new Set(
+          visibleWorkflowRows.map((row) => row.id),
+        );
+        const visibleWorkflowByIdentity = new Map<string, string>();
+        visibleWorkflowRows.forEach((row) => {
+          const nodePath = row.orgStructure?.nodePath || null;
+          if (!nodePath) return;
+          visibleWorkflowByIdentity.set(
+            [row.module, row.subModule, nodePath, row.levelsHash].join('|'),
+            row.id,
+          );
+        });
         const pendingWorkflowRequests =
           visibleWorkflowRows.length > 0
             ? await prisma.workflowReq.findMany({
                 where: {
                   companyId: resolvedCompanyId,
                   status: 'PENDING',
-                  workflowId: {
-                    in: visibleWorkflowRows.map((row) => row.id),
-                  },
                 },
-                select: { id: true, workflowId: true },
+                select: {
+                  id: true,
+                  workflowId: true,
+                  type: true,
+                  module: true,
+                  subModule: true,
+                  levelsHash: true,
+                  data: true,
+                },
               })
             : [];
         const effectivePendingWorkflowRequestIds =
@@ -3690,7 +3734,46 @@ export class WorkflowDbController {
             .filter((request) =>
               effectivePendingWorkflowRequestIds.has(request.id),
             )
-            .map((request) => request.workflowId)
+            .flatMap((request) => {
+              const requestTarget =
+                WorkflowDbController.extractWorkflowTarget(request.data) || {
+                  module: request.module,
+                  subModule: request.subModule,
+                  nodePath:
+                    (request.data as any)?.nodePath ||
+                    (request.data as any)?.target?.nodePath ||
+                    null,
+                  levelsHash: request.levelsHash,
+                };
+              if (
+                !requestTarget?.module ||
+                !requestTarget?.subModule ||
+                !requestTarget?.nodePath ||
+                !requestTarget?.levelsHash
+              ) {
+                return [];
+              }
+
+              const requestIdentity = [
+                requestTarget.module,
+                requestTarget.subModule,
+                requestTarget.nodePath,
+                requestTarget.levelsHash,
+              ].join('|');
+              const workflowId = visibleWorkflowByIdentity.get(requestIdentity);
+              if (workflowId) {
+                return [workflowId];
+              }
+
+              if (
+                request.workflowId &&
+                visibleWorkflowIds.has(request.workflowId)
+              ) {
+                return [request.workflowId];
+              }
+
+              return [];
+            })
             .filter((workflowId): workflowId is string => !!workflowId),
         );
         const activeRowsWithPending = WorkflowDbController.buildWorkflowTree(
