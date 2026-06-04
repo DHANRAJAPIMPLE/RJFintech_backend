@@ -316,12 +316,14 @@ export class WorkflowDbController {
     message: string,
     referenceName: string,
     referenceId?: string | null,
+    approverUserIds: string[] = [],
   ) {
     const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
       companyId,
     );
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
+      approverUserIds,
       corpAdminUserIds,
     );
     await NotificationService.createRequestNotification({
@@ -334,6 +336,10 @@ export class WorkflowDbController {
       referenceName,
       createdBy: initiatorId,
       recipientUserIds: recipients,
+      requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+        initiatorId,
+        approverUserIds,
+      ),
       includeCreatedBy: true,
       isPending: false,
     }).catch(() => undefined);
@@ -2040,13 +2046,18 @@ export class WorkflowDbController {
           });
           return res.status(201).json(request);
         } catch (error) {
-          await prisma.userAccess.findMany({
+          const globalAccesses = await prisma.userAccess.findMany({
             where: { companyId: resolvedCompanyId, isGlobalAccess: true },
             select: { userId: true },
           });
           const recipients = NotificationService.mergeRecipientUserIds(
             initiatorId,
-            [],
+            req.body?.eligibleApprovers,
+            globalAccesses.map((access) => access.userId),
+          );
+          const requiredRecipients = NotificationService.mergeRecipientUserIds(
+            initiatorId,
+            req.body?.eligibleApprovers,
           );
           await NotificationService.createRequestNotification({
             companyId: resolvedCompanyId,
@@ -2061,6 +2072,7 @@ export class WorkflowDbController {
             referenceName: data?.name || 'workflow modification',
             createdBy: initiatorId,
             recipientUserIds: recipients,
+            requiredRecipientUserIds: requiredRecipients,
             includeCreatedBy: true,
           }).catch(() => undefined);
           throw error;
@@ -2244,6 +2256,9 @@ export class WorkflowDbController {
           error instanceof Error ? error.message : 'Unexpected error',
           String(refName),
           req.body?.target?.levelsHash || null,
+          NotificationService.mergeRecipientUserIds(
+            req.body?.eligibleApprovers,
+          ),
         );
       }
       next(error);
@@ -2696,6 +2711,9 @@ export class WorkflowDbController {
           notificationRecipientUserIds,
           corpAdminUserIds,
         ),
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          requestInitiatorId,
+        ),
         isPending: result?.status === 'PARTIAL_APPROVED',
       });
 
@@ -2732,11 +2750,17 @@ export class WorkflowDbController {
         typeof companyId === 'string' &&
         typeof requestId === 'string'
       ) {
+        const requestApproverIds =
+          await NotificationService.getRequestApproverIds(
+            requestId,
+            'workflow_req',
+          );
         const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
           companyId,
         );
         const recipients = NotificationService.mergeRecipientUserIds(
           initiatorId,
+          requestApproverIds,
           corpAdminUserIds,
         );
         await NotificationService.createRequestNotification({
@@ -2755,6 +2779,10 @@ export class WorkflowDbController {
             'workflow',
           createdBy: initiatorId,
           recipientUserIds: recipients,
+          requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+            initiatorId,
+            requestApproverIds,
+          ),
           includeCreatedBy: true,
           isPending: false,
         });

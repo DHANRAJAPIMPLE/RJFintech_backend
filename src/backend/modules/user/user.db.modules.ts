@@ -112,12 +112,14 @@ export class UserDbController {
     initiatorId: string,
     message: string,
     referenceName: string,
+    approverUserIds: string[] = [],
   ) {
     const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
       companyId,
     );
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
+      approverUserIds,
       corpAdminUserIds,
     );
     await NotificationService.createRequestNotification({
@@ -129,6 +131,10 @@ export class UserDbController {
       referenceName,
       createdBy: initiatorId,
       recipientUserIds: recipients,
+      requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+        initiatorId,
+        approverUserIds,
+      ),
       includeCreatedBy: true,
       isPending: false,
     });
@@ -3918,6 +3924,9 @@ export class UserDbController {
               initiatorId,
               error instanceof Error ? error.message : 'Unexpected error',
               String(targetEmail || 'user'),
+              NotificationService.mergeRecipientUserIds(
+                req.body?.eligibleApprovers,
+              ),
             );
           }
           throw error;
@@ -4172,6 +4181,9 @@ export class UserDbController {
           initiatorId,
           error instanceof Error ? error.message : 'Unexpected error',
           String(targetEmail || 'user'),
+          NotificationService.mergeRecipientUserIds(
+            req.body?.eligibleApprovers,
+          ),
         );
       }
       throw error;
@@ -4735,6 +4747,9 @@ export class UserDbController {
           notificationRecipientUserIds,
           corpAdminUserIds,
         ),
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          requestInitiatorId,
+        ),
         isPending: result?.status === 'PARTIAL_APPROVED',
       });
 
@@ -5214,11 +5229,17 @@ export class UserDbController {
             requestId,
             'user_onboarding',
           );
+        const requestApproverIds =
+          await NotificationService.getRequestApproverIds(
+            requestId,
+            'user_onboarding',
+          );
         const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
           resolvedCompanyId,
         );
         const recipients = NotificationService.mergeRecipientUserIds(
           requestInitiatorId || initiatorId,
+          requestApproverIds,
           corpAdminUserIds,
         );
 
@@ -5237,6 +5258,10 @@ export class UserDbController {
             'user',
           createdBy: requestInitiatorId || initiatorId,
           recipientUserIds: recipients,
+          requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+            requestInitiatorId || initiatorId,
+            requestApproverIds,
+          ),
           includeCreatedBy: true,
           isPending: false,
         });

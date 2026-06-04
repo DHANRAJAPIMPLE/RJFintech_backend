@@ -59,12 +59,14 @@ export class OrgStructureDbController {
     initiatorId: string,
     message: string,
     referenceName: string,
+    approverUserIds: string[] = [],
   ) {
     const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
       companyId,
     );
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
+      approverUserIds,
       corpAdminUserIds,
     );
     await NotificationService.createRequestNotification({
@@ -76,6 +78,10 @@ export class OrgStructureDbController {
       referenceName,
       createdBy: initiatorId,
       recipientUserIds: recipients,
+      requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+        initiatorId,
+        approverUserIds,
+      ),
       includeCreatedBy: true,
       isPending: false,
     });
@@ -1235,6 +1241,9 @@ export class OrgStructureDbController {
           initiatorId,
           error instanceof Error ? error.message : 'Unexpected error',
           String(targetNodePath || 'organization node'),
+          NotificationService.mergeRecipientUserIds(
+            req.body?.eligibleApprovers,
+          ),
         );
       }
       next(error);
@@ -1792,6 +1801,9 @@ export class OrgStructureDbController {
             notificationRecipientUserIds,
             corpAdminUserIds,
           ),
+          requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+            requestInitiatorId,
+          ),
           includeCreatedBy: true,
           isPending: result?.status === 'PARTIAL_APPROVED',
         });
@@ -1862,6 +1874,16 @@ export class OrgStructureDbController {
         typeof initiatorId === 'string' &&
         typeof resolvedCompanyId === 'string'
       ) {
+        const requestId = req.body?.id;
+        const requestApproverIds =
+          typeof requestId === 'string'
+            ? await NotificationService.getRequestApproverIds(
+                requestId,
+                'org_structure_req',
+              )
+            : NotificationService.mergeRecipientUserIds(
+                req.body?.eligibleApprovers,
+              );
         await OrgStructureDbController.notifyConflict(
           resolvedCompanyId,
           initiatorId,
@@ -1871,6 +1893,7 @@ export class OrgStructureDbController {
               req.body?.data?.newNodeName ||
               'organization',
           ),
+          requestApproverIds,
         );
       }
       next(error);

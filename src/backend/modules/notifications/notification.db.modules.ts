@@ -32,6 +32,7 @@ type CreateNotificationInput = {
   referenceName?: string | null;
   createdBy: string;
   recipientUserIds?: string[];
+  requiredRecipientUserIds?: string[];
   includeCreatedBy?: boolean;
   isPending?: boolean;
 };
@@ -520,6 +521,18 @@ export class NotificationService {
     );
   }
 
+  private static async filterExistingUserIds(userIds: string[]) {
+    const uniqueUserIds = NotificationService.unique(userIds);
+    if (uniqueUserIds.length === 0) return [];
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: uniqueUserIds } },
+      select: { id: true },
+    });
+
+    return NotificationService.unique(users.map((user) => user.id));
+  }
+
   private static async getSaasAdminUserIds() {
     const accesses = await prisma.userAccess.findMany({
       where: {
@@ -578,11 +591,23 @@ export class NotificationService {
   private static getHistoryConfig(reqTable: string) {
     switch (reqTable) {
       case 'user_onboarding':
-        return { table: 'userHistory', field: 'reqId' };
+        return {
+          table: 'userHistory',
+          field: 'reqId',
+          requestTable: 'userOnboarding',
+        };
       case 'org_structure_req':
-        return { table: 'orgHistory', field: 'orgReqId' };
+        return {
+          table: 'orgHistory',
+          field: 'orgReqId',
+          requestTable: 'orgStructureReq',
+        };
       case 'workflow_req':
-        return { table: 'workflowReqHistory', field: 'workflowReqId' };
+        return {
+          table: 'workflowReqHistory',
+          field: 'workflowReqId',
+          requestTable: 'workflowReq',
+        };
       default:
         return null;
     }
@@ -598,7 +623,38 @@ export class NotificationService {
       select: { eventUserId: true },
     });
 
-    return row?.eventUserId || null;
+    if (row?.eventUserId) return row.eventUserId;
+
+    const request = await (prisma as any)[config.requestTable].findUnique({
+      where: { id: reqId },
+      select: { initiatorId: true },
+    });
+
+    return request?.initiatorId || null;
+  }
+
+  static async getRequestApproverIds(reqId: string, reqTable: string) {
+    const config = NotificationService.getHistoryConfig(reqTable);
+    if (!config) return [];
+
+    const rows = await prisma.workflowApprover.findMany({
+      where: { reqId, reqTable },
+      select: { approversList: true },
+    });
+    const approverIds = rows.flatMap((row) =>
+      Array.isArray(row.approversList) ? (row.approversList as string[]) : [],
+    );
+
+    if (approverIds.length > 0) {
+      return NotificationService.unique(approverIds);
+    }
+
+    const request = await (prisma as any)[config.requestTable].findUnique({
+      where: { id: reqId },
+      select: { eligibleApprovers: true },
+    });
+
+    return NotificationService.unique(request?.eligibleApprovers || []);
   }
 
   static async getCompanyRequestInitiatorId(companyCode?: string | null) {
@@ -683,16 +739,26 @@ export class NotificationService {
         input.includeCreatedBy === true ? input.createdBy : null,
       ],
     );
-    const companyRecipientUserIds =
-      await NotificationService.filterActiveCompanyUserIds(
-        input.companyId,
-        requestedRecipients,
-      );
+    const [companyRecipientUserIds, requiredRecipientUserIds] =
+      await Promise.all([
+        NotificationService.filterActiveCompanyUserIds(
+          input.companyId,
+          requestedRecipients,
+        ),
+        NotificationService.filterExistingUserIds(
+          input.requiredRecipientUserIds || [],
+        ),
+      ]);
+    const requiredRecipientSet = new Set(requiredRecipientUserIds);
     const recipientUserIds = NotificationService.unique([
       ...companyRecipientUserIds,
+      ...requiredRecipientUserIds,
       ...saasAdmins,
     ]).filter(
-      (userId) => input.includeCreatedBy === true || userId !== input.createdBy,
+      (userId) =>
+        input.includeCreatedBy === true ||
+        requiredRecipientSet.has(userId) ||
+        userId !== input.createdBy,
     );
 
     if (recipientUserIds.length === 0) return null;
