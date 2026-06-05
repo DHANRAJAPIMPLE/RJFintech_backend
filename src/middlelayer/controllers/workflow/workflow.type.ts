@@ -58,10 +58,16 @@ export type WorkflowActiveLevel = {
 
 export type WorkflowLinkedOrgStructureItem = WorkflowOrgStructure;
 
+export type WorkflowAssociateAlias = {
+  workflowName: string | null;
+  workflowAlias: string | null;
+};
+
 export type WorkflowActiveItem = {
   id?: string;
   name: string;
   alias: string;
+  associateAlias?: WorkflowAssociateAlias;
   workflowType: WorkflowType;
   module: WorkflowModule;
   subModule: WorkflowSubModule;
@@ -122,6 +128,7 @@ export type WorkflowPendingItem = {
   nodeName: string | null;
   nodePath: string | null;
   workflowName: string;
+  associateAlias?: WorkflowAssociateAlias;
   linkedOrgStructure?: WorkflowLinkedOrgStructureItem[];
 };
 

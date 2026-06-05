@@ -400,28 +400,30 @@ model WorkflowLevel {
 }
 
 model WorkflowReq {
-  id                String               @id @default(uuid())
-  companyId         String               @map("company_id")
-  nodeId            String               @map("node_id")
-  module            String
-  type              RequestType          @default(INITIATE)
-  impact            String               @default("NO_ISSUES")
-  subModule         String               @map("sub_module")
-  levelsHash        String               @map("levels_hash")
-  workflowId        String?              @map("workflow_id")
-  alias             String?              @map("alias")
-  data              Json
-  oldData           Json?                @map("old_data")
-  initiatorId       String?              @map("initiator_id")
-  status            OnboardingStatus     @default(PENDING)
-  approvalRemark    String?              @map("approval_remark")
-  eligibleApprovers String[]             @default([]) @map("eligible_approvers")
-  createdAt         DateTime             @default(now()) @map("created_at")
-  updatedAt         DateTime             @updatedAt @map("updated_at")
-  company           Company              @relation(fields: [companyId], references: [id])
-  workflowHistories WorkflowReqHistory[] @relation("WorkflowRequestHistory")
+  id                 String               @id @default(uuid())
+  companyId          String               @map("company_id")
+  nodeId             String               @map("node_id")
+  module             String
+  type               RequestType          @default(INITIATE)
+  impact             String               @default("NO_ISSUES")
+  subModule          String               @map("sub_module")
+  levelsHash         String               @map("levels_hash")
+  workflowId         String?              @map("workflow_id")
+  approvalWorkflowId String?              @map("approval_workflow_id")
+  alias              String?              @map("alias")
+  data               Json
+  oldData            Json?                @map("old_data")
+  initiatorId        String?              @map("initiator_id")
+  status             OnboardingStatus     @default(PENDING)
+  approvalRemark     String?              @map("approval_remark")
+  eligibleApprovers  String[]             @default([]) @map("eligible_approvers")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  company            Company              @relation(fields: [companyId], references: [id])
+  workflowHistories  WorkflowReqHistory[] @relation("WorkflowRequestHistory")
 
   @@index([levelsHash, companyId])
+  @@index([approvalWorkflowId])
   @@map("workflow_req")
 }
 

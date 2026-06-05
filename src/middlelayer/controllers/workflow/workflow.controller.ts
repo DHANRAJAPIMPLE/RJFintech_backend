@@ -63,6 +63,10 @@ export class WorkflowController {
       id: workflow.id,
       name: workflow.name,
       alias: workflow.alias,
+      associateAlias: workflow.associateAlias ?? {
+        workflowName: workflow.name ?? null,
+        workflowAlias: workflow.alias ?? null,
+      },
       workflowType:
         'type' in workflow ? workflow.type : (workflow.workflowType ?? 'NODE'),
       module: workflow.module,
@@ -125,6 +129,10 @@ export class WorkflowController {
       nodeName: workflow.nodeName,
       nodePath: workflow.nodePath,
       workflowName: workflow.workflowName,
+      associateAlias: workflow.associateAlias ?? {
+        workflowName: workflow.workflowName ?? null,
+        workflowAlias: workflow.alias ?? null,
+      },
       linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map((child) =>
         WorkflowController.formatLinkedOrgStructure(child),
       ),

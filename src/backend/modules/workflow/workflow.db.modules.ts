@@ -571,6 +571,10 @@ export class WorkflowDbController {
 
       return {
         ...restRow,
+        associateAlias: {
+          workflowName: row.name ?? null,
+          workflowAlias: row.alias ?? null,
+        },
         isPending: pendingWorkflowIds.has(row.id),
         isAutoDeleted: autoDeletedWorkflowIds.has(row.id),
         linkedOrgStructure,
@@ -2462,6 +2466,10 @@ export class WorkflowDbController {
         },
       );
       notificationRecipients = approval.eligibleApprovers;
+      const requestWithApprovalWorkflow = await tx.workflowReq.update({
+        where: { id: created.id },
+        data: { approvalWorkflowId: approval.workflowId },
+      });
       await tx.workflowReqHistory.create({
         data: {
           workflowReqId: created.id,
@@ -2471,7 +2479,7 @@ export class WorkflowDbController {
           remarks: remarks || null,
         },
       });
-      return created;
+      return requestWithApprovalWorkflow;
     });
 
     const modificationNotification =
@@ -3049,10 +3057,10 @@ export class WorkflowDbController {
           });
           notificationRecipients = resolvedApprovers;
 
-          // Store the resolved workflowId in the request record
+          // Keep workflowId for the business workflow; store approval config separately.
           await tx.workflowReq.update({
             where: { id: request.id },
-            data: { workflowId: resolvedWorkflowId },
+            data: { approvalWorkflowId: resolvedWorkflowId },
           });
         }
 
@@ -5040,6 +5048,7 @@ export class WorkflowDbController {
         id: true,
         nodeId: true,
         workflowId: true,
+        approvalWorkflowId: true,
         data: true,
         oldData: true,
         type: true,
@@ -5316,7 +5325,9 @@ export class WorkflowDbController {
       );
       const workflowIds = Array.from(
         new Set(
-          pendingRequestsRaw.map((req) => req.workflowId).filter(Boolean),
+          pendingRequestsRaw
+            .flatMap((req) => [req.workflowId, req.approvalWorkflowId])
+            .filter(Boolean),
         ),
       ) as string[];
       const targetTuples = Array.from(
@@ -5474,23 +5485,34 @@ export class WorkflowDbController {
         const linkedWorkflow = req.workflowId
           ? workflowMap.get(req.workflowId)
           : null;
-        const resolvedWorkflow = targetWorkflow || linkedWorkflow || null;
+        const approvalWorkflow = req.approvalWorkflowId
+          ? workflowMap.get(req.approvalWorkflowId)
+          : null;
+        const associatedWorkflow = targetWorkflow || linkedWorkflow || null;
+        const requestData = (req.data as any) || {};
+        const fallbackAlias = requestData?.levels
+          ? WorkflowDbController.buildAlias(requestData.levels)
+          : null;
 
-        let workflowName = (req.data as any)?.name || 'New Workflow';
-        let alias = req.alias || (req.data as any)?.alias || 'N/A';
+        let workflowName =
+          requestData?.name || associatedWorkflow?.name || 'New Workflow';
+        let alias =
+          req.alias ||
+          requestData?.alias ||
+          fallbackAlias ||
+          associatedWorkflow?.alias ||
+          'N/A';
         let masterData: any = null;
 
-        if (resolvedWorkflow) {
-          workflowName = resolvedWorkflow.name;
-          alias = resolvedWorkflow.alias;
+        if (associatedWorkflow) {
           masterData = {
-            name: resolvedWorkflow.name,
-            workflowType: resolvedWorkflow.type,
-            module: resolvedWorkflow.module,
-            subModule: resolvedWorkflow.subModule,
-            levelsHash: resolvedWorkflow.levelsHash,
-            status: resolvedWorkflow.status,
-            levels: resolvedWorkflow.levels.reduce((acc: any, l: any) => {
+            name: associatedWorkflow.name,
+            workflowType: associatedWorkflow.type,
+            module: associatedWorkflow.module,
+            subModule: associatedWorkflow.subModule,
+            levelsHash: associatedWorkflow.levelsHash,
+            status: associatedWorkflow.status,
+            levels: associatedWorkflow.levels.reduce((acc: any, l: any) => {
               acc[`l${l.level}`] = {
                 type: l.approverType,
                 approver1: l.approver1,
@@ -5506,13 +5528,14 @@ export class WorkflowDbController {
           rest.data = {
             ...masterData,
             nodePath:
-              resolvedWorkflow?.orgStructure?.nodePath ||
+              associatedWorkflow?.orgStructure?.nodePath ||
               node?.nodePath ||
-              (req.data as any)?.nodePath ||
+              requestData?.nodePath ||
               null,
           };
         }
         delete rest.workflowHistories;
+        delete rest.approvalWorkflowId;
 
         const newDataObj =
           req.type === 'INITIATE'
@@ -5537,6 +5560,12 @@ export class WorkflowDbController {
           nodePath: node?.nodePath || (req.data as any)?.nodePath || null,
           workflowName,
           alias,
+          associateAlias: {
+            workflowName:
+              approvalWorkflow?.name ?? associatedWorkflow?.name ?? workflowName,
+            workflowAlias:
+              approvalWorkflow?.alias ?? associatedWorkflow?.alias ?? alias,
+          },
           linkedOrgStructure,
         };
       });
