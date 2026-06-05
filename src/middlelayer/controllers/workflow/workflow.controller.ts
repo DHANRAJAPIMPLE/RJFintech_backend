@@ -159,6 +159,15 @@ export class WorkflowController {
       level: item.level,
       createdAt: item.createdAt,
       remarks: item.remarks,
+      linkedWorkflow: item.linkedWorkflow
+        ? {
+            workflowId: item.linkedWorkflow.workflowId ?? null,
+            workflowName: item.linkedWorkflow.workflowName ?? null,
+            nodeId: item.linkedWorkflow.nodeId ?? null,
+            nodeName: item.linkedWorkflow.nodeName ?? null,
+            nodePath: item.linkedWorkflow.nodePath ?? null,
+          }
+        : null,
       user: {
         name: item.user.name,
         email: item.user.email,

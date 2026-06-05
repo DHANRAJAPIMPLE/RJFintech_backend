@@ -109,6 +109,48 @@ export class UserDbController {
     return 'INITIATE';
   }
 
+  private static resolveUserHistoryRequestType(
+    request:
+      | {
+          type?: string | null;
+          impact?: string | null;
+          data?: unknown;
+        }
+      | null
+      | undefined,
+  ) {
+    const normalizedImpact = String(request?.impact || '').toUpperCase();
+    if (
+      normalizedImpact === 'ACTIVE' ||
+      normalizedImpact === 'INACTIVE' ||
+      normalizedImpact === 'ARCHIVE'
+    ) {
+      return normalizedImpact;
+    }
+
+    const requestData = request?.data as any;
+    const normalizedStatus = String(
+      requestData?.basicDetails?.status || requestData?.status || '',
+    ).toUpperCase();
+    const normalizedType = String(request?.type || 'INITIATE').toUpperCase();
+    if (
+      normalizedType === 'UPDATE' &&
+      (normalizedStatus === 'ACTIVE' ||
+        normalizedStatus === 'INACTIVE' ||
+        normalizedStatus === 'ARCHIVE')
+    ) {
+      return normalizedStatus;
+    }
+
+    return normalizedType || 'INITIATE';
+  }
+
+  private static isUserModificationHistoryType(
+    requestType: string | null | undefined,
+  ) {
+    return String(requestType || 'INITIATE').toUpperCase() === 'UPDATE';
+  }
+
   private static pathsOverlap(left: string, right: string) {
     return (
       left === right ||
@@ -5018,13 +5060,13 @@ export class UserDbController {
         })
         .forEach((history) => {
           const requestType = history.reqId
-            ? String(
-                requestSnapshotMap.get(history.reqId)?.type || 'INITIATE',
-              ).toUpperCase()
+            ? UserDbController.resolveUserHistoryRequestType(
+                requestSnapshotMap.get(history.reqId),
+              )
             : 'INITIATE';
           if (
             history.event === 'INITIATE' &&
-            requestType !== 'INITIATE' &&
+            UserDbController.isUserModificationHistoryType(requestType) &&
             history.reqId &&
             !modificationSequenceByReqId.has(history.reqId)
           ) {
@@ -5081,7 +5123,9 @@ export class UserDbController {
       // 4. Add actual history entries
       const formattedHistory = history.map((h) => {
         const requestType = h.reqId
-          ? (requestSnapshotMap.get(h.reqId)?.type || null)
+          ? UserDbController.resolveUserHistoryRequestType(
+              requestSnapshotMap.get(h.reqId),
+            )
           : null;
         const changeCount = h.reqId
           ? UserDbController.getUserHistoryChangeCount(
@@ -5090,11 +5134,9 @@ export class UserDbController {
             requestType,
           )
           : { added: 0, modify: 0, remove: 0 };
-        const normalizedRequestType = String(
-          requestType || 'INITIATE',
-        ).toUpperCase();
         const isChangeRequestStart =
-          h.event === 'INITIATE' && normalizedRequestType !== 'INITIATE';
+          h.event === 'INITIATE' &&
+          UserDbController.isUserModificationHistoryType(requestType);
         const displayEvent = UserDbController.getUserHistoryDisplayEvent(
           h.event,
           requestType,
@@ -5297,9 +5339,11 @@ export class UserDbController {
         history.eventUserId,
       ]);
 
+      const historyRequestType =
+        UserDbController.resolveUserHistoryRequestType(onboarding);
       const displayEvent = UserDbController.getUserHistoryDisplayEvent(
         history.event,
-        requestType,
+        historyRequestType,
       );
 
       res.status(200).json({

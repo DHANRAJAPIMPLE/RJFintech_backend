@@ -394,16 +394,6 @@ export class OrgStructureDbController {
         },
       });
 
-      await tx.orgHistory.create({
-        data: {
-          orgReqId: orgReqId,
-          companyId,
-          event: 'AUTO_GENERATE',
-          eventUserId: actorId,
-          remarks: `Auto-generated workflow ${source.name} for node ${newNode.nodeName} (${newNode.nodePath}) from parent workflow ${source.name} on ${parentNode.nodeName} (${parentNode.nodePath})`,
-        },
-      });
-
       generated.push({
         workflowName: workflow.name,
         alias: workflow.alias,
@@ -457,21 +447,17 @@ export class OrgStructureDbController {
       corpAdminAccesses.map((access) => access.userId),
     );
     const generatedSummary = generatedWorkflows
-      .slice(0, 5)
       .map(
         (workflow) =>
           `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`,
       )
       .join(', ');
-    const remaining = Math.max(generatedWorkflows.length - 5, 0);
-    const remainingText =
-      remaining > 0 ? ` and ${remaining} more workflow(s)` : '';
 
     await NotificationService.createRequestNotification({
       companyId,
       type: 'ONBOARDED',
       name: 'Workflow auto-generated',
-      message: `System auto-generated ${generatedWorkflows.length} workflow(s): ${generatedSummary}${remainingText}.`,
+      message: `System auto-generated ${generatedWorkflows.length} workflow(s): ${generatedSummary}.`,
       referenceType: 'WORKFLOW',
       referenceId: params.orgReqId,
       referenceName: generatedWorkflows[0]?.nodeName || 'workflow',
@@ -663,22 +649,18 @@ export class OrgStructureDbController {
       corpAdminAccesses.map((access) => access.userId),
     );
     const impactedNames = accessChanges
-      .slice(0, 5)
       .map((change) => {
         const user = change.userName || change.userEmail || change.userId;
         const role = change.roleName || change.roleCode;
         return `${user} (${role})`;
       })
       .join(', ');
-    const remaining = Math.max(accessChanges.length - 5, 0);
-    const remainingText =
-      remaining > 0 ? ` and ${remaining} more access change(s)` : '';
 
     await NotificationService.createRequestNotification({
       companyId,
       type: 'MODIFICATION',
       name: 'Organization access updated',
-      message: `System added ${accessChanges.length} user role access(es) for new organization node ${params.nodeName} (${params.nodePath}). Impacted: ${impactedNames}${remainingText}.`,
+      message: `System added ${accessChanges.length} user role access(es) for new organization node ${params.nodeName} (${params.nodePath}). Impacted: ${impactedNames}.`,
       referenceId: params.orgReqId,
       referenceName: params.nodeName,
       createdBy: params.createdBy,
@@ -1368,34 +1350,52 @@ export class OrgStructureDbController {
     });
     if (actorId) {
       await Promise.all(
-        autoDeletedWorkflowRows.map((workflow: any) => {
-          const requestId = Array.isArray(workflow.workflowReqIds)
-            ? [...workflow.workflowReqIds].filter((id) => typeof id === 'string').pop()
-            : null;
-          if (!requestId) return Promise.resolve();
+        autoDeletedWorkflowRows.map(async (workflow: any) => {
+          const candidateRequestIds = Array.isArray(workflow.workflowReqIds)
+            ? workflow.workflowReqIds.filter(
+                (id: unknown): id is string => typeof id === 'string' && !!id,
+              )
+            : [];
+          if (candidateRequestIds.length === 0) return;
+
+          const workflowRequests = await tx.workflowReq.findMany({
+            where: {
+              companyId: request.companyId,
+              id: { in: candidateRequestIds },
+            },
+            select: {
+              id: true,
+              type: true,
+              createdAt: true,
+              data: true,
+            },
+          });
+          const requestId =
+            workflowRequests.find(
+              (workflowReq: any) =>
+                workflowReq.type === 'AUTO_GENERATE' &&
+                typeof (workflowReq.data as any)?.sourceWorkflowId === 'string',
+            )?.id ||
+            workflowRequests
+              .sort((left: any, right: any) => {
+                const leftTime = new Date(left.createdAt).getTime();
+                const rightTime = new Date(right.createdAt).getTime();
+                if (leftTime !== rightTime) return rightTime - leftTime;
+                return String(right.id).localeCompare(String(left.id));
+              })[0]?.id;
+          if (!requestId) return;
 
           const remarks = `Auto-deleted workflow ${workflow.name} (${workflow.orgStructure?.nodePath || targetNodePath}) because organization node ${node.nodeName} (${targetNodePath}) was inactivated.`;
 
-          return Promise.all([
-            tx.workflowReqHistory.create({
-              data: {
-                workflowReqId: requestId,
-                companyId: request.companyId,
-                event: 'AUTO_DELETE',
-                eventUserId: actorId,
-                remarks,
-              },
-            }),
-            tx.orgHistory.create({
-              data: {
-                orgReqId: request.id,
-                companyId: request.companyId,
-                event: 'AUTO_DELETE',
-                eventUserId: actorId,
-                remarks,
-              },
-            }),
-          ]);
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: requestId,
+              companyId: request.companyId,
+              event: 'AUTO_DELETE',
+              eventUserId: actorId,
+              remarks,
+            },
+          });
         }),
       );
     }
@@ -2256,6 +2256,10 @@ export class OrgStructureDbController {
           matchesNodeFilter(h.orgReq?.data as any),
         );
       }
+      histories = histories.filter(
+        (history) =>
+          history.event !== 'AUTO_GENERATE' && history.event !== 'AUTO_DELETE',
+      );
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
       const reqIds = Array.from(
@@ -2570,6 +2574,9 @@ export class OrgStructureDbController {
       });
 
       if (!history) {
+        throw new AppError('Organization history not found', 404);
+      }
+      if (history.event === 'AUTO_GENERATE' || history.event === 'AUTO_DELETE') {
         throw new AppError('Organization history not found', 404);
       }
 

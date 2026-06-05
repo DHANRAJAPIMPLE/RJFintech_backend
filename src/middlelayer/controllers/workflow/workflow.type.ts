@@ -202,6 +202,14 @@ export type WorkflowHistoryChangeCount = {
   remove: number;
 };
 
+export type WorkflowHistoryLinkedWorkflow = {
+  workflowId: string | null;
+  workflowName: string | null;
+  nodeId: string | null;
+  nodeName: string | null;
+  nodePath: string | null;
+};
+
 export type WorkflowHistoryEvent =
   | 'INITIATE'
   | 'APPROVED'
@@ -228,6 +236,7 @@ export type WorkflowHistoryActionItem = WorkflowHistoryBaseItem & {
   level: number | null;
   createdAt: string;
   remarks: string | null;
+  linkedWorkflow?: WorkflowHistoryLinkedWorkflow | null;
   user: WorkflowHistoryAuditUser;
 };
 
@@ -259,6 +268,7 @@ export type WorkflowHistoryInternalItem = WorkflowHistoryItem & {
   nodePath: string | null;
   nodeName: string | null;
   nodeType: WorkflowNodeType | null;
+  linkedWorkflow?: WorkflowHistoryLinkedWorkflow | null;
   companyCode: string;
 };
 
