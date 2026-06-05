@@ -8,6 +8,7 @@ type AuditUser = {
 
 type UserHistoryDetailNewDataParams = {
   requestData: unknown;
+  resolvedOldData?: unknown;
   resolvedNewData: unknown;
   requestType?: string | null;
 };
@@ -27,38 +28,9 @@ export class HistoryUserUtil {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   }
 
-  private static isPermissionRemoval(permission: unknown) {
-    if (!HistoryUserUtil.isPlainObject(permission)) return false;
-
-    const operation =
-      typeof permission.operation === 'string'
-        ? permission.operation.trim().toUpperCase()
-        : '';
-
-    return permission.remove === true || operation === 'REMOVE';
-  }
-
-  private static normalizePermissionChanges(permissions: unknown) {
-    if (Array.isArray(permissions)) {
-      return permissions
-        .filter((permission) => !HistoryUserUtil.isPermissionRemoval(permission))
-        .map((permission) => HistoryUserUtil.cloneJson(permission));
-    }
-
-    if (!HistoryUserUtil.isPlainObject(permissions)) {
-      return null;
-    }
-
-    return [
-      ...(Array.isArray(permissions.added) ? permissions.added : []),
-      ...(Array.isArray(permissions.updated) ? permissions.updated : []),
-    ]
-      .filter((permission) => !HistoryUserUtil.isPermissionRemoval(permission))
-      .map((permission) => HistoryUserUtil.cloneJson(permission));
-  }
-
   static formatUserHistoryDetailNewData({
     requestData,
+    resolvedOldData,
     resolvedNewData,
     requestType,
   }: UserHistoryDetailNewDataParams) {
@@ -68,8 +40,108 @@ export class HistoryUserUtil {
       return HistoryUserUtil.cloneJson(resolvedNewData ?? null);
     }
 
+    if (
+      !HistoryUserUtil.isPlainObject(resolvedOldData) ||
+      !HistoryUserUtil.isPlainObject(resolvedNewData)
+    ) {
+      return HistoryUserUtil.cloneJson(requestData ?? resolvedNewData ?? null);
+    }
+
+    const newData: Record<string, unknown> = {};
+    const oldBasicDetails = HistoryUserUtil.isPlainObject(
+      resolvedOldData.basicDetails,
+    )
+      ? resolvedOldData.basicDetails
+      : {};
+    const newBasicDetails = HistoryUserUtil.isPlainObject(
+      resolvedNewData.basicDetails,
+    )
+      ? resolvedNewData.basicDetails
+      : {};
+    const basicDetailsPatch: Record<string, unknown> = {};
+
+    const basicDetailKeys = new Set([
+      ...Object.keys(oldBasicDetails),
+      ...Object.keys(newBasicDetails),
+    ]);
+    for (const key of basicDetailKeys) {
+      if (oldBasicDetails[key] !== newBasicDetails[key]) {
+        basicDetailsPatch[key] = HistoryUserUtil.cloneJson(
+          newBasicDetails[key],
+        );
+      }
+    }
+    if (Object.keys(basicDetailsPatch).length > 0) {
+      newData.basicDetails = basicDetailsPatch;
+    }
+
+    const oldPermissions = Array.isArray(resolvedOldData.permissions)
+      ? resolvedOldData.permissions
+      : [];
+    const newPermissions = Array.isArray(resolvedNewData.permissions)
+      ? resolvedNewData.permissions
+      : [];
+    const permissionKey = (permission: unknown) => {
+      if (!HistoryUserUtil.isPlainObject(permission)) return '';
+      if (permission.accessType === 'PRIMARY') return 'PRIMARY';
+
+      return [
+        permission.accessType || 'SECONDARY',
+        permission.roleName || '',
+        permission.nodePath || '',
+      ].join('|');
+    };
+    const permissionEquals = (left: unknown, right: unknown) =>
+      JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+    const removed = oldPermissions.filter(
+      (permission) =>
+        !newPermissions.some((candidate) =>
+          permissionEquals(permission, candidate),
+        ),
+    );
+    const added = newPermissions.filter(
+      (permission) =>
+        !oldPermissions.some((candidate) =>
+          permissionEquals(permission, candidate),
+        ),
+    );
+    const pairedAdded = new Set<number>();
+    const pairedRemoved = new Set<number>();
+    const updated: unknown[] = [];
+
+    removed.forEach((oldPermission, oldIndex) => {
+      const newIndex = added.findIndex(
+        (newPermission, index) =>
+          !pairedAdded.has(index) &&
+          permissionKey(oldPermission) === permissionKey(newPermission),
+      );
+
+      if (newIndex >= 0) {
+        pairedRemoved.add(oldIndex);
+        pairedAdded.add(newIndex);
+        updated.push(HistoryUserUtil.cloneJson(added[newIndex]));
+      }
+    });
+
+    const permissionChanges = {
+      added: added
+        .filter((_, index) => !pairedAdded.has(index))
+        .map((permission) => HistoryUserUtil.cloneJson(permission)),
+      removed: removed
+        .filter((_, index) => !pairedRemoved.has(index))
+        .map((permission) => HistoryUserUtil.cloneJson(permission)),
+      updated,
+    };
+    if (
+      permissionChanges.added.length > 0 ||
+      permissionChanges.removed.length > 0 ||
+      permissionChanges.updated.length > 0
+    ) {
+      newData.permissions = permissionChanges;
+    }
+
     if (!HistoryUserUtil.isPlainObject(requestData)) {
-      return HistoryUserUtil.cloneJson(resolvedNewData ?? null);
+      return Object.keys(newData).length > 0 ? newData : null;
     }
 
     const source = HistoryUserUtil.isPlainObject(requestData.newData)
@@ -77,21 +149,14 @@ export class HistoryUserUtil {
       : HistoryUserUtil.isPlainObject(requestData.data)
         ? requestData.data
         : requestData;
-    const newData: Record<string, unknown> = {};
-
     for (const [key, value] of Object.entries(source)) {
       if (
         key === 'oldData' ||
         key === 'changeCount' ||
+        key === 'targetUserEmail' ||
+        key === 'levelsHash' ||
+        key === 'basicDetails' ||
         key === 'permissions'
-      ) {
-        continue;
-      }
-
-      if (
-        key === 'basicDetails' &&
-        HistoryUserUtil.isPlainObject(value) &&
-        Object.keys(value).length === 0
       ) {
         continue;
       }
@@ -99,14 +164,31 @@ export class HistoryUserUtil {
       newData[key] = HistoryUserUtil.cloneJson(value);
     }
 
-    const permissionChanges = HistoryUserUtil.normalizePermissionChanges(
-      source.permissions,
-    );
-    if (permissionChanges && permissionChanges.length > 0) {
-      newData.permissions = permissionChanges;
+    return Object.keys(newData).length > 0 ? newData : null;
+  }
+
+  static async enrichUserHistoryOldData(oldData: unknown) {
+    const enrichedOldData = HistoryUserUtil.cloneJson(oldData ?? null);
+    if (
+      !HistoryUserUtil.isPlainObject(enrichedOldData) ||
+      !HistoryUserUtil.isPlainObject(enrichedOldData.basicDetails)
+    ) {
+      return enrichedOldData;
     }
 
-    return Object.keys(newData).length > 0 ? newData : null;
+    const reportingManager = enrichedOldData.basicDetails.reportingManager;
+    if (typeof reportingManager !== 'string' || !reportingManager.trim()) {
+      enrichedOldData.basicDetails.reportingManagerName = null;
+      return enrichedOldData;
+    }
+
+    const manager = await prisma.user.findUnique({
+      where: { email: reportingManager },
+      select: { name: true },
+    });
+    enrichedOldData.basicDetails.reportingManagerName = manager?.name || null;
+
+    return enrichedOldData;
   }
 
   static async getSaasAdminUserIds(userIds: (string | null | undefined)[]) {

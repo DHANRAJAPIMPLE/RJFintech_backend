@@ -5275,8 +5275,11 @@ export class UserDbController {
       if (!newData) {
         newData = fallbackSnapshot;
       }
+      const responseOldData =
+        await HistoryUserUtil.enrichUserHistoryOldData(oldData);
       const responseNewData = HistoryUserUtil.formatUserHistoryDetailNewData({
         requestData,
+        resolvedOldData: oldData,
         resolvedNewData: newData,
         requestType,
       });
@@ -5311,7 +5314,7 @@ export class UserDbController {
           createdAt: history.createdAt,
           remarks: history.remarks,
           changeCount,
-          oldData,
+          oldData: responseOldData,
           newData: responseNewData,
           user: HistoryUserUtil.formatAuditUser(
             history.user,
