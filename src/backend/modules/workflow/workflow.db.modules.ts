@@ -2166,7 +2166,12 @@ export class WorkflowDbController {
         resolvedCompanyId = company.id;
       }
 
-      if (type === 'UPDATE' || type === 'INACTIVE' || type === 'ACTIVE') {
+      if (
+        type === 'UPDATE' ||
+        type === 'INACTIVE' ||
+        type === 'ACTIVE' ||
+        type === 'ARCHIVE'
+      ) {
         if (!target) {
           throw new AppError('Workflow target details are required', 400);
         }
