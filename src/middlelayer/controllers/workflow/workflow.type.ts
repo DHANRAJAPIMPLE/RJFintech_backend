@@ -207,6 +207,9 @@ export type WorkflowHistoryEvent =
   | 'APPROVED'
   | 'REJECTED'
   | 'MODIFY'
+  | 'ACTIVE'
+  | 'INACTIVE'
+  | 'ARCHIVE'
   | 'AUTO_GENERATE'
   | 'AUTO_DELETE';
 

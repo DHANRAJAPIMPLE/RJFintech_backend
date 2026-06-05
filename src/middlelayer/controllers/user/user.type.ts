@@ -244,7 +244,14 @@ export type UserHistoryChangeCount = {
   remove: number;
 };
 
-export type UserHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
+export type UserHistoryEvent =
+  | 'INITIATE'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'MODIFY'
+  | 'ACTIVE'
+  | 'INACTIVE'
+  | 'ARCHIVE';
 
 export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
 export type UserHistoryLevelCount = 'I' | `M${number}` | `A${number}` | null;

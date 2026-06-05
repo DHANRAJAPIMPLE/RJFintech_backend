@@ -188,6 +188,7 @@ export type OrgHistoryEvent =
   | 'APPROVED'
   | 'REJECTED'
   | 'MODIFY'
+  | 'INACTIVE'
   | 'AUTO_GENERATE'
   | 'AUTO_DELETE';
 

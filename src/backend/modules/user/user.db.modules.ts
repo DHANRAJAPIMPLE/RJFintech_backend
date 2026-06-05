@@ -93,6 +93,22 @@ type HistoryChangeCount = {
  * Handles production user data and pending user requests.
  */
 export class UserDbController {
+  private static getUserHistoryDisplayEvent(
+    event: string | null | undefined,
+    requestType: string | null | undefined,
+  ) {
+    const normalizedEvent = String(event || '').toUpperCase();
+    if (normalizedEvent !== 'INITIATE') return normalizedEvent || event;
+
+    const normalizedType = String(requestType || 'INITIATE').toUpperCase();
+    if (normalizedType === 'UPDATE') return 'MODIFY';
+    if (normalizedType === 'ACTIVE') return 'ACTIVE';
+    if (normalizedType === 'INACTIVE') return 'INACTIVE';
+    if (normalizedType === 'ARCHIVE') return 'ARCHIVE';
+
+    return 'INITIATE';
+  }
+
   private static pathsOverlap(left: string, right: string) {
     return (
       left === right ||
@@ -4901,26 +4917,10 @@ export class UserDbController {
         workflowMap.set(wa.reqId, existing);
       });
 
-      const rejectedReqIds = new Set<string>();
-      for (const [reqId, levels] of workflowMap.entries()) {
-        if (levels.some((l: any) => l.status === 'REJECTED')) {
-          rejectedReqIds.add(reqId);
-        }
-      }
-      history.forEach((h) => {
-        if (h.reqId && h.event === 'REJECTED') {
-          rejectedReqIds.add(h.reqId);
-        }
-      });
-
-      const activeHistory = history.filter(
-        (h) => !h.reqId || !rejectedReqIds.has(h.reqId),
-      );
-
       // Build request-level maps used to filter displayed approvers.
       const initiatorMap = new Map<string, string>();
       const approvedUserMap = new Map<string, Set<string>>();
-      activeHistory.forEach((h) => {
+      history.forEach((h) => {
         if (h.reqId) {
           const requestSnapshot = requestSnapshotMap.get(h.reqId);
           if (requestSnapshot?.initiatorId && !initiatorMap.has(h.reqId)) {
@@ -4941,7 +4941,6 @@ export class UserDbController {
 
       // Filter each stored approver list for active display only. The DB row is not mutated.
       for (const [reqId, levels] of workflowMap.entries()) {
-        if (rejectedReqIds.has(reqId)) continue; // skip enriching rejected workflows
         const initiatorId = initiatorMap.get(reqId) || null;
         const approvedUserIds = Array.from(
           approvedUserMap.get(reqId) ?? new Set<string>(),
@@ -4987,7 +4986,7 @@ export class UserDbController {
       const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
         viewerUserId,
         ...Array.from(allApproverIds),
-        ...activeHistory.map((h) => h.eventUserId),
+        ...history.map((h) => h.eventUserId),
       ]);
 
       const approverMap = new Map(
@@ -5005,7 +5004,7 @@ export class UserDbController {
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
       const modificationSequenceByReqId = new Map<string, number>();
-      activeHistory
+      history
         .filter((history) => history.reqId)
         .sort((left, right) => {
           const leftTime = left.createdAt
@@ -5037,7 +5036,7 @@ export class UserDbController {
         });
 
       // 3. Inject "Pending Approval" entries for any active requests
-      activeHistory.forEach((h) => {
+      history.forEach((h) => {
         if (h.reqId && !handledPendingReqs.has(h.reqId)) {
           const levels = workflowMap.get(h.reqId);
           if (levels) {
@@ -5080,7 +5079,7 @@ export class UserDbController {
       });
 
       // 4. Add actual history entries
-      const formattedHistory = activeHistory.map((h) => {
+      const formattedHistory = history.map((h) => {
         const requestType = h.reqId
           ? (requestSnapshotMap.get(h.reqId)?.type || null)
           : null;
@@ -5091,14 +5090,17 @@ export class UserDbController {
             requestType,
           )
           : { added: 0, modify: 0, remove: 0 };
-        const displayEvent =
-          h.event === 'INITIATE' &&
-            requestType &&
-            requestType !== 'INITIATE'
-            ? 'MODIFY'
-            : h.event;
+        const normalizedRequestType = String(
+          requestType || 'INITIATE',
+        ).toUpperCase();
+        const isChangeRequestStart =
+          h.event === 'INITIATE' && normalizedRequestType !== 'INITIATE';
+        const displayEvent = UserDbController.getUserHistoryDisplayEvent(
+          h.event,
+          requestType,
+        );
         const levelCount =
-          displayEvent === 'MODIFY' && h.reqId
+          isChangeRequestStart && h.reqId
             ? `M${modificationSequenceByReqId.get(h.reqId) || 1}`
             : displayEvent === 'INITIATE'
               ? 'I'
@@ -5295,10 +5297,10 @@ export class UserDbController {
         history.eventUserId,
       ]);
 
-      const displayEvent =
-        history.event === 'INITIATE' && requestType !== 'INITIATE'
-          ? 'MODIFY'
-          : history.event;
+      const displayEvent = UserDbController.getUserHistoryDisplayEvent(
+        history.event,
+        requestType,
+      );
 
       res.status(200).json({
         message: 'User history item fetched successfully!',

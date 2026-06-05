@@ -48,6 +48,20 @@ type OrgLinkedStructureNode = {
  * Handles the creation, approval, and retrieval of organization units (Roots, Groups, Locations, etc.)
  */
 export class OrgStructureDbController {
+  private static getOrgHistoryDisplayEvent(
+    event: string | null | undefined,
+    requestType: string | null | undefined,
+  ) {
+    const normalizedEvent = String(event || '').toUpperCase();
+    if (normalizedEvent !== 'INITIATE') return normalizedEvent || event;
+
+    const normalizedType = String(requestType || 'INITIATE').toUpperCase();
+    if (normalizedType === 'UPDATE') return 'MODIFY';
+    if (normalizedType === 'INACTIVE') return 'INACTIVE';
+
+    return 'INITIATE';
+  }
+
   private static formatConflictDate(value: Date | string | null | undefined) {
     if (!value) return 'N/A';
     const date = value instanceof Date ? value : new Date(value);
@@ -2237,20 +2251,6 @@ export class OrgStructureDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Filter out rejected org structure requests
-      const rejectedReqIds = new Set<string>();
-      histories.forEach((h) => {
-        if (
-          h.orgReqId &&
-          (h.event === 'REJECTED' || h.orgReq?.status === 'REJECTED')
-        ) {
-          rejectedReqIds.add(h.orgReqId);
-        }
-      });
-
-      histories = histories.filter(
-        (h) => !h.orgReqId || !rejectedReqIds.has(h.orgReqId),
-      );
       if (applyHistoryFilter) {
         histories = histories.filter((h) =>
           matchesNodeFilter(h.orgReq?.data as any),
@@ -2426,14 +2426,15 @@ export class OrgStructureDbController {
       // 4. Format history for easy display
       const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;
-        const displayEvent =
-          h.event === 'INITIATE' &&
-          h.orgReq?.type &&
-          h.orgReq.type !== 'INITIATE'
-            ? 'MODIFY'
-            : h.event;
+        const requestType = String(h.orgReq?.type || 'INITIATE').toUpperCase();
+        const isChangeRequestStart =
+          h.event === 'INITIATE' && requestType !== 'INITIATE';
+        const displayEvent = OrgStructureDbController.getOrgHistoryDisplayEvent(
+          h.event,
+          requestType,
+        );
         const levelCount =
-          displayEvent === 'MODIFY' && h.orgReqId
+          isChangeRequestStart && h.orgReqId
             ? `M${modificationSequenceByReqId.get(h.orgReqId) || 1}`
             : displayEvent === 'INITIATE'
               ? 'I'
@@ -2574,10 +2575,10 @@ export class OrgStructureDbController {
 
       const requestData = (history.orgReq?.data as any) || null;
       const requestType = String(history.orgReq?.type || 'INITIATE').toUpperCase();
-      const displayEvent =
-        history.event === 'INITIATE' && requestType !== 'INITIATE'
-          ? 'MODIFY'
-          : history.event;
+      const displayEvent = OrgStructureDbController.getOrgHistoryDisplayEvent(
+        history.event,
+        requestType,
+      );
 
       const allRequests = await prisma.orgStructureReq.findMany({
         where: { companyId: resolvedCompanyId },
