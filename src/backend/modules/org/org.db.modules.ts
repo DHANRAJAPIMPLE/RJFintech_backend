@@ -2350,6 +2350,35 @@ export class OrgStructureDbController {
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
+      const modificationSequenceByReqId = new Map<string, number>();
+      histories
+        .filter((history) => history.orgReqId)
+        .sort((left, right) => {
+          const leftTime = left.createdAt
+            ? new Date(left.createdAt).getTime()
+            : 0;
+          const rightTime = right.createdAt
+            ? new Date(right.createdAt).getTime()
+            : 0;
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return String(left.id).localeCompare(String(right.id));
+        })
+        .forEach((history) => {
+          const requestType = String(
+            history.orgReq?.type || 'INITIATE',
+          ).toUpperCase();
+          if (
+            history.event === 'INITIATE' &&
+            requestType !== 'INITIATE' &&
+            history.orgReqId &&
+            !modificationSequenceByReqId.has(history.orgReqId)
+          ) {
+            modificationSequenceByReqId.set(
+              history.orgReqId,
+              modificationSequenceByReqId.size + 1,
+            );
+          }
+        });
 
       // 3. Inject "Pending Approval" entries for any active requests
       histories.forEach((h) => {
@@ -2376,6 +2405,7 @@ export class OrgStructureDbController {
                   h.orgReq?.oldData ||
                   ((h.orgReq?.data as any)?.oldData ?? null),
                 newData: h.orgReq?.data || null,
+                levelCount: `A${currentPending.level}`,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -2402,6 +2432,14 @@ export class OrgStructureDbController {
           h.orgReq.type !== 'INITIATE'
             ? 'MODIFY'
             : h.event;
+        const levelCount =
+          displayEvent === 'MODIFY' && h.orgReqId
+            ? `M${modificationSequenceByReqId.get(h.orgReqId) || 1}`
+            : displayEvent === 'INITIATE'
+              ? 'I'
+              : displayEvent === 'APPROVED' && h.level
+                ? `A${h.level}`
+                : null;
 
         const levels = h.orgReqId ? workflowMap.get(h.orgReqId) : null;
         let workflowStatus = null;
@@ -2452,6 +2490,7 @@ export class OrgStructureDbController {
             h.orgReq?.oldData || ((h.orgReq?.data as any)?.oldData ?? null),
           newData: h.orgReq?.data || null,
           event: displayEvent,
+          levelCount,
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,

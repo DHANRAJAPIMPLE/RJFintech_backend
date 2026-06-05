@@ -192,12 +192,14 @@ export type OrgHistoryEvent =
   | 'AUTO_DELETE';
 
 export type OrgHistoryPendingApprovalEvent = `L${number} Pending Approval`;
+export type OrgHistoryLevelCount = 'I' | `M${number}` | `A${number}` | null;
 
 export type OrgHistoryBaseItem = {
   id: string;
   newNodeName: string | null;
   nodeType: OrgNodeType | null;
   parentNodeName: string;
+  levelCount: OrgHistoryLevelCount;
 };
 
 export type OrgHistoryActionItem = OrgHistoryBaseItem & {

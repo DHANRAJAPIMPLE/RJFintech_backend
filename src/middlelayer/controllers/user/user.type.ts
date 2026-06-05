@@ -247,11 +247,13 @@ export type UserHistoryChangeCount = {
 export type UserHistoryEvent = 'INITIATE' | 'APPROVED' | 'REJECTED' | 'MODIFY';
 
 export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
+export type UserHistoryLevelCount = 'I' | `M${number}` | `A${number}` | null;
 
 export type UserHistoryBaseItem = {
   id: string;
   email: string;
   changeCount: UserHistoryChangeCount;
+  levelCount: UserHistoryLevelCount;
 };
 
 export type UserHistoryActionItem = UserHistoryBaseItem & {

@@ -5004,6 +5004,37 @@ export class UserDbController {
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
+      const modificationSequenceByReqId = new Map<string, number>();
+      activeHistory
+        .filter((history) => history.reqId)
+        .sort((left, right) => {
+          const leftTime = left.createdAt
+            ? new Date(left.createdAt).getTime()
+            : 0;
+          const rightTime = right.createdAt
+            ? new Date(right.createdAt).getTime()
+            : 0;
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return String(left.id).localeCompare(String(right.id));
+        })
+        .forEach((history) => {
+          const requestType = history.reqId
+            ? String(
+                requestSnapshotMap.get(history.reqId)?.type || 'INITIATE',
+              ).toUpperCase()
+            : 'INITIATE';
+          if (
+            history.event === 'INITIATE' &&
+            requestType !== 'INITIATE' &&
+            history.reqId &&
+            !modificationSequenceByReqId.has(history.reqId)
+          ) {
+            modificationSequenceByReqId.set(
+              history.reqId,
+              modificationSequenceByReqId.size + 1,
+            );
+          }
+        });
 
       // 3. Inject "Pending Approval" entries for any active requests
       activeHistory.forEach((h) => {
@@ -5037,6 +5068,7 @@ export class UserDbController {
                     null),
                 newData: requestSnapshotMap.get(h.reqId)?.data || null,
                 changeCount,
+                levelCount: `A${currentPending.level}`,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -5065,6 +5097,14 @@ export class UserDbController {
             requestType !== 'INITIATE'
             ? 'MODIFY'
             : h.event;
+        const levelCount =
+          displayEvent === 'MODIFY' && h.reqId
+            ? `M${modificationSequenceByReqId.get(h.reqId) || 1}`
+            : displayEvent === 'INITIATE'
+              ? 'I'
+              : displayEvent === 'APPROVED' && h.level
+                ? `A${h.level}`
+                : null;
         const levels = h.reqId ? workflowMap.get(h.reqId) : null;
         let workflowStatus = null;
 
@@ -5116,6 +5156,7 @@ export class UserDbController {
             : null,
           newData: h.reqId ? (requestSnapshotMap.get(h.reqId)?.data || null) : null,
           event: displayEvent,
+          levelCount,
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,

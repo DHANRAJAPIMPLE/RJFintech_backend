@@ -3402,6 +3402,35 @@ export class WorkflowDbController {
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
+      const modificationSequenceByReqId = new Map<string, number>();
+      histories
+        .filter((history) => history.workflowReqId)
+        .sort((left, right) => {
+          const leftTime = left.createdAt
+            ? new Date(left.createdAt).getTime()
+            : 0;
+          const rightTime = right.createdAt
+            ? new Date(right.createdAt).getTime()
+            : 0;
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return String(left.id).localeCompare(String(right.id));
+        })
+        .forEach((history) => {
+          const requestType = String(
+            history.workflowReq?.type || 'INITIATE',
+          ).toUpperCase();
+          if (
+            history.event === 'INITIATE' &&
+            requestType !== 'INITIATE' &&
+            history.workflowReqId &&
+            !modificationSequenceByReqId.has(history.workflowReqId)
+          ) {
+            modificationSequenceByReqId.set(
+              history.workflowReqId,
+              modificationSequenceByReqId.size + 1,
+            );
+          }
+        });
 
       // 3. Inject "Pending Approval" entries for any active requests
       histories.forEach((h) => {
@@ -3454,6 +3483,7 @@ export class WorkflowDbController {
                 nodeType: (h.workflowReq?.data as any)?.nodeType || null,
                 companyCode: h.company.companyCode,
                 changeCount: requestChangeCount,
+                levelCount: `A${currentPending.level}`,
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
@@ -3472,6 +3502,14 @@ export class WorkflowDbController {
           h.workflowReq.type !== 'INITIATE'
             ? 'MODIFY'
             : h.event;
+        const levelCount =
+          displayEvent === 'MODIFY' && h.workflowReqId
+            ? `M${modificationSequenceByReqId.get(h.workflowReqId) || 1}`
+            : displayEvent === 'INITIATE'
+              ? 'I'
+              : displayEvent === 'APPROVED' && h.level
+                ? `A${h.level}`
+                : null;
         const newDataObj = WorkflowDbController.sanitizeWorkflowHistoryData(
           h.workflowReq?.data,
           h.workflowReq?.type,
@@ -3505,6 +3543,7 @@ export class WorkflowDbController {
           nodeType: (h.workflowReq?.data as any)?.nodeType || null,
           companyCode: h.company.companyCode,
           event: displayEvent,
+          levelCount,
           level: h.level,
           createdAt: h.createdAt,
           remarks: WorkflowDbController.formatWorkflowHistoryRemarks(h),

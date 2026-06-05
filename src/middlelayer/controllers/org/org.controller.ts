@@ -67,6 +67,7 @@ export class OrgController {
       newNodeName: item.newNodeName,
       nodeType: item.nodeType,
       parentNodeName: item.parentNodeName,
+      levelCount: item.levelCount,
     };
 
     if ('eligibleapprovers' in item) {

@@ -160,6 +160,7 @@ export class UserController {
       id: item.id,
       email: item.email,
       changeCount: item.changeCount,
+      levelCount: item.levelCount,
     };
 
     if ('eligibleapprovers' in item) {

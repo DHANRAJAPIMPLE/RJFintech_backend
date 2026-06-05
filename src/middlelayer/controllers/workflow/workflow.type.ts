@@ -211,11 +211,13 @@ export type WorkflowHistoryEvent =
   | 'AUTO_DELETE';
 
 export type WorkflowHistoryPendingApprovalEvent = `L${number} Pending Approval`;
+export type WorkflowHistoryLevelCount = 'I' | `M${number}` | `A${number}` | null;
 
 export type WorkflowHistoryBaseItem = {
   id: string;
   workflowName: string | null;
   changeCount: WorkflowHistoryChangeCount;
+  levelCount: WorkflowHistoryLevelCount;
 };
 
 export type WorkflowHistoryActionItem = WorkflowHistoryBaseItem & {

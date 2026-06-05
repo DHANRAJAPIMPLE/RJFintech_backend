@@ -138,6 +138,7 @@ export class WorkflowController {
       id: item.id,
       workflowName: item.workflowName,
       changeCount: item.changeCount,
+      levelCount: item.levelCount,
     };
 
     if ('eligibleapprovers' in item) {
