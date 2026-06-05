@@ -63,7 +63,7 @@ export class WorkflowDbController {
             ? 'Workflow inactivation'
             : normalizedType === 'ARCHIVE'
               ? 'Workflow archive'
-            : 'Workflow onboarding';
+              : 'Workflow onboarding';
 
     return {
       name: `${label} ${phase}`,
@@ -96,8 +96,10 @@ export class WorkflowDbController {
       typeof requestData?.name === 'string' ? requestData.name.trim() : '';
     const targetName =
       typeof targetData?.name === 'string' ? targetData.name.trim() : '';
-    const alias = typeof request?.alias === 'string' ? request.alias.trim() : '';
-    const module = typeof request?.module === 'string' ? request.module.trim() : '';
+    const alias =
+      typeof request?.alias === 'string' ? request.alias.trim() : '';
+    const module =
+      typeof request?.module === 'string' ? request.module.trim() : '';
     const subModule =
       typeof request?.subModule === 'string' ? request.subModule.trim() : '';
     const levelsHash =
@@ -468,9 +470,8 @@ export class WorkflowDbController {
     referenceId?: string | null,
     approverUserIds: string[] = [],
   ) {
-    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
-      companyId,
-    );
+    const corpAdminUserIds =
+      await NotificationService.getCorpAdminUserIds(companyId);
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
       approverUserIds,
@@ -706,7 +707,10 @@ export class WorkflowDbController {
 
   private static getWorkflowLevelMap(levels: unknown) {
     if (!levels || typeof levels !== 'object' || Array.isArray(levels)) {
-      return new Map<number, { approver1: unknown; approver2: unknown; type: unknown }>();
+      return new Map<
+        number,
+        { approver1: unknown; approver2: unknown; type: unknown }
+      >();
     }
 
     const entries = Object.entries(levels as Record<string, any>)
@@ -769,7 +773,10 @@ export class WorkflowDbController {
     const source = WorkflowDbController.normalizeWorkflowSnapshotSource(data);
     const target = source?.target || {};
     const nodePath =
-      target?.nodePath || source?.nodePath || source?.orgStructure?.nodePath || null;
+      target?.nodePath ||
+      source?.nodePath ||
+      source?.orgStructure?.nodePath ||
+      null;
     const module = target?.module || source?.module || null;
     const subModule = target?.subModule || source?.subModule || null;
     const levelsHash = target?.levelsHash || source?.levelsHash || null;
@@ -905,7 +912,8 @@ export class WorkflowDbController {
     } = source || {};
     const merged = mergeJsonData(next, snapshotPatch);
     if (
-      typeof source?.nodePath === 'string' && source.nodePath.trim().length > 0
+      typeof source?.nodePath === 'string' &&
+      source.nodePath.trim().length > 0
     ) {
       merged.nodePath = source.nodePath;
     } else if (
@@ -924,7 +932,7 @@ export class WorkflowDbController {
         (typeof source?.module === 'string' && source.module.trim()) ||
         request?.module ||
         (typeof source?.target?.module === 'string' &&
-        source.target.module.trim()) ||
+          source.target.module.trim()) ||
         merged.module;
     }
     if (
@@ -938,10 +946,14 @@ export class WorkflowDbController {
         (typeof source?.subModule === 'string' && source.subModule.trim()) ||
         request?.subModule ||
         (typeof source?.target?.subModule === 'string' &&
-        source.target.subModule.trim()) ||
+          source.target.subModule.trim()) ||
         merged.subModule;
     }
-    if (source?.target?.levelsHash || source?.levelsHash || request?.levelsHash) {
+    if (
+      source?.target?.levelsHash ||
+      source?.levelsHash ||
+      request?.levelsHash
+    ) {
       merged.levelsHash =
         request?.levelsHash ||
         source?.levelsHash ||
@@ -954,7 +966,10 @@ export class WorkflowDbController {
     if (typeof source?.name === 'string' && source.name.trim().length > 0) {
       merged.name = source.name.trim();
     }
-    if (typeof source?.workflowType === 'string' && source.workflowType.trim()) {
+    if (
+      typeof source?.workflowType === 'string' &&
+      source.workflowType.trim()
+    ) {
       merged.workflowType = WorkflowDbController.normalizeWorkflowType(
         source.workflowType,
       );
@@ -976,8 +991,10 @@ export class WorkflowDbController {
       return null;
     }
 
-    const nextSnapshot =
-      WorkflowDbController.extractWorkflowSnapshot(requestData, fallback);
+    const nextSnapshot = WorkflowDbController.extractWorkflowSnapshot(
+      requestData,
+      fallback,
+    );
     if (!nextSnapshot) return null;
 
     const patchedSnapshot = mergeJsonData(cloneJson(nextSnapshot), oldPatch);
@@ -1063,7 +1080,9 @@ export class WorkflowDbController {
       ...Array.from(newLevelMap.keys()),
     ]);
 
-    for (const levelNumber of Array.from(allLevelNumbers).sort((a, b) => a - b)) {
+    for (const levelNumber of Array.from(allLevelNumbers).sort(
+      (a, b) => a - b,
+    )) {
       const levelKey = `l${levelNumber}`;
       const oldLevel = oldLevelMap.get(levelNumber);
       const newLevel = newLevelMap.get(levelNumber);
@@ -1141,8 +1160,7 @@ export class WorkflowDbController {
 
     return {
       oldData: cloneJson(oldData),
-      newData:
-        newPatch && Object.keys(newPatch).length > 0 ? newPatch : null,
+      newData: newPatch && Object.keys(newPatch).length > 0 ? newPatch : null,
     };
   }
 
@@ -1162,10 +1180,9 @@ export class WorkflowDbController {
         requestData?.nodePath ||
         requestData?.target?.nodePath ||
         null,
-      levels:
-        relatedWorkflow
-          ? WorkflowDbController.toLevelsPayload(relatedWorkflow.levels)
-          : requestData?.levels,
+      levels: relatedWorkflow
+        ? WorkflowDbController.toLevelsPayload(relatedWorkflow.levels)
+        : requestData?.levels,
       workflowType: relatedWorkflow?.type || undefined,
       status: requestData?.status || relatedWorkflow?.status || undefined,
     };
@@ -1294,20 +1311,18 @@ export class WorkflowDbController {
         : [];
       const chainRequests: any[] =
         workflowReqIds.length > 0
-          ? workflowReqIds
+          ? (workflowReqIds
               .map((workflowReqId: string) => requestMap.get(workflowReqId))
-              .filter(Boolean) as any[]
-          : (requestsByChainKey.get(
+              .filter(Boolean) as any[])
+          : requestsByChainKey.get(
               WorkflowDbController.getWorkflowHistoryChainKey(
                 request,
                 currentWorkflow,
               ) || '',
-            ) || []);
+            ) || [];
 
       const orderedRequests: any[] = Array.from(
-        new Map(
-          chainRequests.map((entry: any) => [entry.id, entry]),
-        ).values(),
+        new Map(chainRequests.map((entry: any) => [entry.id, entry])).values(),
       ).sort((left: any, right: any) => {
         const leftTime = new Date(left.createdAt).getTime();
         const rightTime = new Date(right.createdAt).getTime();
@@ -1320,9 +1335,10 @@ export class WorkflowDbController {
       let newData: Record<string, unknown> | null = null;
 
       for (const chainRequest of orderedRequests) {
-        const fallback = WorkflowDbController.buildWorkflowRequestSnapshotFallback(
-          chainRequest,
-        );
+        const fallback =
+          WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+            chainRequest,
+          );
         const nextSnapshot: Record<string, unknown> | null =
           chainRequest.type === 'INITIATE'
             ? WorkflowDbController.extractWorkflowSnapshot(
@@ -1364,10 +1380,11 @@ export class WorkflowDbController {
       }
 
       if (!newData) {
-        const fallback = WorkflowDbController.buildWorkflowRequestSnapshotFallback(
-          request,
-          currentWorkflow,
-        );
+        const fallback =
+          WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+            request,
+            currentWorkflow,
+          );
         newData = WorkflowDbController.extractWorkflowSnapshot(
           request.data,
           fallback,
@@ -1526,6 +1543,75 @@ export class WorkflowDbController {
     return counts;
   }
 
+  private static isWorkflowHistorySnapshot(value: any) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+
+    return Boolean(
+      value.levels &&
+      typeof value.levels === 'object' &&
+      !Array.isArray(value.levels) &&
+      value.module &&
+      value.subModule &&
+      value.nodePath &&
+      value.levelsHash,
+    );
+  }
+
+  private static getWorkflowHistoryChangeCountFromLevelPatch(
+    requestData: any,
+    oldData: any,
+    requestType: string | null | undefined,
+  ): HistoryChangeCount | null {
+    const normalizedType = String(requestType || '').toUpperCase();
+    if (
+      normalizedType === 'INITIATE' ||
+      WorkflowDbController.isWorkflowStatusOnlyHistoryType(normalizedType)
+    ) {
+      return null;
+    }
+
+    if (
+      !oldData?.levels ||
+      typeof oldData.levels !== 'object' ||
+      Array.isArray(oldData.levels) ||
+      !requestData?.levels ||
+      typeof requestData.levels !== 'object' ||
+      Array.isArray(requestData.levels)
+    ) {
+      return null;
+    }
+
+    const oldLevels = WorkflowDbController.getWorkflowLevelMap(oldData.levels);
+    const newLevels = WorkflowDbController.getWorkflowLevelMap(
+      requestData.levels,
+    );
+    if (oldLevels.size === 0) {
+      return null;
+    }
+
+    const counts: HistoryChangeCount = {
+      added: 0,
+      modify: 0,
+      remove: 0,
+    };
+
+    for (const [levelNumber, oldLevel] of oldLevels.entries()) {
+      const newLevel = newLevels.get(levelNumber);
+      if (!newLevel) {
+        counts.remove += 1;
+        continue;
+      }
+
+      if (JSON.stringify(oldLevel) !== JSON.stringify(newLevel)) {
+        counts.modify += 1;
+      }
+    }
+
+    return counts.added || counts.modify || counts.remove ? counts : null;
+  }
+
   private static getWorkflowHistoryChangeCount(
     requestData: any,
     oldData: any,
@@ -1537,6 +1623,27 @@ export class WorkflowDbController {
         modify: 0,
         remove: 0,
       };
+    }
+
+    if (
+      WorkflowDbController.isWorkflowHistorySnapshot(oldData) &&
+      WorkflowDbController.isWorkflowHistorySnapshot(requestData)
+    ) {
+      return WorkflowDbController.getWorkflowHistoryChangeCountFromSnapshots(
+        oldData,
+        requestData,
+        requestType,
+      );
+    }
+
+    const patchCount =
+      WorkflowDbController.getWorkflowHistoryChangeCountFromLevelPatch(
+        requestData,
+        oldData,
+        requestType,
+      );
+    if (patchCount) {
+      return patchCount;
     }
 
     const stored = WorkflowDbController.normalizeChangeCount(
@@ -1584,7 +1691,10 @@ export class WorkflowDbController {
   }
 
   private static buildWorkflowHistoryLinkedWorkflow(history: any) {
-    if (history?.event !== 'AUTO_GENERATE' && history?.event !== 'AUTO_DELETE') {
+    if (
+      history?.event !== 'AUTO_GENERATE' &&
+      history?.event !== 'AUTO_DELETE'
+    ) {
       return null;
     }
 
@@ -1624,7 +1734,10 @@ export class WorkflowDbController {
   }
 
   private static formatWorkflowHistoryRemarks(history: any) {
-    if (history?.event !== 'AUTO_GENERATE' && history?.event !== 'AUTO_DELETE') {
+    if (
+      history?.event !== 'AUTO_GENERATE' &&
+      history?.event !== 'AUTO_DELETE'
+    ) {
       return history?.remarks ?? null;
     }
 
@@ -2305,7 +2418,7 @@ export class WorkflowDbController {
           ? { status: 'ACTIVE' }
           : type === 'ARCHIVE'
             ? { status: 'ARCHIVE' }
-          : {}),
+            : {}),
     };
     const persistedType = type === 'ACTIVE' ? 'UPDATE' : type;
     let notificationRecipients: string[] = [];
@@ -2326,7 +2439,7 @@ export class WorkflowDbController {
                 ? 'ACTIVE'
                 : type === 'ARCHIVE'
                   ? 'ARCHIVE'
-                : 'WORKFLOW_UPDATE',
+                  : 'WORKFLOW_UPDATE',
           initiatorId,
           data: requestData as any,
           oldData: changeData?.oldData as any,
@@ -2497,10 +2610,7 @@ export class WorkflowDbController {
       throw new AppError(`Workflow "${target.name}" is already active`, 409);
     }
     if (isInactivation && target.status !== 'ACTIVE') {
-      throw new AppError(
-        `Workflow "${target.name}" is already inactive`,
-        409,
-      );
+      throw new AppError(`Workflow "${target.name}" is already inactive`, 409);
     }
     if (isArchive && target.status === 'ARCHIVE') {
       throw new AppError(`Workflow "${target.name}" is already archived`, 409);
@@ -2639,7 +2749,9 @@ export class WorkflowDbController {
               workflowReqIds: { push: request.id },
             },
           });
-          await tx.workflowLevel.deleteMany({ where: { workflowId: workflow.id } });
+          await tx.workflowLevel.deleteMany({
+            where: { workflowId: workflow.id },
+          });
 
           const levelData = Object.entries(nextData.levels || {})
             .filter(([, level]) => Boolean(level))
@@ -3397,10 +3509,10 @@ export class WorkflowDbController {
                 : requestType === 'ARCHIVE' ||
                     (request.data as any)?.status === 'ARCHIVE'
                   ? 'Workflow archive request approved'
-                : requestType === 'UPDATE' &&
-                    (request.data as any)?.status === 'ACTIVE'
-                  ? 'Workflow activation request approved'
-                  : 'Workflow update request approved';
+                  : requestType === 'UPDATE' &&
+                      (request.data as any)?.status === 'ACTIVE'
+                    ? 'Workflow activation request approved'
+                    : 'Workflow update request approved';
       } else if (result && result.status === 'REJECTED') {
         message = `Workflow ${requestType.toLowerCase()} request rejected`;
       }
@@ -3433,7 +3545,7 @@ export class WorkflowDbController {
             ? 'INACTIVE'
             : request.impact === 'ARCHIVE'
               ? 'ARCHIVE'
-            : request.type;
+              : request.type;
       const workflowNotificationContent =
         requestType !== 'INITIATE' && result?.status
           ? WorkflowDbController.getWorkflowNotificationContent(
@@ -3458,9 +3570,8 @@ export class WorkflowDbController {
           notificationRecipientUserIds,
           corpAdminUserIds,
         ),
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          requestInitiatorId,
-        ),
+        requiredRecipientUserIds:
+          NotificationService.mergeRecipientUserIds(requestInitiatorId),
         isPending: result?.status === 'PARTIAL_APPROVED',
       });
 
@@ -3502,9 +3613,8 @@ export class WorkflowDbController {
             requestId,
             'workflow_req',
           );
-        const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
-          companyId,
-        );
+        const corpAdminUserIds =
+          await NotificationService.getCorpAdminUserIds(companyId);
         const recipients = NotificationService.mergeRecipientUserIds(
           initiatorId,
           requestApproverIds,
@@ -3607,9 +3717,7 @@ export class WorkflowDbController {
         }
       }
 
-      const nodeAccessFilter = isGlobal
-        ? {}
-        : { nodeId: { in: userNodeIds } };
+      const nodeAccessFilter = isGlobal ? {} : { nodeId: { in: userNodeIds } };
       const historyLookupId = WorkflowDbController.normalizeHistoryLookupId(id);
 
       if (typeof historyLookupId === 'string' && historyLookupId) {
@@ -3800,15 +3908,16 @@ export class WorkflowDbController {
           ...workflowIdentityFilters,
         ];
 
-        const matchingWorkflows = workflowLookupFilters.length > 0
-          ? await prisma.workflow.findMany({
-              where: {
-                companyId: resolvedCompanyId,
-                OR: workflowLookupFilters as any,
-              },
-              select: { id: true, workflowReqIds: true },
-            })
-          : [];
+        const matchingWorkflows =
+          workflowLookupFilters.length > 0
+            ? await prisma.workflow.findMany({
+                where: {
+                  companyId: resolvedCompanyId,
+                  OR: workflowLookupFilters as any,
+                },
+                select: { id: true, workflowReqIds: true },
+              })
+            : [];
 
         const workflowReqIdsFromWorkflows = Array.from(
           new Set(
@@ -3937,7 +4046,10 @@ export class WorkflowDbController {
       const approvedUserMap = new Map<string, Set<string>>();
       histories.forEach((h) => {
         if (h.workflowReqId) {
-          if (h.workflowReq?.initiatorId && !initiatorMap.has(h.workflowReqId)) {
+          if (
+            h.workflowReq?.initiatorId &&
+            !initiatorMap.has(h.workflowReqId)
+          ) {
             initiatorMap.set(h.workflowReqId, h.workflowReq.initiatorId);
           }
           if (h.event === 'INITIATE' && h.eventUserId) {
@@ -4121,9 +4233,7 @@ export class WorkflowDbController {
       // 4. Format the output for the UI
       const formattedHistories = histories.map((h) => {
         const requestType =
-          WorkflowDbController.resolveWorkflowHistoryRequestType(
-            h.workflowReq,
-          );
+          WorkflowDbController.resolveWorkflowHistoryRequestType(h.workflowReq);
         const isAutoHistory = WorkflowDbController.isWorkflowAutoHistoryType(
           requestType,
           h.event,
@@ -4131,10 +4241,11 @@ export class WorkflowDbController {
         const isChangeRequestStart =
           h.event === 'INITIATE' &&
           WorkflowDbController.isWorkflowModificationHistoryType(requestType);
-        const displayEvent = WorkflowDbController.getWorkflowHistoryDisplayEvent(
-          h.event,
-          requestType,
-        );
+        const displayEvent =
+          WorkflowDbController.getWorkflowHistoryDisplayEvent(
+            h.event,
+            requestType,
+          );
         const levelCount =
           isChangeRequestStart && h.workflowReqId
             ? `M${modificationSequenceByReqId.get(h.workflowReqId) || 1}`
@@ -4435,8 +4546,7 @@ export class WorkflowDbController {
           })
         : null;
       const directWorkflow =
-        history.workflowReq?.workflowId &&
-        requestType !== 'INITIATE'
+        history.workflowReq?.workflowId && requestType !== 'INITIATE'
           ? await prisma.workflow.findFirst({
               where: {
                 id: history.workflowReq.workflowId,
@@ -4454,10 +4564,10 @@ export class WorkflowDbController {
               },
             })
           : null;
-      const relatedWorkflow = targetWorkflow || linkedWorkflow || directWorkflow;
+      const relatedWorkflow =
+        targetWorkflow || linkedWorkflow || directWorkflow;
       const pendingSnapshots =
-        requestType !== 'INITIATE' &&
-        history.workflowReq?.status === 'PENDING'
+        requestType !== 'INITIATE' && history.workflowReq?.status === 'PENDING'
           ? WorkflowDbController.buildPendingWorkflowHistorySnapshots(
               history.workflowReq,
               directWorkflow || targetWorkflow || linkedWorkflow,
@@ -4750,7 +4860,7 @@ export class WorkflowDbController {
             ? 'inactive'
             : req.body?.type === 'archive'
               ? 'archive'
-            : 'active';
+              : 'active';
       const query =
         typeof req.body?.query === 'string' && req.body.query.trim()
           ? req.body.query.trim()
@@ -4792,7 +4902,9 @@ export class WorkflowDbController {
         }
       }
 
-      const buildWorkflowStatusWhere = (status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE') => ({
+      const buildWorkflowStatusWhere = (
+        status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE',
+      ) => ({
         companyId: resolvedCompanyId,
         status,
         AND: [
@@ -4988,58 +5100,64 @@ export class WorkflowDbController {
             });
           })()
         : null;
-      const [activeCount, pendingCount, inactiveCount, archiveCount, selectedRows, newCount] =
-        await Promise.all([
-          prisma.workflow.count({ where: activeWhere }),
-          filteredPendingRows
-            ? (async () => {
-                const effectiveIds =
-                  await WorkflowDbController.filterEffectivelyPendingRequestIds(
-                    'workflow_req',
-                    filteredPendingRows.map((row: any) => row.id),
-                  );
-                return filteredPendingRows.filter((row: any) =>
-                  effectiveIds.has(row.id),
-                ).length;
-              })()
-            : prisma.workflowReq.count({ where: pendingListWhere }),
-          prisma.workflow.count({ where: inactiveWhere }),
-          prisma.workflow.count({ where: archiveWhere }),
-          type === 'active' || type === 'inactive' || type === 'archive'
-            ? prisma.workflow.findMany({
+      const [
+        activeCount,
+        pendingCount,
+        inactiveCount,
+        archiveCount,
+        selectedRows,
+        newCount,
+      ] = await Promise.all([
+        prisma.workflow.count({ where: activeWhere }),
+        filteredPendingRows
+          ? (async () => {
+              const effectiveIds =
+                await WorkflowDbController.filterEffectivelyPendingRequestIds(
+                  'workflow_req',
+                  filteredPendingRows.map((row: any) => row.id),
+                );
+              return filteredPendingRows.filter((row: any) =>
+                effectiveIds.has(row.id),
+              ).length;
+            })()
+          : prisma.workflowReq.count({ where: pendingListWhere }),
+        prisma.workflow.count({ where: inactiveWhere }),
+        prisma.workflow.count({ where: archiveWhere }),
+        type === 'active' || type === 'inactive' || type === 'archive'
+          ? prisma.workflow.findMany({
+              where: pageWhere,
+              select: activeSelect,
+              orderBy: getPageOrder(pagination.direction) as any,
+              skip: pagination.cursor ? 0 : pagination.offset,
+              take: pagination.limit + 1,
+            })
+          : filteredPendingRows
+            ? Promise.resolve(
+                getInMemoryPageRows(filteredPendingRows, pagination),
+              )
+            : prisma.workflowReq.findMany({
                 where: pageWhere,
-                select: activeSelect,
+                select: pendingSelect,
                 orderBy: getPageOrder(pagination.direction) as any,
                 skip: pagination.cursor ? 0 : pagination.offset,
                 take: pagination.limit + 1,
-              })
-            : filteredPendingRows
+              }),
+        newWhere
+          ? type === 'active' || type === 'inactive' || type === 'archive'
+            ? prisma.workflow.count({ where: newWhere })
+            : filteredPendingRows && pagination.topCursor
               ? Promise.resolve(
-                  getInMemoryPageRows(filteredPendingRows, pagination),
+                  filteredPendingRows.filter((request) =>
+                    isRowInCursorDirection(
+                      request,
+                      pagination.topCursor!,
+                      'newer',
+                    ),
+                  ).length,
                 )
-              : prisma.workflowReq.findMany({
-                  where: pageWhere,
-                  select: pendingSelect,
-                  orderBy: getPageOrder(pagination.direction) as any,
-                  skip: pagination.cursor ? 0 : pagination.offset,
-                  take: pagination.limit + 1,
-                }),
-          newWhere
-            ? type === 'active' || type === 'inactive' || type === 'archive'
-              ? prisma.workflow.count({ where: newWhere })
-              : filteredPendingRows && pagination.topCursor
-                ? Promise.resolve(
-                    filteredPendingRows.filter((request) =>
-                      isRowInCursorDirection(
-                        request,
-                        pagination.topCursor!,
-                        'newer',
-                      ),
-                    ).length,
-                  )
-                : prisma.workflowReq.count({ where: newWhere })
-            : Promise.resolve(0),
-        ]);
+              : prisma.workflowReq.count({ where: newWhere })
+          : Promise.resolve(0),
+      ]);
       const pageData = buildPage(selectedRows as any[], pagination, newCount);
       const firstPageRow = pageData.pageRows[0];
       if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
@@ -5078,9 +5196,7 @@ export class WorkflowDbController {
               ]
             : await prisma.workflow.findMany({
                 where:
-                  type === 'inactive'
-                    ? inactiveBaseWhere
-                    : archiveBaseWhere,
+                  type === 'inactive' ? inactiveBaseWhere : archiveBaseWhere,
                 select: activeSelect,
               });
         const visibleWorkflowIds = new Set(
@@ -5128,14 +5244,14 @@ export class WorkflowDbController {
               const explicitRequestTarget =
                 WorkflowDbController.extractWorkflowTarget(request.data);
               const requestTarget = explicitRequestTarget || {
-                  module: request.module,
-                  subModule: request.subModule,
-                  nodePath:
-                    (request.data as any)?.nodePath ||
-                    (request.data as any)?.target?.nodePath ||
-                    null,
-                  levelsHash: request.levelsHash,
-                };
+                module: request.module,
+                subModule: request.subModule,
+                nodePath:
+                  (request.data as any)?.nodePath ||
+                  (request.data as any)?.target?.nodePath ||
+                  null,
+                levelsHash: request.levelsHash,
+              };
               if (
                 !requestTarget?.module ||
                 !requestTarget?.subModule ||

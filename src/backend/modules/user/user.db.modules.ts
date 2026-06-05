@@ -6,10 +6,7 @@ import { getPagination } from '../../../shared/utils/pagination.util';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
-import {
-  buildJsonPatch,
-  cloneJson,
-} from '../../utils/json-patch.util';
+import { buildJsonPatch, cloneJson } from '../../utils/json-patch.util';
 
 type TextFilterOption = {
   label: string;
@@ -98,8 +95,7 @@ export class UserDbController {
   ) {
     const normalizedType = String(requestType || '').toUpperCase();
     return (
-      normalizedType === 'AUTO_GENERATE' ||
-      normalizedType === 'AUTO_DELETE'
+      normalizedType === 'AUTO_GENERATE' || normalizedType === 'AUTO_DELETE'
     );
   }
 
@@ -190,9 +186,8 @@ export class UserDbController {
     approverUserIds: string[] = [],
     reportingManagerUserIds: string[] = [],
   ) {
-    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
-      companyId,
-    );
+    const corpAdminUserIds =
+      await NotificationService.getCorpAdminUserIds(companyId);
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
       approverUserIds,
@@ -313,9 +308,13 @@ export class UserDbController {
 
   private static permissionSummaryKey(permission: any) {
     const roleName =
-      typeof permission?.roleName === 'string' ? permission.roleName.trim() : '';
+      typeof permission?.roleName === 'string'
+        ? permission.roleName.trim()
+        : '';
     const nodePath =
-      typeof permission?.nodePath === 'string' ? permission.nodePath.trim() : '';
+      typeof permission?.nodePath === 'string'
+        ? permission.nodePath.trim()
+        : '';
     return `${roleName}|${nodePath}`;
   }
 
@@ -323,7 +322,10 @@ export class UserDbController {
     originalPermissions: any[],
     expandedPermissions: any[],
   ) {
-    if (!Array.isArray(expandedPermissions) || expandedPermissions.length === 0) {
+    if (
+      !Array.isArray(expandedPermissions) ||
+      expandedPermissions.length === 0
+    ) {
       return null;
     }
 
@@ -440,6 +442,70 @@ export class UserDbController {
     ].map((permission) => UserDbController.normalizePermission(permission));
   }
 
+  private static getUserHistoryChangeCountFromPermissionDiff(
+    requestData: any,
+    oldData: any,
+  ): HistoryChangeCount | null {
+    const permissions = oldData?.permissions;
+    if (
+      !permissions ||
+      typeof permissions !== 'object' ||
+      Array.isArray(permissions)
+    ) {
+      return null;
+    }
+
+    const removedPermissions = Array.isArray(permissions.removed)
+      ? permissions.removed
+      : [];
+    const updatedPermissions = Array.isArray(permissions.updated)
+      ? permissions.updated
+      : [];
+    if (removedPermissions.length === 0 && updatedPermissions.length === 0) {
+      return null;
+    }
+
+    const updatedKeys = new Set(
+      updatedPermissions.map((permission: any) =>
+        UserDbController.permissionReplacementKey(
+          UserDbController.normalizePermission(permission),
+        ),
+      ),
+    );
+    const removedKeys = new Set(
+      removedPermissions.map((permission: any) =>
+        UserDbController.permissionReplacementKey(
+          UserDbController.normalizePermission(permission),
+        ),
+      ),
+    );
+    const counts: HistoryChangeCount = {
+      added: 0,
+      modify: updatedPermissions.length,
+      remove: removedPermissions.length,
+    };
+    const mutations = Array.isArray(requestData?.permissions)
+      ? requestData.permissions
+      : [];
+
+    for (const mutation of mutations) {
+      if (UserDbController.isPermissionRemoval(mutation)) {
+        continue;
+      }
+
+      const key = UserDbController.permissionReplacementKey(
+        UserDbController.normalizePermission(mutation),
+      );
+      if (updatedKeys.has(key) || removedKeys.has(key)) {
+        continue;
+      }
+
+      counts.added += 1;
+    }
+
+    return counts;
+  }
+
   private static getUserHistoryChangeCount(
     requestData: any,
     oldData: any,
@@ -448,11 +514,17 @@ export class UserDbController {
     const stored = UserDbController.normalizeChangeCount(
       requestData?.changeCount ?? oldData?.changeCount,
     );
-    if (stored.added || stored.modify || stored.remove) {
-      return stored;
-    }
 
     const normalizedType = String(requestType || '').toUpperCase();
+    const diffCount =
+      UserDbController.getUserHistoryChangeCountFromPermissionDiff(
+        requestData,
+        oldData,
+      );
+    if (diffCount) {
+      return diffCount;
+    }
+
     const mutations = Array.isArray(requestData?.permissions)
       ? requestData.permissions
       : [];
@@ -489,8 +561,7 @@ export class UserDbController {
         continue;
       }
 
-      const normalizedMutation =
-        UserDbController.normalizePermission(mutation);
+      const normalizedMutation = UserDbController.normalizePermission(mutation);
       const replacedPrimary = oldPermissions.find(
         (permission) => permission.accessType === 'PRIMARY',
       );
@@ -499,7 +570,7 @@ export class UserDbController {
         replacedPrimary &&
         !UserDbController.permissionsEqual(replacedPrimary, normalizedMutation)
       ) {
-        counts.remove += 1;
+        counts.modify += 1;
         continue;
       }
 
@@ -513,11 +584,22 @@ export class UserDbController {
         continue;
       }
 
-      if (oldPermissionKeys.has(UserDbController.permissionMutationKey(mutation))) {
+      if (
+        oldPermissionKeys.has(UserDbController.permissionMutationKey(mutation))
+      ) {
         counts.modify += 1;
       } else {
         counts.added += 1;
       }
+    }
+
+    if (
+      counts.added === 0 &&
+      counts.modify === 0 &&
+      counts.remove === 0 &&
+      (stored.added || stored.modify || stored.remove)
+    ) {
+      return stored;
     }
 
     return counts;
@@ -631,7 +713,7 @@ export class UserDbController {
         (newData, index) =>
           !pairedAdded.has(index) &&
           UserDbController.permissionReplacementKey(oldData) ===
-          UserDbController.permissionReplacementKey(newData),
+            UserDbController.permissionReplacementKey(newData),
       );
 
       if (newIndex >= 0) {
@@ -1043,12 +1125,11 @@ export class UserDbController {
 
     const explicitPermissionKeys = new Set(
       permissions
-        .filter((permission) => !UserDbController.isPermissionRemoval(permission))
+        .filter(
+          (permission) => !UserDbController.isPermissionRemoval(permission),
+        )
         .map((permission) =>
-          [
-            permission?.roleName || '',
-            permission?.nodePath || '',
-          ].join('|'),
+          [permission?.roleName || '', permission?.nodePath || ''].join('|'),
         ),
     );
     const expandedPermissions: any[] = [];
@@ -1172,9 +1253,9 @@ export class UserDbController {
     const roles =
       updatedRoles.length > 0
         ? await prisma.roles.findMany({
-          where: { roleName: { in: updatedRoles } },
-          select: { roleName: true, permissionLevel: true },
-        })
+            where: { roleName: { in: updatedRoles } },
+            select: { roleName: true, permissionLevel: true },
+          })
         : [];
     const roleRank = new Map(
       roles.map((role) => [
@@ -1346,35 +1427,37 @@ export class UserDbController {
       UserDbController.normalizeFilterText(subCategory);
     if (!normalizedSubCategory) return null;
 
-    return prisma.workflow.findFirst({
-      where: {
-        companyId,
-        module: 'SYSTEM_ACCESS',
-        subModule: normalizedSubCategory,
-        name: { contains: 'DEFAULT' },
-        status: 'ACTIVE',
-      },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        levelsHash: true,
-        name: true,
-        alias: true,
-        status: true,
-        module: true,
-        subModule: true,
-        orgStructure: {
-          select: { nodePath: true },
+    return prisma.workflow
+      .findFirst({
+        where: {
+          companyId,
+          module: 'SYSTEM_ACCESS',
+          subModule: normalizedSubCategory,
+          name: { contains: 'DEFAULT' },
+          status: 'ACTIVE',
         },
-      },
-    }).then((workflow) =>
-      workflow
-        ? {
-          ...workflow,
-          nodePath: workflow.orgStructure?.nodePath,
-        }
-        : null,
-    );
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          levelsHash: true,
+          name: true,
+          alias: true,
+          status: true,
+          module: true,
+          subModule: true,
+          orgStructure: {
+            select: { nodePath: true },
+          },
+        },
+      })
+      .then((workflow) =>
+        workflow
+          ? {
+              ...workflow,
+              nodePath: workflow.orgStructure?.nodePath,
+            }
+          : null,
+      );
   }
 
   private static withDefaultWorkflowOption<
@@ -1538,10 +1621,11 @@ export class UserDbController {
       },
       select: { id: true, data: true },
     });
-    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
-      'org_structure_req',
-      pendingRequests.map((request) => request.id),
-    );
+    const effectiveIds =
+      await UserDbController.filterEffectivelyPendingRequestIds(
+        'org_structure_req',
+        pendingRequests.map((request) => request.id),
+      );
 
     return new Set(
       pendingRequests
@@ -1576,15 +1660,14 @@ export class UserDbController {
         .filter((entry): entry is [string, string] => Boolean(entry[1])),
     );
     const activeWorkflowIdByKey = new Map(
-      Array.from(activeWorkflowKeyById.entries()).map(([id, key]) => [
-        key,
-        id,
-      ]),
+      Array.from(activeWorkflowKeyById.entries()).map(([id, key]) => [key, id]),
     );
     const autoGeneratedParentByWorkflowId =
       await UserDbController.getAutoGeneratedWorkflowParentMap(companyId);
     const pendingKeys = new Set<string>();
-    const addPendingWorkflowFamilyKeys = (workflowId: string | null | undefined) => {
+    const addPendingWorkflowFamilyKeys = (
+      workflowId: string | null | undefined,
+    ) => {
       if (!workflowId) return;
       [
         workflowId,
@@ -1620,29 +1703,33 @@ export class UserDbController {
       new Set(
         pendingRequests
           .map((request) => request.nodeId)
-          .filter((nodeId): nodeId is string => typeof nodeId === 'string' && Boolean(nodeId)),
+          .filter(
+            (nodeId): nodeId is string =>
+              typeof nodeId === 'string' && Boolean(nodeId),
+          ),
       ),
     );
     const pendingNodes =
       pendingNodeIds.length > 0
         ? await prisma.orgStructure.findMany({
-          where: {
-            companyId,
-            id: { in: pendingNodeIds },
-          },
-          select: {
-            id: true,
-            nodePath: true,
-          },
-        })
+            where: {
+              companyId,
+              id: { in: pendingNodeIds },
+            },
+            select: {
+              id: true,
+              nodePath: true,
+            },
+          })
         : [];
     const pendingNodePathById = new Map(
       pendingNodes.map((node) => [node.id, node.nodePath]),
     );
-    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
-      'workflow_req',
-      pendingRequests.map((request) => request.id),
-    );
+    const effectiveIds =
+      await UserDbController.filterEffectivelyPendingRequestIds(
+        'workflow_req',
+        pendingRequests.map((request) => request.id),
+      );
 
     pendingRequests
       .filter((request) => effectiveIds.has(request.id))
@@ -1880,21 +1967,21 @@ export class UserDbController {
       const historyRows =
         reqTable === 'workflow_req'
           ? await prisma.workflowReqHistory.findMany({
-            where: { workflowReqId: { in: noApproverIds } },
-            orderBy: [{ createdAt: 'desc' }],
-            select: { workflowReqId: true, event: true },
-          })
+              where: { workflowReqId: { in: noApproverIds } },
+              orderBy: [{ createdAt: 'desc' }],
+              select: { workflowReqId: true, event: true },
+            })
           : reqTable === 'org_structure_req'
             ? await prisma.orgHistory.findMany({
-              where: { orgReqId: { in: noApproverIds } },
-              orderBy: [{ createdAt: 'desc' }],
-              select: { orgReqId: true, event: true },
-            })
+                where: { orgReqId: { in: noApproverIds } },
+                orderBy: [{ createdAt: 'desc' }],
+                select: { orgReqId: true, event: true },
+              })
             : await prisma.userHistory.findMany({
-              where: { reqId: { in: noApproverIds } },
-              orderBy: [{ createdAt: 'desc' }],
-              select: { reqId: true, event: true },
-            });
+                where: { reqId: { in: noApproverIds } },
+                orderBy: [{ createdAt: 'desc' }],
+                select: { reqId: true, event: true },
+              });
 
       historyRows.forEach((row: any) => {
         const reqId = row.workflowReqId || row.orgReqId || row.reqId;
@@ -1936,10 +2023,11 @@ export class UserDbController {
         },
       },
     });
-    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
-      'org_structure_req',
-      pendingOrgRequests.map((request) => request.id),
-    );
+    const effectiveIds =
+      await UserDbController.filterEffectivelyPendingRequestIds(
+        'org_structure_req',
+        pendingOrgRequests.map((request) => request.id),
+      );
     const effectivePendingOrgRequests = pendingOrgRequests.filter((request) =>
       effectiveIds.has(request.id),
     );
@@ -1948,10 +2036,7 @@ export class UserDbController {
       const data = request.data as any;
       const targetNodePath =
         data?.targetNodePath || data?.currentData?.nodePath || data?.nodePath;
-      return (
-        typeof targetNodePath === 'string' &&
-        targetNodePath === nodePath
-      );
+      return typeof targetNodePath === 'string' && targetNodePath === nodePath;
     });
 
     if (!blocking) return;
@@ -1999,10 +2084,11 @@ export class UserDbController {
         },
       },
     });
-    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
-      'workflow_req',
-      pendingWorkflowRequests.map((request) => request.id),
-    );
+    const effectiveIds =
+      await UserDbController.filterEffectivelyPendingRequestIds(
+        'workflow_req',
+        pendingWorkflowRequests.map((request) => request.id),
+      );
     const effectivePendingWorkflowRequests = pendingWorkflowRequests.filter(
       (request) => effectiveIds.has(request.id),
     );
@@ -2077,10 +2163,11 @@ export class UserDbController {
         },
       },
     });
-    const effectiveIds = await UserDbController.filterEffectivelyPendingRequestIds(
-      'workflow_req',
-      pendingModifications.map((request) => request.id),
-    );
+    const effectiveIds =
+      await UserDbController.filterEffectivelyPendingRequestIds(
+        'workflow_req',
+        pendingModifications.map((request) => request.id),
+      );
     const pendingModification = pendingModifications.find((request: any) => {
       if (!effectiveIds.has(request.id)) return false;
       const target = (request.data as any)?.target || {};
@@ -2211,10 +2298,10 @@ export class UserDbController {
       const pageWhere =
         applyPagination && cursor
           ? UserDbController.appendCursorWhere(
-            where,
-            cursor,
-            effectiveDirection === 'prev' ? 'newer' : 'older',
-          )
+              where,
+              cursor,
+              effectiveDirection === 'prev' ? 'newer' : 'older',
+            )
           : where;
       const newWhere =
         applyPagination && topCursor
@@ -2307,21 +2394,21 @@ export class UserDbController {
     const newCount =
       applyPagination && topCursor
         ? visiblePendingOnboardings.filter((onb) =>
-          UserDbController.isRowInCursorDirection(onb, topCursor, 'newer'),
-        ).length
+            UserDbController.isRowInCursorDirection(onb, topCursor, 'newer'),
+          ).length
         : 0;
     const pendingOnboardings = applyPagination
       ? visiblePendingOnboardings
-        .filter((onb) =>
-          cursor
-            ? UserDbController.isRowInCursorDirection(
-              onb,
-              cursor,
-              effectiveDirection === 'prev' ? 'newer' : 'older',
-            )
-            : true,
-        )
-        .slice(cursor ? 0 : offset, (cursor ? 0 : offset) + limit + 1)
+          .filter((onb) =>
+            cursor
+              ? UserDbController.isRowInCursorDirection(
+                  onb,
+                  cursor,
+                  effectiveDirection === 'prev' ? 'newer' : 'older',
+                )
+              : true,
+          )
+          .slice(cursor ? 0 : offset, (cursor ? 0 : offset) + limit + 1)
       : visiblePendingOnboardings;
 
     if (!applyPagination) {
@@ -2370,15 +2457,15 @@ export class UserDbController {
     const histories =
       pendingEmails.length > 0
         ? await prisma.userHistory.findMany({
-          where: {
-            email: { in: pendingEmails },
-            companyId: resolvedCompanyId,
-          },
-          include: {
-            user: { select: { name: true, email: true } },
-          },
-          orderBy: { createdAt: 'desc' },
-        })
+            where: {
+              email: { in: pendingEmails },
+              companyId: resolvedCompanyId,
+            },
+            include: {
+              user: { select: { name: true, email: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
         : [];
 
     const historyMap = new Map();
@@ -2396,11 +2483,11 @@ export class UserDbController {
     const managers =
       managerEmails.length > 0
         ? await prisma.user.findMany({
-          where: {
-            email: { in: managerEmails },
-          },
-          select: { name: true, email: true },
-        })
+            where: {
+              email: { in: managerEmails },
+            },
+            select: { name: true, email: true },
+          })
         : [];
 
     const managerMap = new Map();
@@ -2414,53 +2501,56 @@ export class UserDbController {
     const workflowDetails =
       workflowIds.length > 0
         ? await prisma.workflow.findMany({
-          where: { id: { in: workflowIds } },
-          select: { id: true, name: true, alias: true },
-        })
+            where: { id: { in: workflowIds } },
+            select: { id: true, name: true, alias: true },
+          })
         : [];
     const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
 
     const existingUsers =
       pendingEmails.length > 0
         ? await prisma.user.findMany({
-          where: { email: { in: pendingEmails } },
-          include: {
-            userMappings: {
-              where: { companyId: resolvedCompanyId },
-              include: {
-                manager: {
-                  select: {
-                    name: true,
-                    email: true,
+            where: { email: { in: pendingEmails } },
+            include: {
+              userMappings: {
+                where: { companyId: resolvedCompanyId },
+                include: {
+                  manager: {
+                    select: {
+                      name: true,
+                      email: true,
+                    },
+                  },
+                },
+              },
+              userAccesses: {
+                where: { companyId: resolvedCompanyId },
+                include: {
+                  role: {
+                    select: {
+                      roleName: true,
+                      category: true,
+                      subCategory: true,
+                    },
+                  },
+                  orgStructure: {
+                    select: {
+                      nodeName: true,
+                      nodePath: true,
+                      nodeType: true,
+                      status: true,
+                    },
                   },
                 },
               },
             },
-            userAccesses: {
-              where: { companyId: resolvedCompanyId },
-              include: {
-                role: {
-                  select: {
-                    roleName: true,
-                    category: true,
-                    subCategory: true,
-                  },
-                },
-                orgStructure: {
-                  select: {
-                    nodeName: true,
-                    nodePath: true,
-                    nodeType: true,
-                    status: true,
-                  },
-                },
-              },
-            },
-          },
-        })
+          })
         : [];
     const existingUserMap = new Map(
-      existingUsers.map((user) => [String(user.email || '').toLowerCase(), user]),
+      existingUsers.map((user) => [
+        String(user.email || '').toLowerCase(),
+        user,
+      ]),
     );
     const incomingNodePaths = Array.from(
       new Set(
@@ -2480,13 +2570,13 @@ export class UserDbController {
     const activeIncomingNodes =
       incomingNodePaths.length > 0
         ? await prisma.orgStructure.findMany({
-          where: {
-            companyId: resolvedCompanyId,
-            status: 'ACTIVE',
-            nodePath: { in: incomingNodePaths },
-          },
-          select: { nodePath: true },
-        })
+            where: {
+              companyId: resolvedCompanyId,
+              status: 'ACTIVE',
+              nodePath: { in: incomingNodePaths },
+            },
+            select: { nodePath: true },
+          })
         : [];
     const activeIncomingNodePaths = new Set(
       activeIncomingNodes.map((node) => node.nodePath),
@@ -2536,30 +2626,30 @@ export class UserDbController {
         incomingPermissions.length > 0
           ? isInitiate || existingPermissions.length === 0
             ? incomingPermissions.filter(
-              (permission: any) =>
-                !UserDbController.isPermissionRemoval(permission) &&
-                hasActivePermissionNode(permission),
-            )
+                (permission: any) =>
+                  !UserDbController.isPermissionRemoval(permission) &&
+                  hasActivePermissionNode(permission),
+              )
             : UserDbController.mergePermissionMutations(
-              existingPermissions.filter(
-                (permission: any) => permission.nodeStatus === 'ACTIVE',
-              ),
-              incomingPermissions.filter(hasActivePermissionNode),
-            )
+                existingPermissions.filter(
+                  (permission: any) => permission.nodeStatus === 'ACTIVE',
+                ),
+                incomingPermissions.filter(hasActivePermissionNode),
+              )
           : existingPermissions.filter(
-            (permission: any) => permission.nodeStatus === 'ACTIVE',
-          );
+              (permission: any) => permission.nodeStatus === 'ACTIVE',
+            );
       const responseNewData =
         isInitiate || !dataBlob
           ? null
           : {
-            ...dataBlob,
-            permissions: incomingPermissions.filter(
-              (permission: any) =>
-                !UserDbController.isPermissionRemoval(permission) &&
-                hasActivePermissionNode(permission),
-            ),
-          };
+              ...dataBlob,
+              permissions: incomingPermissions.filter(
+                (permission: any) =>
+                  !UserDbController.isPermissionRemoval(permission) &&
+                  hasActivePermissionNode(permission),
+              ),
+            };
 
       effectivePermissions.forEach((p: any) => {
         const access = {
@@ -2586,7 +2676,7 @@ export class UserDbController {
         id: onb.id,
         type,
         impact: onb.impact || null,
-        oldData: isInitiate ? null : (onb.oldData || dataBlob?.oldData || null),
+        oldData: isInitiate ? null : onb.oldData || dataBlob?.oldData || null,
         newData: responseNewData,
         approver: approve?.user || null,
         basicDetails: {
@@ -2637,9 +2727,9 @@ export class UserDbController {
       const rawPage = Number(req.body?.page);
       const requestedPage =
         req.body?.page !== null &&
-          req.body?.page !== undefined &&
-          Number.isFinite(rawPage) &&
-          rawPage > 0
+        req.body?.page !== undefined &&
+        Number.isFinite(rawPage) &&
+        rawPage > 0
           ? Math.floor(rawPage)
           : null;
       const limit = pagination.limit;
@@ -2770,46 +2860,46 @@ export class UserDbController {
         },
         ...(query
           ? {
-            OR: [
-              { name: { contains: query, mode: 'insensitive' as const } },
-              { email: { contains: query, mode: 'insensitive' as const } },
-              { phone: { contains: query, mode: 'insensitive' as const } },
-              {
-                userMappings: {
-                  some: {
-                    companyId: resolvedCompanyId,
-                    designation: {
-                      contains: query,
-                      mode: 'insensitive' as const,
+              OR: [
+                { name: { contains: query, mode: 'insensitive' as const } },
+                { email: { contains: query, mode: 'insensitive' as const } },
+                { phone: { contains: query, mode: 'insensitive' as const } },
+                {
+                  userMappings: {
+                    some: {
+                      companyId: resolvedCompanyId,
+                      designation: {
+                        contains: query,
+                        mode: 'insensitive' as const,
+                      },
                     },
                   },
                 },
-              },
-            ],
-          }
+              ],
+            }
           : {}),
         ...(isGlobal
           ? {}
           : {
-            AND: [
-              {
-                userAccesses: {
-                  some: {
-                    companyId: resolvedCompanyId,
-                    nodeId: { in: allVisibleNodeIds },
+              AND: [
+                {
+                  userAccesses: {
+                    some: {
+                      companyId: resolvedCompanyId,
+                      nodeId: { in: allVisibleNodeIds },
+                    },
                   },
                 },
-              },
-              {
-                userAccesses: {
-                  none: {
-                    isGlobalAccess: true,
-                    companyId: resolvedCompanyId,
+                {
+                  userAccesses: {
+                    none: {
+                      isGlobalAccess: true,
+                      companyId: resolvedCompanyId,
+                    },
                   },
                 },
-              },
-            ],
-          }),
+              ],
+            }),
       });
 
       const userInclude = {
@@ -2836,18 +2926,23 @@ export class UserDbController {
 
       const activeWhere = buildUserWhere('ACTIVE');
       const inactiveWhere = buildUserWhere('INACTIVE');
-      const selectedUserWhere = listType === 'inactive' ? inactiveWhere : activeWhere;
+      const selectedUserWhere =
+        listType === 'inactive' ? inactiveWhere : activeWhere;
       const selectedUserPageWhere =
         (listType === 'active' || listType === 'inactive') && cursor
           ? UserDbController.appendCursorWhere(
-            selectedUserWhere,
-            cursor,
-            effectiveDirection === 'prev' ? 'newer' : 'older',
-          )
+              selectedUserWhere,
+              cursor,
+              effectiveDirection === 'prev' ? 'newer' : 'older',
+            )
           : selectedUserWhere;
       const selectedUserNewWhere =
         (listType === 'active' || listType === 'inactive') && topCursor
-          ? UserDbController.appendCursorWhere(selectedUserWhere, topCursor, 'newer')
+          ? UserDbController.appendCursorWhere(
+              selectedUserWhere,
+              topCursor,
+              'newer',
+            )
           : null;
 
       const [selectedRows, inactiveRows, pendingResult, selectedNewCount] =
@@ -2855,38 +2950,38 @@ export class UserDbController {
           listType === 'pending'
             ? Promise.resolve([])
             : prisma.user.findMany({
-              where: selectedUserPageWhere,
-              include: userInclude,
-              orderBy: UserDbController.getPageOrder(effectiveDirection),
-              ...(listType === 'active' || listType === 'inactive'
-                ? { skip: cursor ? 0 : offset, take: limit + 1 }
-                : {}),
-            }),
+                where: selectedUserPageWhere,
+                include: userInclude,
+                orderBy: UserDbController.getPageOrder(effectiveDirection),
+                ...(listType === 'active' || listType === 'inactive'
+                  ? { skip: cursor ? 0 : offset, take: limit + 1 }
+                  : {}),
+              }),
           listType
             ? Promise.resolve([])
             : prisma.user.findMany({
-              where: buildUserWhere('INACTIVE'),
-              include: userInclude,
-              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-            }),
+                where: buildUserWhere('INACTIVE'),
+                include: userInclude,
+                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              }),
           listType === 'active'
             ? Promise.resolve({ pendingCount: 0, pendingOnboardings: [] })
             : UserDbController.fetchPendingUserOnboardings({
-              resolvedCompanyId,
-              isGlobal,
-              visibleNodePaths: allVisibleNodePaths,
-              offset,
-              limit,
-              applyPagination: listType === 'pending',
-              page,
-              isPagePagination,
-              cursor,
-              topCursor,
-              requestedTopCursor,
-              direction: effectiveDirection,
-              query,
-              viewerUserId: userId,
-            }),
+                resolvedCompanyId,
+                isGlobal,
+                visibleNodePaths: allVisibleNodePaths,
+                offset,
+                limit,
+                applyPagination: listType === 'pending',
+                page,
+                isPagePagination,
+                cursor,
+                topCursor,
+                requestedTopCursor,
+                direction: effectiveDirection,
+                query,
+                viewerUserId: userId,
+              }),
           selectedUserNewWhere
             ? prisma.user.count({ where: selectedUserNewWhere })
             : Promise.resolve(0),
@@ -2895,15 +2990,15 @@ export class UserDbController {
       const selectedPage =
         listType === 'active' || listType === 'inactive'
           ? UserDbController.buildPageInfo(
-            selectedRows,
-            limit,
-            requestedTopCursor,
-            selectedNewCount,
-            effectiveDirection,
-            cursor,
-            page,
-            isPagePagination,
-          )
+              selectedRows,
+              limit,
+              requestedTopCursor,
+              selectedNewCount,
+              effectiveDirection,
+              cursor,
+              page,
+              isPagePagination,
+            )
           : { pageRows: selectedRows, pageInfo: null };
       const firstActivePageRow = selectedPage.pageRows[0];
       if (
@@ -2928,26 +3023,26 @@ export class UserDbController {
       const activePendingCandidates =
         activeEmails.length > 0
           ? await prisma.userOnboarding.findMany({
-            where: {
-              companyId: resolvedCompanyId,
-              status: 'PENDING',
-              OR: activeEmails.flatMap((email: string) => [
-                {
-                  data: {
-                    path: ['targetUserEmail'],
-                    equals: email,
-                  } as any,
-                },
-                {
-                  data: {
-                    path: ['basicDetails', 'email'],
-                    equals: email,
-                  } as any,
-                },
-              ]),
-            },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          })
+              where: {
+                companyId: resolvedCompanyId,
+                status: 'PENDING',
+                OR: activeEmails.flatMap((email: string) => [
+                  {
+                    data: {
+                      path: ['targetUserEmail'],
+                      equals: email,
+                    } as any,
+                  },
+                  {
+                    data: {
+                      path: ['basicDetails', 'email'],
+                      equals: email,
+                    } as any,
+                  },
+                ]),
+              },
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            })
           : [];
       const activeEffectivePendingIds =
         await UserDbController.filterEffectivelyPendingRequestIds(
@@ -2975,16 +3070,11 @@ export class UserDbController {
           activePendingByEmail.get((user.email || '').toLowerCase()),
         ),
       );
-      const activeUsers =
-        listType === 'inactive'
-          ? []
-          : selectedUsers;
+      const activeUsers = listType === 'inactive' ? [] : selectedUsers;
       const inactiveUsers =
         listType === 'inactive'
           ? selectedUsers
-          : inactiveRows.map(
-            UserDbController.formatProductionUser,
-          );
+          : inactiveRows.map(UserDbController.formatProductionUser);
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
         resolvedCompanyId,
@@ -2992,19 +3082,19 @@ export class UserDbController {
       const pendingCount =
         listType === 'active'
           ? (
-            await UserDbController.fetchPendingUserOnboardings({
-              resolvedCompanyId,
-              isGlobal,
-              visibleNodePaths: allVisibleNodePaths,
-              offset: 0,
-              limit: 1,
-              applyPagination: true,
-              page,
-              isPagePagination,
-              query,
-              viewerUserId: userId,
-            })
-          ).pendingCount
+              await UserDbController.fetchPendingUserOnboardings({
+                resolvedCompanyId,
+                isGlobal,
+                visibleNodePaths: allVisibleNodePaths,
+                offset: 0,
+                limit: 1,
+                applyPagination: true,
+                page,
+                isPagePagination,
+                query,
+                viewerUserId: userId,
+              })
+            ).pendingCount
           : pendingResult.pendingCount;
 
       res.status(200).json({
@@ -3043,14 +3133,14 @@ export class UserDbController {
 
       const company = companyId
         ? await prisma.company.findUnique({
-          where: { id: companyId },
-          select: { id: true, companyCode: true },
-        })
-        : companyCode
-          ? await prisma.company.findUnique({
-            where: { companyCode },
+            where: { id: companyId },
             select: { id: true, companyCode: true },
           })
+        : companyCode
+          ? await prisma.company.findUnique({
+              where: { companyCode },
+              select: { id: true, companyCode: true },
+            })
           : null;
 
       if (!company) {
@@ -3154,33 +3244,33 @@ export class UserDbController {
       const [pendingManagers, pendingNodes] = await Promise.all([
         pendingManagerEmails.size > 0
           ? prisma.user.findMany({
-            where: {
-              email: {
-                in: Array.from(pendingManagerEmails),
-                mode: 'insensitive',
+              where: {
+                email: {
+                  in: Array.from(pendingManagerEmails),
+                  mode: 'insensitive',
+                },
               },
-            },
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          })
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            })
           : Promise.resolve([]),
         pendingNodePaths.size > 0
           ? prisma.orgStructure.findMany({
-            where: {
-              companyId: resolvedCompanyId,
-              nodePath: {
-                in: Array.from(pendingNodePaths),
+              where: {
+                companyId: resolvedCompanyId,
+                nodePath: {
+                  in: Array.from(pendingNodePaths),
+                },
               },
-            },
-            select: {
-              nodeName: true,
-              nodePath: true,
-              nodeType: true,
-            },
-          })
+              select: {
+                nodeName: true,
+                nodePath: true,
+                nodeType: true,
+              },
+            })
           : Promise.resolve([]),
       ]);
 
@@ -3535,9 +3625,9 @@ export class UserDbController {
         type === 'ARCHIVE'
           ? []
           : UserDbController.mergePermissionMutations(
-            current.snapshot.permissions,
-            permissionMutations,
-          ),
+              current.snapshot.permissions,
+              permissionMutations,
+            ),
     };
     const changedDetails = data?.basicDetails || {};
     const editableFields = [
@@ -3655,9 +3745,9 @@ export class UserDbController {
         const initiators =
           initiatorIds.length > 0
             ? await prisma.user.findMany({
-              where: { id: { in: initiatorIds } },
-              select: { id: true, email: true },
-            })
+                where: { id: { in: initiatorIds } },
+                select: { id: true, email: true },
+              })
             : [];
         const initiatorMap = new Map(
           initiators.map((initiator) => [initiator.id, initiator.email]),
@@ -3701,11 +3791,11 @@ export class UserDbController {
       current.snapshot.permissions[0];
     const approvalNode = primaryPermission
       ? await prisma.orgStructure.findFirst({
-        where: { companyId, nodePath: primaryPermission.nodePath },
-      })
+          where: { companyId, nodePath: primaryPermission.nodePath },
+        })
       : await prisma.orgStructure.findFirst({
-        where: { companyId, nodeType: 'ROOT' },
-      });
+          where: { companyId, nodeType: 'ROOT' },
+        });
 
     if (!approvalNode) {
       throw new AppError('Organization node not found for user workflow', 400);
@@ -3774,14 +3864,14 @@ export class UserDbController {
     const userReferenceName = UserDbController.formatUserReferenceName(
       current.user,
     );
-    const modificationNotification = UserDbController.getUserNotificationContent(
-      type,
-      'initiated',
-      userReferenceName,
-    );
-    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
-      companyId,
-    );
+    const modificationNotification =
+      UserDbController.getUserNotificationContent(
+        type,
+        'initiated',
+        userReferenceName,
+      );
+    const corpAdminUserIds =
+      await NotificationService.getCorpAdminUserIds(companyId);
     await NotificationService.createRequestNotification({
       companyId,
       type: UserDbController.getUserNotificationType(type, 'PENDING'),
@@ -3898,9 +3988,9 @@ export class UserDbController {
         onboarding.type === 'ARCHIVE'
           ? []
           : UserDbController.mergePermissionMutations(
-            current.snapshot.permissions,
-            permissionMutations,
-          ),
+              current.snapshot.permissions,
+              permissionMutations,
+            ),
     };
     const changedDetails = requestData?.basicDetails || {};
     const editableFields = [
@@ -3930,8 +4020,8 @@ export class UserDbController {
     );
     const manager = proposed.basicDetails.reportingManager
       ? await tx.user.findUnique({
-        where: { email: proposed.basicDetails.reportingManager },
-      })
+          where: { email: proposed.basicDetails.reportingManager },
+        })
       : null;
 
     if (proposed.basicDetails.reportingManager && !manager) {
@@ -4059,7 +4149,8 @@ export class UserDbController {
         } catch (error) {
           const initiatorId = req.body?.initiatorId;
           const companyId = req.body?.companyId;
-          const targetEmail = req.body?.targetEmail || req.body?.targetUserEmail;
+          const targetEmail =
+            req.body?.targetEmail || req.body?.targetUserEmail;
           if (
             !(error as any)?.skipConflictNotification &&
             typeof initiatorId === 'string' &&
@@ -4120,7 +4211,10 @@ export class UserDbController {
         new Set(
           (Array.isArray(permissions) ? permissions : [])
             .map((permission: any) => permission?.nodePath)
-            .filter((value: any): value is string => typeof value === 'string' && value.trim().length > 0),
+            .filter(
+              (value: any): value is string =>
+                typeof value === 'string' && value.trim().length > 0,
+            ),
         ),
       );
       const hasCorpAdminRole =
@@ -4291,16 +4385,18 @@ export class UserDbController {
             expandedInitiatePermissions,
           );
           return summary
-            ? `${UserDbController.getUserNotificationContent(
-              'INITIATE',
-              'initiated',
-              userReferenceName,
-            ).message} with ${summary}`
+            ? `${
+                UserDbController.getUserNotificationContent(
+                  'INITIATE',
+                  'initiated',
+                  userReferenceName,
+                ).message
+              } with ${summary}`
             : UserDbController.getUserNotificationContent(
-              'INITIATE',
-              'initiated',
-              userReferenceName,
-            ).message;
+                'INITIATE',
+                'initiated',
+                userReferenceName,
+              ).message;
         })(),
       });
       res.status(201).json(onboarding);
@@ -4511,16 +4607,16 @@ export class UserDbController {
       const hasCorpAdminRole =
         onboarding.type === 'INITIATE'
           ? Array.isArray(permissions) &&
-          permissions.some((p: any) => p.roleName === 'Corp Admin')
+            permissions.some((p: any) => p.roleName === 'Corp Admin')
           : (Array.isArray(requestData?.permissions)
-            ? requestData.permissions
-            : []
-          ).some(
-            (p: any) =>
-              p.roleName === 'Corp Admin' &&
-              p.operation !== 'REMOVE' &&
-              p.remove !== true,
-          );
+              ? requestData.permissions
+              : []
+            ).some(
+              (p: any) =>
+                p.roleName === 'Corp Admin' &&
+                p.operation !== 'REMOVE' &&
+                p.remove !== true,
+            );
 
       const approverAccess = await prisma.userAccess.findFirst({
         where: {
@@ -4671,8 +4767,8 @@ export class UserDbController {
             // Use nodePath from permissions if available, otherwise fallback to company ROOT node
             const globalPerm = Array.isArray(permissions)
               ? permissions.find(
-                (p: any) => p.roleName === 'Corp Admin' || p.isGlobalAccess,
-              )
+                  (p: any) => p.roleName === 'Corp Admin' || p.isGlobalAccess,
+                )
               : null;
             const rootNode = await tx.orgStructure.findFirst({
               where: {
@@ -4784,9 +4880,9 @@ export class UserDbController {
                             { accessCategory: 'ALL_CHILD' },
                             directParentId
                               ? {
-                                nodeId: directParentId,
-                                accessCategory: 'IMMEDIATE_CHILD',
-                              }
+                                  nodeId: directParentId,
+                                  accessCategory: 'IMMEDIATE_CHILD',
+                                }
                               : undefined,
                           ].filter(Boolean) as any,
                         },
@@ -4815,7 +4911,6 @@ export class UserDbController {
                     }
                   }
                 }
-
               }
             }
           }
@@ -4917,23 +5012,22 @@ export class UserDbController {
         result?.status === 'REJECTED' ? historyEmail : email || historyEmail;
       const notificationUser = notificationLookupEmail
         ? await prisma.user.findUnique({
-          where: { email: notificationLookupEmail },
-          select: { name: true, email: true },
-        })
+            where: { email: notificationLookupEmail },
+            select: { name: true, email: true },
+          })
         : null;
-      const notificationReferenceName = UserDbController.formatUserReferenceName(
-        {
+      const notificationReferenceName =
+        UserDbController.formatUserReferenceName({
           name: name || notificationUser?.name,
           email: notificationLookupEmail || notificationUser?.email,
-        },
-      );
+        });
       const userNotificationContent =
         requestType !== 'INITIATE' && result?.status
           ? UserDbController.getUserNotificationContent(
-            requestType,
-            result.status === 'REJECTED' ? 'rejected' : 'approved',
-            notificationReferenceName,
-          )
+              requestType,
+              result.status === 'REJECTED' ? 'rejected' : 'approved',
+              notificationReferenceName,
+            )
           : null;
 
       await NotificationService.createRequestNotification({
@@ -4951,9 +5045,8 @@ export class UserDbController {
           notificationRecipientUserIds,
           corpAdminUserIds,
         ),
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          requestInitiatorId,
-        ),
+        requiredRecipientUserIds:
+          NotificationService.mergeRecipientUserIds(requestInitiatorId),
         isPending: result?.status === 'PARTIAL_APPROVED',
       });
 
@@ -5018,16 +5111,16 @@ export class UserDbController {
         }),
         reqIds.length > 0
           ? prisma.userOnboarding.findMany({
-            where: { id: { in: reqIds } },
-            select: {
-              id: true,
-              data: true,
-              oldData: true,
-              type: true,
-              impact: true,
-              initiatorId: true,
-            },
-          })
+              where: { id: { in: reqIds } },
+              select: {
+                id: true,
+                data: true,
+                oldData: true,
+                type: true,
+                impact: true,
+                initiatorId: true,
+              },
+            })
           : Promise.resolve([]),
       ]);
       const requestSnapshotMap = new Map(
@@ -5039,11 +5132,7 @@ export class UserDbController {
             .filter((request) => request.type && request.type !== 'INITIATE')
             .map((request) => {
               const data = request.data as any;
-              return (
-                data?.targetUserEmail ||
-                data?.basicDetails?.email ||
-                null
-              );
+              return data?.targetUserEmail || data?.basicDetails?.email || null;
             })
             .filter(
               (value): value is string =>
@@ -5254,10 +5343,10 @@ export class UserDbController {
           : null;
         const changeCount = h.reqId
           ? UserDbController.getUserHistoryChangeCount(
-            requestSnapshotMap.get(h.reqId)?.data,
-            requestSnapshotMap.get(h.reqId)?.oldData,
-            requestType,
-          )
+              requestSnapshotMap.get(h.reqId)?.data,
+              requestSnapshotMap.get(h.reqId)?.oldData,
+              requestType,
+            )
           : { added: 0, modify: 0, remove: 0 };
         const isChangeRequestStart =
           h.event === 'INITIATE' &&
@@ -5317,13 +5406,17 @@ export class UserDbController {
           id: h.id,
           email: h.email,
           type: requestType,
-          impact: h.reqId ? (requestSnapshotMap.get(h.reqId)?.impact || null) : null,
+          impact: h.reqId
+            ? requestSnapshotMap.get(h.reqId)?.impact || null
+            : null,
           companyCode: h.company.companyCode,
           oldData: h.reqId
             ? requestSnapshotMap.get(h.reqId)?.oldData ||
-            ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ?? null)
+              ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ?? null)
             : null,
-          newData: h.reqId ? (requestSnapshotMap.get(h.reqId)?.data || null) : null,
+          newData: h.reqId
+            ? requestSnapshotMap.get(h.reqId)?.data || null
+            : null,
           event: displayEvent,
           levelCount,
           level: h.level,
@@ -5405,19 +5498,19 @@ export class UserDbController {
 
       const onboarding = history.reqId
         ? await prisma.userOnboarding.findFirst({
-          where: { id: history.reqId, companyId: resolvedCompanyId },
-          select: {
-            id: true,
-            data: true,
-            oldData: true,
-            type: true,
-            impact: true,
-            status: true,
-            workflowId: true,
-            approvalRemark: true,
-            createdAt: true,
-          },
-        })
+            where: { id: history.reqId, companyId: resolvedCompanyId },
+            select: {
+              id: true,
+              data: true,
+              oldData: true,
+              type: true,
+              impact: true,
+              status: true,
+              workflowId: true,
+              approvalRemark: true,
+              createdAt: true,
+            },
+          })
         : null;
       const requestData = (onboarding?.data as any) || null;
       const requestType = String(onboarding?.type || 'INITIATE').toUpperCase();
@@ -5440,7 +5533,8 @@ export class UserDbController {
       let oldData = replay.oldData;
       let newData = replay.newData;
 
-      const fallbackSnapshot = UserDbController.extractUserSnapshot(requestData);
+      const fallbackSnapshot =
+        UserDbController.extractUserSnapshot(requestData);
       if (!newData) {
         newData = fallbackSnapshot;
       }
@@ -5496,13 +5590,13 @@ export class UserDbController {
           ),
           request: onboarding
             ? {
-              id: onboarding.id,
-              type: onboarding.type,
-              status: onboarding.status,
-              workflowId: onboarding.workflowId,
-              approvalRemark: onboarding.approvalRemark,
-              createdAt: onboarding.createdAt,
-            }
+                id: onboarding.id,
+                type: onboarding.type,
+                status: onboarding.status,
+                workflowId: onboarding.workflowId,
+                approvalRemark: onboarding.approvalRemark,
+                createdAt: onboarding.createdAt,
+              }
             : null,
         },
       });
@@ -5533,9 +5627,8 @@ export class UserDbController {
             requestId,
             'user_onboarding',
           );
-        const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
-          resolvedCompanyId,
-        );
+        const corpAdminUserIds =
+          await NotificationService.getCorpAdminUserIds(resolvedCompanyId);
         const recipients = NotificationService.mergeRecipientUserIds(
           requestInitiatorId || initiatorId,
           requestApproverIds,
@@ -5546,8 +5639,9 @@ export class UserDbController {
           companyId: resolvedCompanyId,
           type: 'MODIFICATION',
           name: 'User request failed',
-          message: `User request failed: ${error instanceof Error ? error.message : 'Unexpected error'
-            }`,
+          message: `User request failed: ${
+            error instanceof Error ? error.message : 'Unexpected error'
+          }`,
           referenceType: 'USER',
           referenceId: requestId,
           referenceName:
@@ -5644,14 +5738,14 @@ export class UserDbController {
       );
       const visibleDefaultWorkflow =
         defaultWorkflow &&
-          !pendingWorkflowKeys.has(
-            UserDbController.workflowIdentityKey({
-              module: defaultWorkflow.module,
-              subModule: defaultWorkflow.subModule,
-              nodePath: defaultWorkflow.nodePath,
-              levelsHash: defaultWorkflow.levelsHash,
-            }) || '',
-          )
+        !pendingWorkflowKeys.has(
+          UserDbController.workflowIdentityKey({
+            module: defaultWorkflow.module,
+            subModule: defaultWorkflow.subModule,
+            nodePath: defaultWorkflow.nodePath,
+            levelsHash: defaultWorkflow.levelsHash,
+          }) || '',
+        )
           ? defaultWorkflow
           : null;
 
@@ -5774,23 +5868,24 @@ export class UserDbController {
 
         const nodes = userAccesses
           .map((ua) => {
-            const nodeWithWorkflows = UserDbController.withDefaultWorkflowOption(
-              {
-                ...ua.orgStructure,
-                workflows: ua.orgStructure.workflows.filter(
-                  (workflow) =>
-                    !pendingWorkflowKeys.has(
-                      UserDbController.workflowIdentityKey({
-                        module: workflow.module,
-                        subModule: workflow.subModule,
-                        nodePath: ua.orgStructure.nodePath,
-                        levelsHash: workflow.levelsHash,
-                      }) || '',
-                    ),
-                ),
-              },
-              visibleDefaultWorkflow,
-            );
+            const nodeWithWorkflows =
+              UserDbController.withDefaultWorkflowOption(
+                {
+                  ...ua.orgStructure,
+                  workflows: ua.orgStructure.workflows.filter(
+                    (workflow) =>
+                      !pendingWorkflowKeys.has(
+                        UserDbController.workflowIdentityKey({
+                          module: workflow.module,
+                          subModule: workflow.subModule,
+                          nodePath: ua.orgStructure.nodePath,
+                          levelsHash: workflow.levelsHash,
+                        }) || '',
+                      ),
+                  ),
+                },
+                visibleDefaultWorkflow,
+              );
 
             return {
               ...nodeWithWorkflows,
