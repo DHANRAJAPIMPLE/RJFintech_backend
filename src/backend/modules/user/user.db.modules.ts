@@ -93,6 +93,16 @@ type HistoryChangeCount = {
  * Handles production user data and pending user requests.
  */
 export class UserDbController {
+  private static isAutoOrgUserAccessHistoryType(
+    requestType: string | null | undefined,
+  ) {
+    const normalizedType = String(requestType || '').toUpperCase();
+    return (
+      normalizedType === 'AUTO_GENERATE' ||
+      normalizedType === 'AUTO_DELETE'
+    );
+  }
+
   private static getUserHistoryDisplayEvent(
     event: string | null | undefined,
     requestType: string | null | undefined,
@@ -102,6 +112,9 @@ export class UserDbController {
 
     const normalizedType = String(requestType || 'INITIATE').toUpperCase();
     if (normalizedType === 'UPDATE') return 'MODIFY';
+    if (UserDbController.isAutoOrgUserAccessHistoryType(normalizedType)) {
+      return 'MODIFY';
+    }
     if (normalizedType === 'ACTIVE') return 'ACTIVE';
     if (normalizedType === 'INACTIVE') return 'INACTIVE';
     if (normalizedType === 'ARCHIVE') return 'ARCHIVE';
@@ -148,7 +161,11 @@ export class UserDbController {
   private static isUserModificationHistoryType(
     requestType: string | null | undefined,
   ) {
-    return String(requestType || 'INITIATE').toUpperCase() === 'UPDATE';
+    const normalizedType = String(requestType || 'INITIATE').toUpperCase();
+    return (
+      normalizedType === 'UPDATE' ||
+      UserDbController.isAutoOrgUserAccessHistoryType(normalizedType)
+    );
   }
 
   private static pathsOverlap(left: string, right: string) {
@@ -171,6 +188,7 @@ export class UserDbController {
     message: string,
     referenceName: string,
     approverUserIds: string[] = [],
+    reportingManagerUserIds: string[] = [],
   ) {
     const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
       companyId,
@@ -178,13 +196,14 @@ export class UserDbController {
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
       approverUserIds,
+      reportingManagerUserIds,
       corpAdminUserIds,
     );
     await NotificationService.createRequestNotification({
       companyId,
       type: 'MODIFICATION',
       name: 'User modification failed',
-      message: `User modification failed: ${message}`,
+      message: `${message}`,
       referenceType: 'USER',
       referenceName,
       createdBy: initiatorId,
@@ -192,11 +211,54 @@ export class UserDbController {
       requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
         initiatorId,
         approverUserIds,
+        reportingManagerUserIds,
       ),
       includeCreatedBy: true,
       isPending: false,
     });
   }
+
+  private static async getReportingManagerUserIds(
+    companyId: string,
+    userId?: string | null,
+    reportingManagerEmail?: string | null,
+  ) {
+    let managerEmail = String(reportingManagerEmail || '').trim();
+
+    if (!managerEmail && userId) {
+      const mapping = await prisma.userMapping.findFirst({
+        where: {
+          companyId,
+          userId,
+        },
+        include: {
+          manager: {
+            select: { email: true },
+          },
+        },
+      });
+      managerEmail = String(mapping?.manager?.email || '').trim();
+    }
+
+    if (!managerEmail) return [];
+
+    const manager = await prisma.user.findUnique({
+      where: { email: managerEmail },
+      select: { id: true },
+    });
+
+    return manager?.id ? [manager.id] : [];
+  }
+
+  private static buildNotificationHandledError(
+    message: string,
+    statusCode = 400,
+  ) {
+    const error = new AppError(message, statusCode);
+    (error as any).skipConflictNotification = true;
+    return error;
+  }
+
   private static normalizeUserRequestType(value: unknown): UserRequestType {
     const type =
       typeof value === 'string' ? value.trim().toUpperCase() : 'INITIATE';
@@ -3333,6 +3395,33 @@ export class UserDbController {
       throw new AppError('Target user not found', 404);
     }
 
+    const current = await UserDbController.fetchUserSnapshot(
+      prisma as any,
+      target.id,
+      companyId,
+    );
+
+    if (initiatorId === target.id) {
+      const reportingManagerUserIds =
+        await UserDbController.getReportingManagerUserIds(
+          companyId,
+          target.id,
+          current.snapshot.basicDetails.reportingManager,
+        );
+      await UserDbController.notifyConflict(
+        companyId,
+        initiatorId,
+        'Users cannot modify, inactivate, archive, or reactivate their own record',
+        UserDbController.formatUserReferenceName(current.user),
+        [],
+        reportingManagerUserIds,
+      );
+      throw UserDbController.buildNotificationHandledError(
+        'Users cannot modify, inactivate, archive, or reactivate their own record',
+        403,
+      );
+    }
+
     const adminAccess = await prisma.userAccess.findFirst({
       where: {
         userId: target.id,
@@ -3342,14 +3431,11 @@ export class UserDbController {
     });
 
     if (adminAccess) {
-      throw new AppError('SAAS Admin and Corp Admin users cannot be modified', 400);
+      throw new AppError(
+        'SAAS Admin and Corp Admin users cannot be modified',
+        400,
+      );
     }
-
-    const current = await UserDbController.fetchUserSnapshot(
-      prisma as any,
-      target.id,
-      companyId,
-    );
 
     if (current.mapping.status === 'ARCHIVE') {
       throw new AppError(
@@ -3975,6 +4061,7 @@ export class UserDbController {
           const companyId = req.body?.companyId;
           const targetEmail = req.body?.targetEmail || req.body?.targetUserEmail;
           if (
+            !(error as any)?.skipConflictNotification &&
             typeof initiatorId === 'string' &&
             typeof companyId === 'string'
           ) {
@@ -4232,6 +4319,7 @@ export class UserDbController {
         req.body?.targetUserEmail ||
         req.body?.data?.basicDetails?.email;
       if (
+        !(error as any)?.skipConflictNotification &&
         typeof initiatorId === 'string' &&
         typeof resolvedCompanyId === 'string'
       ) {
@@ -4308,10 +4396,23 @@ export class UserDbController {
         const targetUser = targetUserEmail
           ? await prisma.user.findUnique({
               where: { email: targetUserEmail },
-              select: { id: true },
+              select: { id: true, name: true, email: true },
             })
           : null;
         if (targetUser?.id && targetUser.id === approverId) {
+          const reportingManagerUserIds =
+            await UserDbController.getReportingManagerUserIds(
+              onboarding.companyId,
+              targetUser.id,
+            );
+          await UserDbController.notifyConflict(
+            onboarding.companyId,
+            approverId,
+            'Users cannot approve their own modification request',
+            UserDbController.formatUserReferenceName(targetUser),
+            [],
+            reportingManagerUserIds,
+          );
           throw new AppError(
             'Target user cannot approve their own modification request',
             403,
@@ -4352,6 +4453,30 @@ export class UserDbController {
         where: { reqId: id, event: 'INITIATE' },
       });
       if (initiatorLog && initiatorLog.eventUserId === approverId) {
+        const reportingManagerUserIds =
+          onboarding.type && onboarding.type !== 'INITIATE'
+            ? await UserDbController.getReportingManagerUserIds(
+                onboarding.companyId,
+                approverId,
+              )
+            : [];
+        await UserDbController.notifyConflict(
+          onboarding.companyId,
+          approverId,
+          'Users cannot approve their own request',
+          UserDbController.formatUserReferenceName(
+            {
+              name: rawRequestData?.basicDetails?.name || null,
+              email:
+                rawRequestData?.targetUserEmail ||
+                rawRequestData?.basicDetails?.email ||
+                null,
+            },
+            'user',
+          ),
+          [],
+          reportingManagerUserIds,
+        );
         throw new AppError('Initiator cannot approve their own request', 403);
       }
 

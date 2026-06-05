@@ -92,23 +92,29 @@ export class HistoryUserUtil {
       : [];
     if (requestPermissions.length === 0) return null;
 
-    const oldPermissionsSource = HistoryUserUtil.isPlainObject(requestOldData)
+    const candidateOldPermissionsSource = HistoryUserUtil.isPlainObject(
+      requestOldData,
+    )
       ? requestOldData.permissions
       : null;
+    const oldPermissionsSource: Record<string, unknown> | null =
+      HistoryUserUtil.isPlainObject(candidateOldPermissionsSource)
+        ? candidateOldPermissionsSource
+        : null;
     const removedFromOldPatch = Array.isArray(oldPermissionsSource?.removed)
-      ? oldPermissionsSource.removed.map((permission) =>
+      ? oldPermissionsSource.removed.map((permission: unknown) =>
           HistoryUserUtil.cloneJson(permission),
         )
       : [];
     const updatedFromOldPatch = Array.isArray(oldPermissionsSource?.updated)
-      ? oldPermissionsSource.updated.map((permission) =>
+      ? oldPermissionsSource.updated.map((permission: unknown) =>
           HistoryUserUtil.cloneJson(permission),
         )
       : [];
 
     const removed = removedFromOldPatch;
     const updatedOldByKey = new Map(
-      updatedFromOldPatch.map((permission) => [
+      updatedFromOldPatch.map((permission: unknown) => [
         HistoryUserUtil.permissionReplacementKey(permission),
         permission,
       ]),

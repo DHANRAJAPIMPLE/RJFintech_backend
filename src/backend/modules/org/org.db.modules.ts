@@ -33,6 +33,23 @@ type OrgAutoDeletedWorkflowNotification = {
   nodePath: string;
 };
 
+type AutoUserAccessAuditEntry = {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  roleCode: string;
+  roleName: string;
+  roleCategory: string;
+  roleSubCategory: string;
+  nodeId: string;
+  nodeName: string;
+  nodePath: string;
+  accessType: 'PRIMARY' | 'SECONDARY';
+  accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
+  companyId: string;
+  isGlobalAccess: boolean;
+};
+
 type OrgLinkedStructureNode = {
   nodePath: string;
   nodeName: string;
@@ -546,7 +563,13 @@ export class OrgStructureDbController {
       },
       include: {
         user: { select: { id: true, name: true, email: true } },
-        role: { select: { roleName: true } },
+        role: {
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+          },
+        },
       },
     });
   }
@@ -554,6 +577,7 @@ export class OrgStructureDbController {
   private static buildPropagatedAccesses(
     parentAccesses: any[],
     newNodeId: string,
+    newNode: { nodeName: string; nodePath: string },
   ) {
     const newAccessesMap = new Map<string, any>();
 
@@ -567,7 +591,11 @@ export class OrgStructureDbController {
         userEmail: access.user?.email || null,
         roleCode: access.roleCode,
         roleName: access.role?.roleName || access.roleCode,
+        roleCategory: access.role?.category || 'SYSTEM_ACCESS',
+        roleSubCategory: access.role?.subCategory || 'USER_ACC',
         nodeId: newNodeId,
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
         accessType: 'SECONDARY',
         accessCategory:
           access.accessCategory === 'IMMEDIATE_CHILD'
@@ -579,6 +607,178 @@ export class OrgStructureDbController {
     }
 
     return Array.from(newAccessesMap.values());
+  }
+
+  private static async resolveDefaultUserAccessWorkflowId(
+    tx: any,
+    companyId: string,
+  ) {
+    const defaultWorkflow = await tx.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'USER_ACC',
+        name: { contains: 'DEFAULT' },
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    if (defaultWorkflow?.id) {
+      return defaultWorkflow.id;
+    }
+
+    const latestWorkflow = await tx.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'USER_ACC',
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    return latestWorkflow?.id || null;
+  }
+
+  private static groupAutoUserAccessAuditEntries(
+    entries: AutoUserAccessAuditEntry[],
+    isRemoval: boolean,
+  ) {
+    const grouped = new Map<
+      string,
+      {
+        userName: string | null;
+        userEmail: string;
+        permissions: any[];
+      }
+    >();
+
+    entries.forEach((entry) => {
+      const userEmail =
+        typeof entry.userEmail === 'string' ? entry.userEmail.trim() : '';
+      if (!userEmail) return;
+
+      const key = entry.userId || userEmail.toLowerCase();
+      const current = grouped.get(key) || {
+        userName: entry.userName || null,
+        userEmail,
+        permissions: [],
+      };
+
+      current.permissions.push({
+        ...(isRemoval ? { remove: true } : {}),
+        nodeName: entry.nodeName,
+        nodePath: entry.nodePath,
+        roleName: entry.roleName || entry.roleCode,
+        accessType: entry.accessType || 'SECONDARY',
+        roleCategory: entry.roleCategory || 'SYSTEM_ACCESS',
+        accessCategory: entry.accessCategory || 'NODE',
+        roleSubCategory: entry.roleSubCategory || 'USER_ACC',
+      });
+
+      grouped.set(key, current);
+    });
+
+    return Array.from(grouped.values());
+  }
+
+  private static async createAutoApprovedUserAccessAuditRows(
+    tx: any,
+    params: {
+      companyId: string;
+      actorId?: string | null;
+      type: 'AUTO_GENERATE' | 'AUTO_DELETE';
+      impact: 'UPGRADE' | 'DOWNGRADE';
+      remarks: string;
+      entries: AutoUserAccessAuditEntry[];
+    },
+  ) {
+    if (!params.actorId || params.entries.length === 0) {
+      return;
+    }
+
+    const workflowId =
+      await OrgStructureDbController.resolveDefaultUserAccessWorkflowId(
+        tx,
+        params.companyId,
+      );
+    const groupedEntries = OrgStructureDbController.groupAutoUserAccessAuditEntries(
+      params.entries,
+      params.type === 'AUTO_DELETE',
+    );
+
+    for (const entry of groupedEntries) {
+      const data = {
+        permissions: cloneJson(entry.permissions),
+        targetUserEmail: entry.userEmail,
+      };
+      const oldData =
+        params.type === 'AUTO_DELETE'
+          ? {
+              permissions: {
+                added: [],
+                removed: cloneJson(
+                  entry.permissions.map(({ remove, ...permission }) => permission),
+                ),
+                updated: [],
+              },
+              ...(entry.userName
+                ? {
+                    basicDetails: {
+                      name: entry.userName,
+                    },
+                  }
+                : {}),
+            }
+          : {
+              permissions: {
+                added: [],
+                removed: [],
+                updated: [],
+              },
+            };
+
+      const request = await tx.userOnboarding.create({
+        data: {
+          companyId: params.companyId,
+          workflowId,
+          type: params.type,
+          impact: params.impact,
+          data: data as any,
+          oldData: oldData as any,
+          initiatorId: params.actorId,
+          remarks: params.remarks,
+          status: 'APPROVED',
+          approvalRemark: params.remarks,
+          eligibleApprovers: [],
+        },
+      });
+
+      await tx.userHistory.create({
+        data: {
+          email: entry.userEmail,
+          event: 'INITIATE',
+          eventUserId: params.actorId,
+          companyId: params.companyId,
+          reqId: request.id,
+          remarks: params.remarks,
+        },
+      });
+
+      await tx.userHistory.create({
+        data: {
+          email: entry.userEmail,
+          event: 'APPROVED',
+          eventUserId: params.actorId,
+          companyId: params.companyId,
+          reqId: request.id,
+          remarks: params.remarks,
+        },
+      });
+    }
   }
 
   private static async countPropagatedUserAccesses(
@@ -1335,6 +1535,60 @@ export class OrgStructureDbController {
         }),
       );
     }
+    const removedUserAccessRows = await tx.userAccess.findMany({
+      where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
+      select: {
+        userId: true,
+        roleCode: true,
+        nodeId: true,
+        accessType: true,
+        accessCategory: true,
+        companyId: true,
+        isGlobalAccess: true,
+        user: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
+        role: {
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+          },
+        },
+        orgStructure: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+          },
+        },
+      },
+    });
+    await OrgStructureDbController.createAutoApprovedUserAccessAuditRows(tx, {
+      companyId: request.companyId,
+      actorId,
+      type: 'AUTO_DELETE',
+      impact: 'DOWNGRADE',
+      remarks: `Auto generated because organization node ${node.nodeName} (${targetNodePath}) was inactivated.`,
+      entries: removedUserAccessRows.map((access: any) => ({
+        userId: access.userId,
+        userName: access.user?.name || null,
+        userEmail: access.user?.email || null,
+        roleCode: access.roleCode,
+        roleName: access.role?.roleName || access.roleCode,
+        roleCategory: access.role?.category || 'SYSTEM_ACCESS',
+        roleSubCategory: access.role?.subCategory || 'USER_ACC',
+        nodeId: access.nodeId,
+        nodeName: access.orgStructure?.nodeName || targetNodePath,
+        nodePath: access.orgStructure?.nodePath || targetNodePath,
+        accessType: access.accessType || 'SECONDARY',
+        accessCategory: access.accessCategory || 'NODE',
+        companyId: access.companyId,
+        isGlobalAccess: Boolean(access.isGlobalAccess),
+      })),
+    });
     await tx.userAccess.deleteMany({
       where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
     });
@@ -1697,15 +1951,39 @@ export class OrgStructureDbController {
           const newAccesses = OrgStructureDbController.buildPropagatedAccesses(
             parentAccesses,
             newNode.id,
+            {
+              nodeName: newNode.nodeName,
+              nodePath: newNode.nodePath,
+            },
           );
 
           if (newAccesses.length > 0) {
             await tx.userAccess.createMany({
               data: newAccesses.map(
-                ({ userName, userEmail, roleName, ...access }: any) => access,
+                ({
+                  userName,
+                  userEmail,
+                  roleName,
+                  roleCategory,
+                  roleSubCategory,
+                  nodeName,
+                  nodePath,
+                  ...access
+                }: any) => access,
               ),
               skipDuplicates: true,
             });
+            await OrgStructureDbController.createAutoApprovedUserAccessAuditRows(
+              tx,
+              {
+                companyId: request.companyId,
+                actorId: approverId,
+                type: 'AUTO_GENERATE',
+                impact: 'UPGRADE',
+                remarks: `Auto generated because organization node ${newNode.nodeName} (${newNode.nodePath}) was created.`,
+                entries: newAccesses,
+              },
+            );
             userAccessImpactNotification = {
               nodeName: newNode.nodeName,
               nodePath: newNode.nodePath,
