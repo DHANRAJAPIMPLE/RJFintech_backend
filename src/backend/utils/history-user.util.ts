@@ -8,6 +8,7 @@ type AuditUser = {
 
 type UserHistoryDetailNewDataParams = {
   requestData: unknown;
+  requestOldData?: unknown;
   resolvedOldData?: unknown;
   resolvedNewData: unknown;
   requestType?: string | null;
@@ -28,8 +29,150 @@ export class HistoryUserUtil {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   }
 
+  private static normalizePermission(permission: unknown) {
+    if (!HistoryUserUtil.isPlainObject(permission)) {
+      return {
+        accessType: 'SECONDARY',
+        roleName: '',
+        roleCategory: '',
+        roleSubCategory: '',
+        nodeName: '',
+        nodePath: '',
+        accessCategory: null,
+      };
+    }
+
+    return {
+      accessType: String(permission.accessType || 'SECONDARY'),
+      roleName: String(permission.roleName || ''),
+      roleCategory: String(permission.roleCategory || ''),
+      roleSubCategory: String(permission.roleSubCategory || ''),
+      nodeName: String(permission.nodeName || ''),
+      nodePath: String(permission.nodePath || ''),
+      accessCategory:
+        permission.accessCategory === undefined ? null : permission.accessCategory,
+    };
+  }
+
+  private static permissionReplacementKey(permission: unknown) {
+    const normalized = HistoryUserUtil.normalizePermission(permission);
+    if (normalized.accessType === 'PRIMARY') return 'PRIMARY';
+
+    return [
+      normalized.accessType,
+      normalized.roleName,
+      normalized.nodePath,
+    ].join('|');
+  }
+
+  private static isPermissionRemoval(permission: unknown) {
+    if (!HistoryUserUtil.isPlainObject(permission)) return false;
+
+    const operation =
+      typeof permission.operation === 'string'
+        ? permission.operation.trim().toUpperCase()
+        : '';
+
+    return permission.remove === true || operation === 'REMOVE';
+  }
+
+  private static buildPermissionChangesFromRequestData(
+    requestData: unknown,
+    requestOldData: unknown,
+  ) {
+    const source = HistoryUserUtil.isPlainObject(requestData)
+      ? HistoryUserUtil.isPlainObject(requestData.newData)
+        ? requestData.newData
+        : HistoryUserUtil.isPlainObject(requestData.data)
+          ? requestData.data
+          : requestData
+      : null;
+    const requestPermissions = Array.isArray(source?.permissions)
+      ? source.permissions
+      : [];
+    if (requestPermissions.length === 0) return null;
+
+    const oldPermissionsSource = HistoryUserUtil.isPlainObject(requestOldData)
+      ? requestOldData.permissions
+      : null;
+    const removedFromOldPatch = Array.isArray(oldPermissionsSource?.removed)
+      ? oldPermissionsSource.removed.map((permission) =>
+          HistoryUserUtil.cloneJson(permission),
+        )
+      : [];
+    const updatedFromOldPatch = Array.isArray(oldPermissionsSource?.updated)
+      ? oldPermissionsSource.updated.map((permission) =>
+          HistoryUserUtil.cloneJson(permission),
+        )
+      : [];
+
+    const removed = removedFromOldPatch;
+    const updatedOldByKey = new Map(
+      updatedFromOldPatch.map((permission) => [
+        HistoryUserUtil.permissionReplacementKey(permission),
+        permission,
+      ]),
+    );
+
+    const added: unknown[] = [];
+    const updated: unknown[] = [];
+    for (const permission of requestPermissions) {
+      if (HistoryUserUtil.isPermissionRemoval(permission)) {
+        continue;
+      }
+
+      const normalizedPermission = HistoryUserUtil.normalizePermission(permission);
+      const replacementKey =
+        HistoryUserUtil.permissionReplacementKey(normalizedPermission);
+
+      if (updatedOldByKey.has(replacementKey)) {
+        updated.push(HistoryUserUtil.cloneJson(normalizedPermission));
+      } else {
+        added.push(HistoryUserUtil.cloneJson(normalizedPermission));
+      }
+    }
+
+    if (added.length === 0 && removed.length === 0 && updated.length === 0) {
+      return null;
+    }
+
+    return { added, removed, updated };
+  }
+
+  private static appendRequestPassthroughFields(
+    target: Record<string, unknown>,
+    requestData: unknown,
+  ) {
+    if (!HistoryUserUtil.isPlainObject(requestData)) {
+      return target;
+    }
+
+    const source = HistoryUserUtil.isPlainObject(requestData.newData)
+      ? requestData.newData
+      : HistoryUserUtil.isPlainObject(requestData.data)
+        ? requestData.data
+        : requestData;
+    for (const [key, value] of Object.entries(source)) {
+      if (
+        key === 'oldData' ||
+        key === 'changeCount' ||
+        key === 'targetUserEmail' ||
+        key === 'levelsHash' ||
+        key === 'basicDetails' ||
+        key === 'permissions'
+      ) {
+        continue;
+      }
+
+      target[key] = HistoryUserUtil.cloneJson(value);
+    }
+
+    return target;
+  }
+
   static formatUserHistoryDetailNewData({
     requestData,
+    requestOldData,
     resolvedOldData,
     resolvedNewData,
     requestType,
@@ -44,7 +187,39 @@ export class HistoryUserUtil {
       !HistoryUserUtil.isPlainObject(resolvedOldData) ||
       !HistoryUserUtil.isPlainObject(resolvedNewData)
     ) {
-      return HistoryUserUtil.cloneJson(requestData ?? resolvedNewData ?? null);
+      if (!HistoryUserUtil.isPlainObject(requestData)) {
+        return HistoryUserUtil.cloneJson(requestData ?? resolvedNewData ?? null);
+      }
+
+      const fallbackNewData: Record<string, unknown> = {};
+      const source = HistoryUserUtil.isPlainObject(requestData.newData)
+        ? requestData.newData
+        : HistoryUserUtil.isPlainObject(requestData.data)
+          ? requestData.data
+          : requestData;
+      if (HistoryUserUtil.isPlainObject(source.basicDetails)) {
+        fallbackNewData.basicDetails = HistoryUserUtil.cloneJson(
+          source.basicDetails,
+        );
+      }
+
+      const fallbackPermissionChanges =
+        HistoryUserUtil.buildPermissionChangesFromRequestData(
+          requestData,
+          requestOldData,
+        );
+      if (fallbackPermissionChanges) {
+        fallbackNewData.permissions = fallbackPermissionChanges;
+      }
+
+      HistoryUserUtil.appendRequestPassthroughFields(
+        fallbackNewData,
+        requestData,
+      );
+
+      return Object.keys(fallbackNewData).length > 0
+        ? fallbackNewData
+        : HistoryUserUtil.cloneJson(resolvedNewData ?? requestData ?? null);
     }
 
     const newData: Record<string, unknown> = {};
@@ -140,29 +315,16 @@ export class HistoryUserUtil {
       newData.permissions = permissionChanges;
     }
 
-    if (!HistoryUserUtil.isPlainObject(requestData)) {
-      return Object.keys(newData).length > 0 ? newData : null;
+    const requestPermissionChanges =
+      HistoryUserUtil.buildPermissionChangesFromRequestData(
+        requestData,
+        requestOldData,
+      );
+    if (requestPermissionChanges) {
+      newData.permissions = requestPermissionChanges;
     }
 
-    const source = HistoryUserUtil.isPlainObject(requestData.newData)
-      ? requestData.newData
-      : HistoryUserUtil.isPlainObject(requestData.data)
-        ? requestData.data
-        : requestData;
-    for (const [key, value] of Object.entries(source)) {
-      if (
-        key === 'oldData' ||
-        key === 'changeCount' ||
-        key === 'targetUserEmail' ||
-        key === 'levelsHash' ||
-        key === 'basicDetails' ||
-        key === 'permissions'
-      ) {
-        continue;
-      }
-
-      newData[key] = HistoryUserUtil.cloneJson(value);
-    }
+    HistoryUserUtil.appendRequestPassthroughFields(newData, requestData);
 
     return Object.keys(newData).length > 0 ? newData : null;
   }

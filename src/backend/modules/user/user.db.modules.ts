@@ -5279,6 +5279,7 @@ export class UserDbController {
         await HistoryUserUtil.enrichUserHistoryOldData(oldData);
       const responseNewData = HistoryUserUtil.formatUserHistoryDetailNewData({
         requestData,
+        requestOldData: onboarding?.oldData,
         resolvedOldData: oldData,
         resolvedNewData: newData,
         requestType,
