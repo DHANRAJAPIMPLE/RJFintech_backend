@@ -989,6 +989,50 @@ export class WorkflowDbController {
     return pruned;
   }
 
+  private static buildWorkflowLevelsDetailDiff(
+    oldLevels: unknown,
+    newLevels: unknown,
+  ) {
+    const oldLevelMap = WorkflowDbController.getWorkflowLevelMap(oldLevels);
+    const newLevelMap = WorkflowDbController.getWorkflowLevelMap(newLevels);
+    const oldDiff: Record<string, unknown> = {};
+    const newDiff: Record<string, unknown> = {};
+    const allLevelNumbers = new Set([
+      ...Array.from(oldLevelMap.keys()),
+      ...Array.from(newLevelMap.keys()),
+    ]);
+
+    for (const levelNumber of Array.from(allLevelNumbers).sort((a, b) => a - b)) {
+      const levelKey = `l${levelNumber}`;
+      const oldLevel = oldLevelMap.get(levelNumber);
+      const newLevel = newLevelMap.get(levelNumber);
+
+      if (oldLevel && !newLevel) {
+        oldDiff[levelKey] = cloneJson(oldLevel);
+        continue;
+      }
+
+      if (!oldLevel && newLevel) {
+        newDiff[levelKey] = cloneJson(newLevel);
+        continue;
+      }
+
+      if (
+        oldLevel &&
+        newLevel &&
+        JSON.stringify(oldLevel) !== JSON.stringify(newLevel)
+      ) {
+        oldDiff[levelKey] = cloneJson(oldLevel);
+        newDiff[levelKey] = cloneJson(newLevel);
+      }
+    }
+
+    return {
+      oldData: Object.keys(oldDiff).length > 0 ? oldDiff : null,
+      newData: Object.keys(newDiff).length > 0 ? newDiff : null,
+    };
+  }
+
   private static buildWorkflowHistoryDetailDiff(
     oldData: Record<string, unknown> | null,
     newData: Record<string, unknown> | null,
@@ -1017,13 +1061,38 @@ export class WorkflowDbController {
       };
     }
 
+    const oldPatch = WorkflowDbController.pruneWorkflowHistoryDiff(
+      patch.oldData,
+    ) as Record<string, unknown> | null;
+    const newPatch = WorkflowDbController.pruneWorkflowHistoryDiff(
+      patch.newData,
+    ) as Record<string, unknown> | null;
+    const levelsDiff = WorkflowDbController.buildWorkflowLevelsDetailDiff(
+      oldData.levels,
+      newData.levels,
+    );
+
+    if (levelsDiff.oldData) {
+      if (oldPatch) {
+        oldPatch.levels = levelsDiff.oldData;
+      }
+    } else if (oldPatch && 'levels' in oldPatch) {
+      delete oldPatch.levels;
+    }
+
+    if (levelsDiff.newData) {
+      if (newPatch) {
+        newPatch.levels = levelsDiff.newData;
+      }
+    } else if (newPatch && 'levels' in newPatch) {
+      delete newPatch.levels;
+    }
+
     return {
-      oldData: WorkflowDbController.pruneWorkflowHistoryDiff(
-        patch.oldData,
-      ) as Record<string, unknown> | null,
-      newData: WorkflowDbController.pruneWorkflowHistoryDiff(
-        patch.newData,
-      ) as Record<string, unknown> | null,
+      oldData:
+        oldPatch && Object.keys(oldPatch).length > 0 ? oldPatch : null,
+      newData:
+        newPatch && Object.keys(newPatch).length > 0 ? newPatch : null,
     };
   }
 
@@ -1096,6 +1165,186 @@ export class WorkflowDbController {
       oldData,
       newData,
     };
+  }
+
+  private static getWorkflowHistoryChainKey(
+    request: any,
+    currentWorkflow?: any,
+  ) {
+    const requestData = request?.data as any;
+    const target = WorkflowDbController.extractWorkflowTarget(requestData);
+    if (target) {
+      return [
+        target.module,
+        target.subModule,
+        target.nodePath,
+        target.levelsHash,
+      ].join('::');
+    }
+
+    const snapshot = WorkflowDbController.extractWorkflowSnapshot(
+      requestData,
+      WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+        request,
+        currentWorkflow,
+      ),
+    );
+    if (!snapshot) return null;
+
+    return [
+      snapshot.module,
+      snapshot.subModule,
+      snapshot.nodePath,
+      snapshot.levelsHash,
+    ].join('::');
+  }
+
+  private static buildWorkflowHistorySnapshotReplayMap(
+    requests: any[],
+    currentWorkflowMap: Map<string, any>,
+  ) {
+    const requestMap = new Map<string, any>();
+    requests.forEach((request) => {
+      if (request?.id) {
+        requestMap.set(request.id, request);
+      }
+    });
+
+    const requestsByChainKey = new Map<string, any[]>();
+    requests.forEach((request) => {
+      const currentWorkflow =
+        request?.workflowId && currentWorkflowMap.has(request.workflowId)
+          ? currentWorkflowMap.get(request.workflowId)
+          : null;
+      const chainKey = WorkflowDbController.getWorkflowHistoryChainKey(
+        request,
+        currentWorkflow,
+      );
+      if (!chainKey) return;
+      const existing = requestsByChainKey.get(chainKey) || [];
+      existing.push(request);
+      requestsByChainKey.set(chainKey, existing);
+    });
+
+    const replayMap = new Map<
+      string,
+      {
+        oldData: Record<string, unknown> | null;
+        newData: Record<string, unknown> | null;
+      }
+    >();
+
+    requests.forEach((request) => {
+      const currentWorkflow =
+        request?.workflowId && currentWorkflowMap.has(request.workflowId)
+          ? currentWorkflowMap.get(request.workflowId)
+          : null;
+      const workflowReqIds = Array.isArray(currentWorkflow?.workflowReqIds)
+        ? currentWorkflow.workflowReqIds
+        : [];
+      const chainRequests: any[] =
+        workflowReqIds.length > 0
+          ? workflowReqIds
+              .map((workflowReqId: string) => requestMap.get(workflowReqId))
+              .filter(Boolean) as any[]
+          : (requestsByChainKey.get(
+              WorkflowDbController.getWorkflowHistoryChainKey(
+                request,
+                currentWorkflow,
+              ) || '',
+            ) || []);
+
+      const orderedRequests: any[] = Array.from(
+        new Map(
+          chainRequests.map((entry: any) => [entry.id, entry]),
+        ).values(),
+      ).sort((left: any, right: any) => {
+        const leftTime = new Date(left.createdAt).getTime();
+        const rightTime = new Date(right.createdAt).getTime();
+        if (leftTime !== rightTime) return leftTime - rightTime;
+        return String(left.id).localeCompare(String(right.id));
+      });
+
+      let currentSnapshot: Record<string, unknown> | null = null;
+      let oldData: Record<string, unknown> | null = null;
+      let newData: Record<string, unknown> | null = null;
+
+      for (const chainRequest of orderedRequests) {
+        const fallback = WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+          chainRequest,
+        );
+        const nextSnapshot: Record<string, unknown> | null =
+          chainRequest.type === 'INITIATE'
+            ? WorkflowDbController.extractWorkflowSnapshot(
+                chainRequest.data,
+                fallback,
+              )
+            : currentSnapshot
+              ? WorkflowDbController.applyWorkflowRequestSnapshot(
+                  currentSnapshot,
+                  chainRequest,
+                )
+              : WorkflowDbController.extractWorkflowSnapshot(
+                  chainRequest.data,
+                  fallback,
+                );
+
+        if (!nextSnapshot) continue;
+
+        if (chainRequest.id === request.id) {
+          oldData = currentSnapshot
+            ? cloneJson(currentSnapshot)
+            : WorkflowDbController.buildWorkflowOldSnapshotFromPatch(
+                chainRequest.data,
+                chainRequest.oldData,
+                fallback,
+              );
+          if (oldData && chainRequest.type !== 'INITIATE') {
+            oldData = WorkflowDbController.repairWorkflowSnapshotWithFallback(
+              oldData,
+              fallback,
+              chainRequest.oldData,
+            );
+          }
+          newData = nextSnapshot;
+          break;
+        }
+
+        currentSnapshot = nextSnapshot;
+      }
+
+      if (!newData) {
+        const fallback = WorkflowDbController.buildWorkflowRequestSnapshotFallback(
+          request,
+          currentWorkflow,
+        );
+        newData = WorkflowDbController.extractWorkflowSnapshot(
+          request.data,
+          fallback,
+        );
+        if (!oldData && request.type !== 'INITIATE') {
+          oldData = WorkflowDbController.buildWorkflowOldSnapshotFromPatch(
+            request.data,
+            request.oldData,
+            fallback,
+          );
+          if (oldData) {
+            oldData = WorkflowDbController.repairWorkflowSnapshotWithFallback(
+              oldData,
+              fallback,
+              request.oldData,
+            );
+          }
+        }
+      }
+
+      replayMap.set(request.id, {
+        oldData,
+        newData,
+      });
+    });
+
+    return replayMap;
   }
 
   private static resolveWorkflowHistoryRequestSnapshots(
@@ -3513,6 +3762,7 @@ export class WorkflowDbController {
                 subModule: true,
                 type: true,
                 levelsHash: true,
+                workflowReqIds: true,
                 status: true,
                 levels: { orderBy: { level: 'asc' } },
                 orgStructure: {
@@ -3526,6 +3776,19 @@ export class WorkflowDbController {
       const currentWorkflowMap = new Map(
         currentWorkflows.map((workflow) => [workflow.id, workflow]),
       );
+      const uniqueRequests = Array.from(
+        new Map(
+          histories
+            .map((history) => history.workflowReq)
+            .filter(Boolean)
+            .map((request) => [request.id, request]),
+        ).values(),
+      );
+      const requestReplayMap =
+        WorkflowDbController.buildWorkflowHistorySnapshotReplayMap(
+          uniqueRequests,
+          currentWorkflowMap,
+        );
 
       if (historyIdentityFilter) {
         histories = histories.filter((history) =>
@@ -3672,13 +3935,15 @@ export class WorkflowDbController {
           if (levels) {
             const currentPending = levels.find((l) => l.status === 'PENDING');
             if (currentPending) {
-              const snapshots =
-                WorkflowDbController.resolveWorkflowHistoryRequestSnapshots(
-                  h.workflowReq,
-                  h.workflowReq?.workflowId
-                    ? currentWorkflowMap.get(h.workflowReq.workflowId)
-                    : null,
-                );
+              const snapshots = h.workflowReqId
+                ? requestReplayMap.get(h.workflowReqId) || {
+                    oldData: null,
+                    newData: null,
+                  }
+                : {
+                    oldData: null,
+                    newData: null,
+                  };
               const requestChangeCount = snapshots.newData
                 ? WorkflowDbController.getWorkflowHistoryChangeCountFromSnapshots(
                     snapshots.oldData,
@@ -3756,13 +4021,15 @@ export class WorkflowDbController {
               : displayEvent === 'APPROVED' && h.level
                 ? `A${h.level}`
                 : null;
-        const snapshots =
-          WorkflowDbController.resolveWorkflowHistoryRequestSnapshots(
-            h.workflowReq,
-            h.workflowReq?.workflowId
-              ? currentWorkflowMap.get(h.workflowReq.workflowId)
-              : null,
-          );
+        const snapshots = h.workflowReqId
+          ? requestReplayMap.get(h.workflowReqId) || {
+              oldData: null,
+              newData: null,
+            }
+          : {
+              oldData: null,
+              newData: null,
+            };
         const newDataObj = WorkflowDbController.sanitizeWorkflowHistoryData(
           h.workflowReq?.data,
           h.workflowReq?.type,
