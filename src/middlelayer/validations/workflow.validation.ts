@@ -146,11 +146,25 @@ export const workflowHistorySchema = z
   .object({
     id: z.string().min(1, 'Workflow id is required').optional(),
     levelsHash: z.string().min(1, 'Levels hash is required').optional(),
-    module: z.string().optional(),
-    subModule: z.string().optional(),
-    nodePath: z.string().optional(),
+    module: z.string().trim().min(1, 'Module is required').optional(),
+    subModule: z.string().trim().min(1, 'Sub-module is required').optional(),
+    nodePath: z.string().trim().min(1, 'Node path is required').optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.levelsHash &&
+      !value.id &&
+      (!value.module || !value.subModule || !value.nodePath)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'module, subModule and nodePath are required when fetching workflow history by levelsHash',
+        path: ['levelsHash'],
+      });
+    }
+  });
 
 export const workflowRequestsSchema = z
   .object({

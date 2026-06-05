@@ -3601,6 +3601,7 @@ export class UserDbController {
           companyId,
           nodeId: approvalNode.id,
           initiatorId,
+          excludedUserIds: [target.id],
           reqId: request.id,
           reqTable: 'user_onboarding',
         },
@@ -4240,6 +4241,26 @@ export class UserDbController {
       }
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
+      const rawRequestData = (onboarding.data as any) || {};
+      if (onboarding.type && onboarding.type !== 'INITIATE') {
+        const targetUserEmail =
+          rawRequestData?.targetUserEmail ||
+          rawRequestData?.basicDetails?.email ||
+          null;
+        const targetUser = targetUserEmail
+          ? await prisma.user.findUnique({
+              where: { email: targetUserEmail },
+              select: { id: true },
+            })
+          : null;
+        if (targetUser?.id && targetUser.id === approverId) {
+          throw new AppError(
+            'Target user cannot approve their own modification request',
+            403,
+          );
+        }
+      }
+
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
         id,
         'user_onboarding',
@@ -4287,7 +4308,7 @@ export class UserDbController {
         throw new AppError('You have already approved this request once', 403);
       }
 
-      const requestData = onboarding.data as any;
+      const requestData = rawRequestData;
       const data =
         onboarding.type && onboarding.type !== 'INITIATE'
           ? requestData?.newData || requestData
@@ -4815,13 +4836,62 @@ export class UserDbController {
         reqIds.length > 0
           ? prisma.userOnboarding.findMany({
             where: { id: { in: reqIds } },
-            select: { id: true, data: true, oldData: true, type: true, impact: true },
+            select: {
+              id: true,
+              data: true,
+              oldData: true,
+              type: true,
+              impact: true,
+              initiatorId: true,
+            },
           })
           : Promise.resolve([]),
       ]);
       const requestSnapshotMap = new Map(
         requestSnapshots.map((request) => [request.id, request]),
       );
+      const targetEmails = Array.from(
+        new Set(
+          requestSnapshots
+            .filter((request) => request.type && request.type !== 'INITIATE')
+            .map((request) => {
+              const data = request.data as any;
+              return (
+                data?.targetUserEmail ||
+                data?.basicDetails?.email ||
+                null
+              );
+            })
+            .filter(
+              (value): value is string =>
+                typeof value === 'string' && value.trim().length > 0,
+            ),
+        ),
+      );
+      const targetUsers =
+        targetEmails.length > 0
+          ? await prisma.user.findMany({
+              where: { email: { in: targetEmails } },
+              select: { id: true, email: true },
+            })
+          : [];
+      const targetUserIdByEmail = new Map(
+        targetUsers.map((user) => [user.email, user.id]),
+      );
+      const targetUserIdByReqId = new Map<string, string>();
+      requestSnapshots.forEach((request) => {
+        if (!request.type || request.type === 'INITIATE') return;
+        const data = request.data as any;
+        const targetEmail =
+          data?.targetUserEmail || data?.basicDetails?.email || null;
+        const targetUserId =
+          typeof targetEmail === 'string'
+            ? targetUserIdByEmail.get(targetEmail)
+            : null;
+        if (targetUserId) {
+          targetUserIdByReqId.set(request.id, targetUserId);
+        }
+      });
 
       // Group workflow levels by reqId
       const workflowMap = new Map<string, any[]>();
@@ -4852,6 +4922,10 @@ export class UserDbController {
       const approvedUserMap = new Map<string, Set<string>>();
       activeHistory.forEach((h) => {
         if (h.reqId) {
+          const requestSnapshot = requestSnapshotMap.get(h.reqId);
+          if (requestSnapshot?.initiatorId && !initiatorMap.has(h.reqId)) {
+            initiatorMap.set(h.reqId, requestSnapshot.initiatorId);
+          }
           if (h.event === 'INITIATE' && h.eventUserId) {
             initiatorMap.set(h.reqId, h.eventUserId);
           }
@@ -4872,6 +4946,10 @@ export class UserDbController {
         const approvedUserIds = Array.from(
           approvedUserMap.get(reqId) ?? new Set<string>(),
         );
+        const targetUserId = targetUserIdByReqId.get(reqId);
+        if (targetUserId) {
+          approvedUserIds.push(targetUserId);
+        }
         for (const level of levels) {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])

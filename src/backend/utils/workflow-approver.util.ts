@@ -23,6 +23,7 @@ interface ResolveApproversParams {
   companyId: string;
   nodeId: string;
   initiatorId: string;
+  excludedUserIds?: string[];
   reqId: string;
   reqTable: string;
 }
@@ -65,6 +66,10 @@ interface HistoryConfig {
   field: string;
 }
 
+interface RequestConfig {
+  table: string;
+}
+
 /**
  * WorkflowApproverUtil is the single source of truth for workflow approver
  * resolution. Controllers should create the business request first, then call
@@ -88,9 +93,11 @@ export class WorkflowApproverUtil {
       companyId,
       nodeId,
       initiatorId,
+      excludedUserIds = [],
       reqId,
       reqTable,
     } = params;
+    const excludedApproverIds = new Set([initiatorId, ...excludedUserIds]);
 
     const requestNode = await (tx as any).orgStructure.findUnique({
       where: { id: nodeId },
@@ -162,9 +169,9 @@ export class WorkflowApproverUtil {
 
       globalAccessUsers.forEach((id) => approverSet.add(id));
 
-      // Maker-checker separation starts at persisted approver resolution so
-      // the initiator never appears as an eligible approver for the request.
-      approverSet.delete(initiatorId);
+      // Maker-checker and target-user separation start at persisted approver
+      // resolution so excluded users never appear as eligible approvers.
+      excludedApproverIds.forEach((id) => approverSet.delete(id));
 
       const mandatoryCount = this.getMandatoryCount(level);
       const approversList = Array.from(approverSet);
@@ -799,6 +806,16 @@ export class WorkflowApproverUtil {
     return historyMap[reqTable] ?? null;
   }
 
+  private static getRequestConfig(reqTable: string): RequestConfig | null {
+    const requestMap: Record<string, RequestConfig> = {
+      user_onboarding: { table: 'userOnboarding' },
+      org_structure_req: { table: 'orgStructureReq' },
+      workflow_req: { table: 'workflowReq' },
+    };
+
+    return requestMap[reqTable] ?? null;
+  }
+
   private static async getApprovedUserIds(
     tx: TxClient,
     reqId: string,
@@ -836,7 +853,19 @@ export class WorkflowApproverUtil {
       select: { eventUserId: true },
     });
 
-    return initiatorLog?.eventUserId || null;
+    if (initiatorLog?.eventUserId) {
+      return initiatorLog.eventUserId;
+    }
+
+    const requestConfig = this.getRequestConfig(reqTable);
+    if (!requestConfig) return null;
+
+    const request = await (tx as any)[requestConfig.table].findUnique({
+      where: { id: reqId },
+      select: { initiatorId: true },
+    });
+
+    return request?.initiatorId || null;
   }
 
   private static async getNextPendingLevel(
