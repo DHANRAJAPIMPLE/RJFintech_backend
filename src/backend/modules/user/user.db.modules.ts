@@ -5275,6 +5275,11 @@ export class UserDbController {
       if (!newData) {
         newData = fallbackSnapshot;
       }
+      const responseNewData = HistoryUserUtil.formatUserHistoryDetailNewData({
+        requestData,
+        resolvedNewData: newData,
+        requestType,
+      });
       const changeCount = UserDbController.getUserHistoryChangeCount(
         requestData,
         oldData,
@@ -5307,7 +5312,7 @@ export class UserDbController {
           remarks: history.remarks,
           changeCount,
           oldData,
-          newData,
+          newData: responseNewData,
           user: HistoryUserUtil.formatAuditUser(
             history.user,
             history.eventUserId,
