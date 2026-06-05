@@ -1022,6 +1022,7 @@ export class WorkflowDbController {
 
       if (oldLevel && !newLevel) {
         oldDiff[levelKey] = cloneJson(oldLevel);
+        newDiff[levelKey] = null;
         continue;
       }
 
