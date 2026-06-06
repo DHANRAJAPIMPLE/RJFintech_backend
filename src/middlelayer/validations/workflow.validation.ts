@@ -178,3 +178,22 @@ export const workflowListSchema = z
     ...cursorPaginationFields,
   })
   .strict();
+
+export const workflowDetailsSchema = z
+  .object({
+    id: z.string().uuid('Workflow id is invalid').optional(),
+    levelsHash: z.string().trim().min(1, 'Levels hash is required').optional(),
+    module: z.string().trim().min(1, 'Module is required').optional(),
+    subModule: z.string().trim().min(1, 'Sub-module is required').optional(),
+    nodePath: z.string().trim().min(1, 'Node path is required').optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.id && !value.levelsHash) {
+      context.addIssue({
+        code: 'custom',
+        message: 'id or levelsHash is required',
+        path: ['id'],
+      });
+    }
+  });

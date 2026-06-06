@@ -23,6 +23,7 @@ import {
   userCompanyNodesSchema,
   userFetchByNodePathCountSchema,
   userFilterOptionsSchema,
+  userDetailsSchema,
   userListSchema,
   fetchAllUserSchema,
   userModificationSchema,
@@ -36,6 +37,8 @@ import type {
   UserCompanyNode,
   FetchAllUsersResponse,
   FetchAndProcessUsersResult,
+  FetchUserDetailsInternalResponse,
+  FetchUserDetailsResponse,
   FetchUserFilterOptionsInternalResponse,
   FetchUserFilterOptionsResponse,
   FetchUsersByNodePathCountInternalResponse,
@@ -71,64 +74,134 @@ export class UserController {
 
   private static formatPendingAccess(
     access: PendingUserAccess,
+    options: { detail?: boolean } = {},
   ): PendingUserAccess {
+    const detail = options.detail === true;
     return {
       roleCategory: access.roleCategory,
       roleSubCategory: access.roleSubCategory,
       roleName: access.roleName,
       nodeName: access.nodeName,
       nodePath: access.nodePath,
-      nodeType: access.nodeType,
+      ...(detail ? { nodeType: access.nodeType } : {}),
       accessCategory: access.accessCategory,
     };
   }
 
-  private static formatUserListItem(user: UserListItem): UserListItem {
+  private static formatUserListItem(
+    user: UserListItem,
+    options: { detail?: boolean } = {},
+  ): UserListItem {
+    const detail = options.detail === true;
+    const primary = user.primary || [];
     return {
       isPending: user.isPending ?? false,
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,
         phone: user.basicDetails.phone,
-        createdAt: user.basicDetails.createdAt,
         designation: user.basicDetails.designation,
-        employeeId: user.basicDetails.employeeId,
-        reportingManagerName: user.basicDetails.reportingManagerName,
-        reportingManagerEmail: user.basicDetails.reportingManagerEmail,
+        ...(!detail
+          ? {
+              nodeName:
+                user.basicDetails.nodeName ?? primary[0]?.nodeName ?? null,
+            }
+          : {}),
+        ...(detail && user.basicDetails.createdAt !== undefined
+          ? { createdAt: user.basicDetails.createdAt }
+          : {}),
+        ...(detail && user.basicDetails.employeeId !== undefined
+          ? { employeeId: user.basicDetails.employeeId }
+          : {}),
+        ...(detail && user.basicDetails.reportingManagerName !== undefined
+          ? { reportingManagerName: user.basicDetails.reportingManagerName }
+          : {}),
+        ...(detail && user.basicDetails.reportingManagerEmail !== undefined
+          ? { reportingManagerEmail: user.basicDetails.reportingManagerEmail }
+          : {}),
       },
-      primary: user.primary.map(UserController.formatListAccess),
-      secondary: user.secondary.map(UserController.formatListAccess),
+      ...(detail
+        ? { primary: primary.map(UserController.formatListAccess) }
+        : {}),
+      ...(detail && user.secondary
+        ? { secondary: user.secondary.map(UserController.formatListAccess) }
+        : {}),
     };
   }
 
   private static formatPendingUserListItem(
     user: PendingUserListItem,
+    options: { detail?: boolean } = {},
   ): PendingUserListItem {
     const isInitiate = user.type === 'INITIATE';
+    const detail = options.detail === true;
+    const primary = user.primary || [];
     return {
       id: user.id,
       type: user.type,
       impact: user.impact ?? null,
-      oldData: isInitiate ? null : (user.oldData ?? null),
-      newData: isInitiate ? null : (user.newData ?? null),
+      ...(detail
+        ? {
+            oldData: isInitiate ? null : (user.oldData ?? null),
+            newData: isInitiate ? null : (user.newData ?? null),
+          }
+        : {}),
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,
         phone: user.basicDetails.phone,
-        createdAt: user.basicDetails.createdAt,
         designation: user.basicDetails.designation,
-        employeeId: user.basicDetails.employeeId,
-        status: user.basicDetails.status,
-        reportingManagerName: user.basicDetails.reportingManagerName,
-        reportingManagerEmail: user.basicDetails.reportingManagerEmail,
-        initiatorName: user.basicDetails.initiatorName,
-        initiatorEmail: user.basicDetails.initiatorEmail,
-        initiatedDate: user.basicDetails.initiatedDate,
-        workflowName: user.basicDetails.workflowName,
-        alias: user.basicDetails.alias,
+        ...(!detail
+          ? {
+              nodeName:
+                user.basicDetails.nodeName ?? primary[0]?.nodeName ?? null,
+            }
+          : {}),
+        ...(detail && user.basicDetails.createdAt !== undefined
+          ? { createdAt: user.basicDetails.createdAt }
+          : {}),
+        ...(detail && user.basicDetails.employeeId !== undefined
+          ? { employeeId: user.basicDetails.employeeId }
+          : {}),
+        ...(detail && user.basicDetails.status !== undefined
+          ? { status: user.basicDetails.status }
+          : {}),
+        ...(detail && user.basicDetails.reportingManagerName !== undefined
+          ? { reportingManagerName: user.basicDetails.reportingManagerName }
+          : {}),
+        ...(detail && user.basicDetails.reportingManagerEmail !== undefined
+          ? { reportingManagerEmail: user.basicDetails.reportingManagerEmail }
+          : {}),
+        ...(detail && user.basicDetails.initiatorName !== undefined
+          ? { initiatorName: user.basicDetails.initiatorName }
+          : {}),
+        ...(detail && user.basicDetails.initiatorEmail !== undefined
+          ? { initiatorEmail: user.basicDetails.initiatorEmail }
+          : {}),
+        ...(detail && user.basicDetails.initiatedDate !== undefined
+          ? { initiatedDate: user.basicDetails.initiatedDate }
+          : {}),
+        ...(detail && user.basicDetails.workflowName !== undefined
+          ? { workflowName: user.basicDetails.workflowName }
+          : {}),
+        ...(detail && user.basicDetails.alias !== undefined
+          ? { alias: user.basicDetails.alias }
+          : {}),
       },
-      primary: user.primary.map(UserController.formatPendingAccess),
-      secondary: user.secondary.map(UserController.formatPendingAccess),
+      ...(detail
+        ? {
+            primary: primary.map((access) =>
+              UserController.formatPendingAccess(access, { detail: true }),
+            ),
+          }
+        : {}),
+      ...(detail && user.secondary
+        ? {
+            secondary: user.secondary.map((access) =>
+              UserController.formatPendingAccess(access, { detail: true }),
+            ),
+          }
+        : {}),
     };
   }
 
@@ -244,7 +317,9 @@ export class UserController {
     } = data?.data || data || {};
     return {
       activeUsers: activeUsers.map(UserController.formatUserListItem),
-      pendingUsers: pendingUsers.map(UserController.formatPendingUserListItem),
+      pendingUsers: pendingUsers.map((user: PendingUserListItem) =>
+        UserController.formatPendingUserListItem(user),
+      ),
       inactiveUsers: inactiveUsers.map(UserController.formatUserListItem),
       activeCount: data?.activeCount ?? activeUsers.length,
       inactiveCount: data?.inactiveCount ?? inactiveUsers.length,
@@ -295,6 +370,58 @@ export class UserController {
       };
 
       res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async fetchUserDetails(
+    req: Request & { user?: { id: string; companyId: string } },
+    res: Response<FetchUserDetailsResponse>,
+    next: NextFunction,
+  ) {
+    try {
+      const { id, email } = zodParse(userDetailsSchema, req.body ?? {});
+      const companyId = req.user?.companyId;
+      const userId = req.user?.id;
+
+      if (!companyId || !userId) {
+        throw new AppError('Unauthorized', 401);
+      }
+
+      const { data, ok, status } =
+        await internalPost<FetchUserDetailsInternalResponse>(
+          `${config.backendUrl}/internal/user/details`,
+          {
+            id,
+            email,
+            companyId,
+            userId,
+          },
+        );
+
+      if (!ok || !data?.data) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch user details',
+          status,
+        );
+      }
+
+      const detail =
+        'id' in data.data
+          ? UserController.formatPendingUserListItem(
+              data.data as PendingUserListItem,
+              { detail: true },
+            )
+          : UserController.formatUserListItem(data.data as UserListItem, {
+              detail: true,
+            });
+
+      res.status(200).json({
+        message: 'User details fetched successfully!',
+        code: 200,
+        data: detail,
+      });
     } catch (error) {
       next(error);
     }

@@ -213,6 +213,22 @@ export const fetchAllUserSchema = userListSchema.extend({
   type: requiredUserListTypeSchema,
 });
 
+export const userDetailsSchema = z
+  .object({
+    id: z.string().uuid('Request ID is invalid').optional(),
+    email: emailSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.id && !value.email) {
+      context.addIssue({
+        code: 'custom',
+        message: 'id or email is required',
+        path: ['id'],
+      });
+    }
+  });
+
 export const userFilterOptionsSchema = z.object({}).strict();
 
 export const userActionSchema = z

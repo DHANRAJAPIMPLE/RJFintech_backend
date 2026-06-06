@@ -120,11 +120,12 @@ export type UserListBasicDetails = {
   name: string;
   email: string;
   phone: string;
-  createdAt: string;
   designation: string | null;
-  employeeId: string | null;
-  reportingManagerName: string | null;
-  reportingManagerEmail: string | null;
+  nodeName?: string | null;
+  createdAt?: string;
+  employeeId?: string | null;
+  reportingManagerName?: string | null;
+  reportingManagerEmail?: string | null;
 };
 
 export type UserListAccess = {
@@ -133,7 +134,7 @@ export type UserListAccess = {
   roleName: string;
   nodeName: string;
   nodePath: string;
-  nodeType: UserCompanyNodeType;
+  nodeType?: UserCompanyNodeType;
   accessCategory: UserAccessCategory;
 };
 
@@ -150,8 +151,8 @@ export type PendingRequestSnapshot = {
 export type UserListItem = {
   isPending: boolean;
   basicDetails: UserListBasicDetails;
-  primary: UserListAccess[];
-  secondary: UserListAccess[];
+  primary?: UserListAccess[];
+  secondary?: UserListAccess[];
 };
 
 export type PendingUserApprover = {
@@ -161,11 +162,11 @@ export type PendingUserApprover = {
 
 export type PendingUserBasicDetails = UserListBasicDetails & {
   status?: string | null;
-  initiatorName: string | null;
-  initiatorEmail: string | null;
-  initiatedDate: string;
-  workflowName: string;
-  alias: string;
+  initiatorName?: string | null;
+  initiatorEmail?: string | null;
+  initiatedDate?: string;
+  workflowName?: string;
+  alias?: string;
 };
 
 export type PendingUserAccess = Omit<UserListAccess, 'nodeType'> & {
@@ -179,8 +180,8 @@ export type PendingUserListItem = {
   oldData?: unknown | null;
   newData?: unknown | null;
   basicDetails: PendingUserBasicDetails;
-  primary: PendingUserAccess[];
-  secondary: PendingUserAccess[];
+  primary?: PendingUserAccess[];
+  secondary?: PendingUserAccess[];
 };
 
 export type UserListPageInfo = {
@@ -212,6 +213,19 @@ export type FetchAllUsersResponse = {
   inactiveCount: number;
   pendingCount: number;
   pageInfo: UserListPageInfo;
+};
+
+export type FetchUserDetailsInternalResponse = {
+  message?: string;
+  code?: number;
+  data?: UserListItem | PendingUserListItem;
+  error?: string;
+};
+
+export type FetchUserDetailsResponse = {
+  message: 'User details fetched successfully!';
+  code: 200;
+  data: UserListItem | PendingUserListItem;
 };
 
 export type InitiateUserOnboardingResponse =

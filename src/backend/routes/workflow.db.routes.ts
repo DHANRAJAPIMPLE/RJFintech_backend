@@ -15,5 +15,6 @@ router.post('/history-detail', WorkflowDbController.getWorkflowHistoryDetail);
 router.post('/get-request', WorkflowDbController.getWorkflowRequestByHash);
 router.post('/action', WorkflowDbController.actionWorkflowRequest);
 router.post('/fetch', WorkflowDbController.fetchWorkflows);
+router.post('/details', WorkflowDbController.fetchWorkflowDetails);
 
 export default router;

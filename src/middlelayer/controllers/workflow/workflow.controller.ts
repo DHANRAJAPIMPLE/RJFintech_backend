@@ -20,6 +20,7 @@ import {
   workflowActionSchema,
   workflowHistorySchema,
   workflowListSchema,
+  workflowDetailsSchema,
 } from '../../validations/workflow.validation';
 import type {
   FetchWorkflowHistoryInternalResponse,
@@ -58,7 +59,9 @@ export class WorkflowController {
 
   private static formatActiveWorkflow(
     workflow: WorkflowActiveItem | WorkflowActiveInternalItem,
+    options: { detail?: boolean } = {},
   ): WorkflowActiveItem {
+    const detail = options.detail === true;
     return {
       id: workflow.id,
       name: workflow.name,
@@ -76,66 +79,76 @@ export class WorkflowController {
         nodeName: workflow.orgStructure.nodeName,
         nodeType: workflow.orgStructure.nodeType,
       },
-      levelsHash: workflow.levelsHash,
-      levels: workflow.levels.map((level) => ({
-        level: level.level,
-        approver1: level.approver1,
-        approver2: level.approver2,
-        approverType: level.approverType,
-      })),
       isPending: workflow.isPending ?? false,
-      status: workflow.status ?? 'ACTIVE',
-      linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map((child) =>
-        WorkflowController.formatLinkedOrgStructure(child),
-      ),
+      ...(detail
+        ? {
+            levelsHash: workflow.levelsHash,
+            levels: (workflow.levels ?? []).map((level) => ({
+              level: level.level,
+              approver1: level.approver1,
+              approver2: level.approver2,
+              approverType: level.approverType,
+            })),
+            status: workflow.status ?? 'ACTIVE',
+            linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map(
+              (child) => WorkflowController.formatLinkedOrgStructure(child),
+            ),
+          }
+        : {}),
     };
   }
 
   private static formatPendingWorkflow(
     workflow: WorkflowPendingInternalItem,
+    options: { detail?: boolean } = {},
   ): WorkflowPendingItem {
+    const detail = options.detail === true;
     return {
       id: workflow.id,
       workflowId: workflow.workflowId ?? null,
-      data: {
-        name: workflow.data.name,
-        workflowType:
-          workflow.data.workflowType ?? workflow.workflowType ?? 'NODE',
-        levels: workflow.data.levels,
-        module: workflow.data.module,
-        nodePath: workflow.data.nodePath,
-        subModule: workflow.data.subModule,
-        levelsHash: workflow.data.levelsHash ?? workflow.levelsHash,
-        status: workflow.data.status ?? null,
-      },
       type: workflow.type,
       impact: workflow.impact ?? null,
-      oldData: workflow.oldData ?? workflow.data.oldData ?? null,
-      newData:
-        workflow.type === 'INITIATE'
-          ? null
-          : (workflow.newData ?? workflow.data ?? null),
       status: workflow.status,
       alias: workflow.alias,
-      approvalRemark: workflow.approvalRemark,
-      levelsHash: workflow.levelsHash,
-      createdAt: workflow.createdAt,
-      initiator: {
-        name: workflow.initiator.name,
-        email: workflow.initiator.email,
-      },
-      initiatorTimestamp: workflow.initiatorTimestamp,
       nodeType: workflow.nodeType,
       nodeName: workflow.nodeName,
-      nodePath: workflow.nodePath,
       workflowName: workflow.workflowName,
       associateAlias: workflow.associateAlias ?? {
         workflowName: workflow.workflowName ?? null,
         workflowAlias: workflow.alias ?? null,
       },
-      linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map((child) =>
-        WorkflowController.formatLinkedOrgStructure(child),
-      ),
+      ...(detail
+        ? {
+            data: {
+              name: workflow.data?.name,
+              workflowType:
+                workflow.data?.workflowType ?? workflow.workflowType ?? 'NODE',
+              levels: workflow.data?.levels,
+              module: workflow.data?.module,
+              nodePath: workflow.data?.nodePath,
+              subModule: workflow.data?.subModule,
+              levelsHash: workflow.data?.levelsHash ?? workflow.levelsHash ?? null,
+              status: workflow.data?.status ?? null,
+            },
+            oldData: workflow.oldData ?? workflow.data?.oldData ?? null,
+            newData:
+              workflow.type === 'INITIATE'
+                ? null
+                : (workflow.newData ?? workflow.data ?? null),
+            approvalRemark: workflow.approvalRemark,
+            levelsHash: workflow.levelsHash,
+            createdAt: workflow.createdAt,
+            initiator: {
+              name: workflow.initiator?.name ?? '',
+              email: workflow.initiator?.email ?? '',
+            },
+            initiatorTimestamp: workflow.initiatorTimestamp,
+            nodePath: workflow.nodePath,
+            linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map(
+              (child) => WorkflowController.formatLinkedOrgStructure(child),
+            ),
+          }
+        : {}),
     };
   }
 
@@ -469,6 +482,55 @@ export class WorkflowController {
       next(error);
     }
   }
+
+  static async fetchWorkflowDetails(
+    req: Request & { user?: { id: string; companyId: string } },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const body = zodParse(workflowDetailsSchema, req.body ?? {});
+      const companyId = req.user?.companyId;
+
+      if (!companyId) {
+        throw new AppError('Unauthorized: Company information missing', 401);
+      }
+
+      const { data, ok, status } = await internalPost<any>(
+        `${config.backendUrl}/internal/workflow/details`,
+        {
+          ...body,
+          companyId,
+          userId: req.user?.id,
+        },
+      );
+
+      if (!ok || !data?.data) {
+        throw new AppError(
+          data?.message || data?.error || 'Failed to fetch workflow details',
+          status,
+        );
+      }
+
+      const detail =
+        'workflowName' in data.data
+          ? WorkflowController.formatPendingWorkflow(data.data, {
+              detail: true,
+            })
+          : WorkflowController.formatActiveWorkflow(data.data, {
+              detail: true,
+            });
+
+      res.status(200).json({
+        message: 'Workflow details fetched successfully!',
+        code: 200,
+        data: detail,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async fetchWorkflowHistory(
     req: Request & { user?: { id: string; companyId: string } },
     res: Response<FetchWorkflowHistoryResponse>,

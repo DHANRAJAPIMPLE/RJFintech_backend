@@ -973,6 +973,85 @@ export class UserDbController {
     return { oldData: null, newData: null };
   }
 
+  private static buildPendingUserSnapshotAroundRequest(
+    requests: any[],
+    selectedRequest: any,
+    baseSnapshot: UserDataSnapshot | null,
+  ) {
+    if (!selectedRequest?.id) {
+      return { oldData: null, newData: null };
+    }
+
+    const selectedTargetEmail =
+      UserDbController.extractUserTargetEmail(selectedRequest.data) || null;
+    if (selectedRequest.type === 'INITIATE') {
+      return {
+        oldData: null,
+        newData: UserDbController.extractUserSnapshot(selectedRequest.data),
+      };
+    }
+
+    let currentSnapshot = baseSnapshot ? cloneJson(baseSnapshot) : null;
+    const sortedRequests = [...requests].sort((left, right) => {
+      const leftTime = new Date(left.createdAt).getTime();
+      const rightTime = new Date(right.createdAt).getTime();
+      if (leftTime !== rightTime) return leftTime - rightTime;
+      return String(left.id || '').localeCompare(String(right.id || ''));
+    });
+
+    for (const request of sortedRequests) {
+      const requestTime = new Date(request.createdAt).getTime();
+      const selectedTime = new Date(selectedRequest.createdAt).getTime();
+      if (
+        requestTime > selectedTime ||
+        (requestTime === selectedTime &&
+          String(request.id || '').localeCompare(
+            String(selectedRequest.id || ''),
+          ) > 0)
+      ) {
+        break;
+      }
+
+      const requestTargetEmail =
+        UserDbController.extractUserTargetEmail(request.data) || null;
+      const currentEmail =
+        currentSnapshot?.basicDetails.email.toLowerCase() || null;
+      const matchesCurrentUser =
+        request.id === selectedRequest.id ||
+        !selectedTargetEmail ||
+        requestTargetEmail === selectedTargetEmail ||
+        requestTargetEmail === currentEmail;
+
+      if (!matchesCurrentUser) continue;
+
+      const nextSnapshot =
+        request.type === 'INITIATE'
+          ? UserDbController.extractUserSnapshot(request.data)
+          : currentSnapshot
+            ? UserDbController.applyUserRequestSnapshot(
+                currentSnapshot,
+                request,
+              )
+            : null;
+
+      if (request.id === selectedRequest.id) {
+        return {
+          oldData: currentSnapshot ? cloneJson(currentSnapshot) : null,
+          newData: nextSnapshot,
+        };
+      }
+
+      if (nextSnapshot) {
+        currentSnapshot = nextSnapshot;
+      }
+    }
+
+    return {
+      oldData: baseSnapshot ? cloneJson(baseSnapshot) : null,
+      newData: null,
+    };
+  }
+
   private static rolePermissionRank(value: unknown) {
     return (
       {
@@ -2187,8 +2266,35 @@ export class UserDbController {
     );
   }
 
-  private static formatProductionUser(u: any, pendingRequest?: any) {
+  private static formatUserAccess(access: any, includeNodeType = true) {
+    return {
+      roleCategory: access.role?.category ?? access.roleCategory,
+      roleSubCategory: access.role?.subCategory ?? access.roleSubCategory,
+      roleName: access.role?.roleName ?? access.roleName ?? access.roleCode,
+      nodeName: access.orgStructure?.nodeName ?? access.nodeName,
+      nodePath: access.orgStructure?.nodePath ?? access.nodePath,
+      ...(includeNodeType
+        ? { nodeType: access.orgStructure?.nodeType ?? access.nodeType }
+        : {}),
+      accessCategory: access.accessCategory,
+    };
+  }
+
+  private static formatProductionUser(
+    u: any,
+    pendingRequest?: any,
+    options: { detail?: boolean } = {},
+  ) {
     const mapping = u.userMappings[0];
+    const detail = options.detail === true;
+    const primary = u.userAccesses
+      .filter((a: any) => a.accessType === 'PRIMARY' || a.isGlobalAccess)
+      .map((access: any) => UserDbController.formatUserAccess(access, detail));
+    const secondary = detail
+      ? u.userAccesses
+          .filter((a: any) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
+          .map((access: any) => UserDbController.formatUserAccess(access, true))
+      : [];
 
     return {
       isPending: Boolean(pendingRequest),
@@ -2196,34 +2302,18 @@ export class UserDbController {
         name: u.name,
         email: u.email,
         phone: u.phone,
-        createdAt: u.createdAt,
         designation: mapping?.designation || null,
-        employeeId: mapping?.employeeId || null,
-        reportingManagerName: mapping?.manager?.name || null,
-        reportingManagerEmail: mapping?.manager?.email || null,
+        ...(!detail ? { nodeName: primary[0]?.nodeName || null } : {}),
+        ...(detail
+          ? {
+              createdAt: u.createdAt,
+              employeeId: mapping?.employeeId || null,
+              reportingManagerName: mapping?.manager?.name || null,
+              reportingManagerEmail: mapping?.manager?.email || null,
+            }
+          : {}),
       },
-      primary: u.userAccesses
-        .filter((a: any) => a.accessType === 'PRIMARY' || a.isGlobalAccess)
-        .map((a: any) => ({
-          roleCategory: a.role?.category,
-          roleSubCategory: a.role?.subCategory,
-          roleName: a.role?.roleName,
-          nodeName: a.orgStructure?.nodeName,
-          nodePath: a.orgStructure?.nodePath,
-          nodeType: a.orgStructure?.nodeType,
-          accessCategory: a.accessCategory,
-        })),
-      secondary: u.userAccesses
-        .filter((a: any) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
-        .map((a: any) => ({
-          roleCategory: a.role?.category,
-          roleSubCategory: a.role?.subCategory,
-          roleName: a.role?.roleName,
-          nodeName: a.orgStructure?.nodeName,
-          nodePath: a.orgStructure?.nodePath,
-          nodeType: a.orgStructure?.nodeType,
-          accessCategory: a.accessCategory,
-        })),
+      ...(detail ? { primary, secondary } : {}),
     };
   }
 
@@ -2446,7 +2536,9 @@ export class UserDbController {
   private static async formatPendingUsers(
     pendingOnboardings: any[],
     resolvedCompanyId: string,
+    options: { detail?: boolean } = {},
   ) {
+    const detail = options.detail === true;
     const pendingEmails = pendingOnboardings
       .map((onb: any) => {
         const data = onb.data as any;
@@ -2455,7 +2547,7 @@ export class UserDbController {
       .filter(Boolean);
 
     const histories =
-      pendingEmails.length > 0
+      detail && pendingEmails.length > 0
         ? await prisma.userHistory.findMany({
             where: {
               email: { in: pendingEmails },
@@ -2481,7 +2573,7 @@ export class UserDbController {
       .filter(Boolean);
 
     const managers =
-      managerEmails.length > 0
+      detail && managerEmails.length > 0
         ? await prisma.user.findMany({
             where: {
               email: { in: managerEmails },
@@ -2499,7 +2591,7 @@ export class UserDbController {
       ),
     ) as string[];
     const workflowDetails =
-      workflowIds.length > 0
+      detail && workflowIds.length > 0
         ? await prisma.workflow.findMany({
             where: { id: { in: workflowIds } },
             select: { id: true, name: true, alias: true },
@@ -2584,132 +2676,210 @@ export class UserDbController {
     const hasActivePermissionNode = (permission: any) =>
       typeof permission?.nodePath !== 'string' ||
       activeIncomingNodePaths.has(permission.nodePath);
+    const pendingEmailFilters = pendingEmails.flatMap((email: string) => [
+      {
+        data: {
+          path: ['targetUserEmail'],
+          equals: email,
+        } as any,
+      },
+      {
+        data: {
+          path: ['basicDetails', 'email'],
+          equals: email,
+        } as any,
+      },
+    ]);
+    const relatedPendingRequests =
+      detail && pendingEmailFilters.length > 0
+        ? await prisma.userOnboarding.findMany({
+            where: {
+              companyId: resolvedCompanyId,
+              status: 'PENDING',
+              OR: pendingEmailFilters,
+            },
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          })
+        : pendingOnboardings;
 
-    return pendingOnboardings.map((onb: any) => {
-      const dataBlob = onb.data as any;
-      const basic = dataBlob?.basicDetails || {};
-      const email = basic.email || dataBlob?.targetUserEmail;
-      const historyEmail = dataBlob?.targetUserEmail || email;
-      const existingUser = existingUserMap.get(
-        String(historyEmail || '').toLowerCase(),
-      );
-      const existingMapping = existingUser?.userMappings?.[0];
-      const managerEmail = basic.reportingManager;
-      const init = historyMap.get(`${historyEmail}_INITIATE`);
-      const approve = historyMap.get(`${historyEmail}_APPROVED`);
-      const managerInfo = managerMap.get(managerEmail);
-      const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
-      const type = onb.type || 'INITIATE';
-      const isInitiate = type === 'INITIATE';
+    return Promise.all(
+      pendingOnboardings.map(async (onb: any) => {
+        const dataBlob = onb.data as any;
+        const basic = dataBlob?.basicDetails || {};
+        const email = basic.email || dataBlob?.targetUserEmail;
+        const historyEmail = dataBlob?.targetUserEmail || email;
+        const existingUser = existingUserMap.get(
+          String(historyEmail || '').toLowerCase(),
+        );
+        const existingMapping = existingUser?.userMappings?.[0];
+        const managerEmail = basic.reportingManager;
+        const init = historyMap.get(`${historyEmail}_INITIATE`);
+        const approve = historyMap.get(`${historyEmail}_APPROVED`);
+        const managerInfo = managerMap.get(managerEmail);
+        const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
+        const type = onb.type || 'INITIATE';
+        const isInitiate = type === 'INITIATE';
 
-      const primary: any[] = [];
-      const secondary: any[] = [];
+        const primary: any[] = [];
+        const secondary: any[] = [];
 
-      const incomingPermissions = Array.isArray(dataBlob?.permissions)
-        ? dataBlob.permissions
-        : [];
-      const existingPermissions = (existingUser?.userAccesses || []).map(
-        (access: any) => ({
-          roleCategory: access.role?.category || '',
-          roleSubCategory: access.role?.subCategory || '',
-          roleName: access.role?.roleName || access.roleCode,
-          nodeName: access.orgStructure?.nodeName || '',
-          nodePath: access.orgStructure?.nodePath || '',
-          nodeType: access.orgStructure?.nodeType || null,
-          accessCategory: access.accessCategory || null,
-          accessType: access.accessType || 'SECONDARY',
-          isGlobalAccess: access.isGlobalAccess || false,
-          nodeStatus: access.orgStructure?.status || null,
-        }),
-      );
-      const effectivePermissions =
-        incomingPermissions.length > 0
-          ? isInitiate || existingPermissions.length === 0
-            ? incomingPermissions.filter(
-                (permission: any) =>
-                  !UserDbController.isPermissionRemoval(permission) &&
-                  hasActivePermissionNode(permission),
-              )
-            : UserDbController.mergePermissionMutations(
-                existingPermissions.filter(
-                  (permission: any) => permission.nodeStatus === 'ACTIVE',
-                ),
-                incomingPermissions.filter(hasActivePermissionNode),
-              )
-          : existingPermissions.filter(
-              (permission: any) => permission.nodeStatus === 'ACTIVE',
-            );
-      const responseNewData =
-        isInitiate || !dataBlob
-          ? null
-          : {
-              ...dataBlob,
-              permissions: incomingPermissions.filter(
-                (permission: any) =>
-                  !UserDbController.isPermissionRemoval(permission) &&
-                  hasActivePermissionNode(permission),
+        const incomingPermissions = Array.isArray(dataBlob?.permissions)
+          ? dataBlob.permissions
+          : [];
+        const existingPermissions = (existingUser?.userAccesses || []).map(
+          (access: any) => ({
+            roleCategory: access.role?.category || '',
+            roleSubCategory: access.role?.subCategory || '',
+            roleName: access.role?.roleName || access.roleCode,
+            nodeName: access.orgStructure?.nodeName || '',
+            nodePath: access.orgStructure?.nodePath || '',
+            nodeType: access.orgStructure?.nodeType || null,
+            accessCategory: access.accessCategory || null,
+            accessType: access.accessType || 'SECONDARY',
+            isGlobalAccess: access.isGlobalAccess || false,
+            nodeStatus: access.orgStructure?.status || null,
+          }),
+        );
+        const existingActivePermissions = existingPermissions.filter(
+          (permission: any) => permission.nodeStatus === 'ACTIVE',
+        );
+        const existingSnapshot: UserDataSnapshot | null = existingUser
+          ? {
+              basicDetails: {
+                name: existingUser.name || '',
+                email: existingUser.email || '',
+                phone: existingUser.phone || '',
+                designation: existingMapping?.designation ?? null,
+                employeeId: existingMapping?.employeeId ?? null,
+                reportingManager: existingMapping?.manager?.email ?? null,
+                status: existingMapping?.status || 'ACTIVE',
+              },
+              permissions: existingActivePermissions.map((permission: any) =>
+                UserDbController.normalizePermission(permission),
               ),
-            };
+            }
+          : null;
+        const relatedRequestsForUser = relatedPendingRequests.filter(
+          (request: any) => {
+            const requestEmail =
+              UserDbController.extractUserTargetEmail(request.data) || '';
+            return (
+              request.id === onb.id ||
+              requestEmail === String(historyEmail || '').toLowerCase()
+            );
+          },
+        );
+        const resolvedSnapshot = detail
+          ? UserDbController.buildPendingUserSnapshotAroundRequest(
+              relatedRequestsForUser,
+              onb,
+              existingSnapshot,
+            )
+          : { oldData: null, newData: null };
+        const resolvedOldData = resolvedSnapshot.oldData;
+        const resolvedNewData = resolvedSnapshot.newData;
+        const effectivePermissions =
+          detail && resolvedNewData?.permissions
+            ? resolvedNewData.permissions
+            : incomingPermissions.length > 0
+              ? isInitiate || existingPermissions.length === 0
+                ? incomingPermissions.filter(
+                    (permission: any) =>
+                      !UserDbController.isPermissionRemoval(permission) &&
+                      hasActivePermissionNode(permission),
+                  )
+                : UserDbController.mergePermissionMutations(
+                    existingActivePermissions,
+                    incomingPermissions.filter(hasActivePermissionNode),
+                  )
+              : existingPermissions.filter(
+                  (permission: any) => permission.nodeStatus === 'ACTIVE',
+                );
+        const responseOldData =
+          detail && !isInitiate
+            ? await HistoryUserUtil.enrichUserHistoryOldData(resolvedOldData)
+            : null;
+        const responseNewData =
+          detail && !isInitiate
+            ? HistoryUserUtil.formatUserHistoryDetailNewData({
+                requestData: dataBlob,
+                requestOldData: onb.oldData,
+                resolvedOldData,
+                resolvedNewData,
+                requestType: type,
+              })
+            : null;
 
-      effectivePermissions.forEach((p: any) => {
-        const access = {
-          roleCategory: p.roleCategory,
-          roleSubCategory: p.roleSubCategory,
-          roleName: p.roleName,
-          nodeName: p.nodeName,
-          nodePath: p.nodePath,
-          nodeType: p.nodeType,
-          accessCategory: p.accessCategory,
+        effectivePermissions.forEach((p: any) => {
+          const access = {
+            roleCategory: p.roleCategory,
+            roleSubCategory: p.roleSubCategory,
+            roleName: p.roleName,
+            nodeName: p.nodeName,
+            nodePath: p.nodePath,
+            ...(detail ? { nodeType: p.nodeType } : {}),
+            accessCategory: p.accessCategory,
+          };
+          if (
+            p.isGlobal === true ||
+            p.isGlobalAccess === true ||
+            p.accessType === 'PRIMARY'
+          ) {
+            primary.push(access);
+          } else {
+            secondary.push(access);
+          }
+        });
+
+        return {
+          id: onb.id,
+          type,
+          impact: onb.impact || null,
+          ...(detail
+            ? {
+                oldData: responseOldData,
+                newData: responseNewData,
+                approver: approve?.user || null,
+              }
+            : {}),
+          basicDetails: {
+            name: basic.name ?? existingUser?.name ?? null,
+            email: basic.email ?? existingUser?.email ?? null,
+            phone: basic.phone ?? existingUser?.phone ?? null,
+            designation:
+              basic.designation !== undefined
+                ? basic.designation
+                : (existingMapping?.designation ?? null),
+            ...(!detail ? { nodeName: primary[0]?.nodeName || null } : {}),
+            ...(detail
+              ? {
+                  createdAt: onb.createdAt,
+                  employeeId:
+                    basic.employeeId !== undefined
+                      ? basic.employeeId
+                      : (existingMapping?.employeeId ?? null),
+                  status:
+                    basic.status !== undefined
+                      ? basic.status
+                      : (existingMapping?.status ?? null),
+                  reportingManagerName:
+                    managerInfo?.name || existingMapping?.manager?.name || null,
+                  reportingManagerEmail:
+                    managerInfo?.email ||
+                    existingMapping?.manager?.email ||
+                    null,
+                  initiatorName: init?.user?.name || null,
+                  initiatorEmail: init?.user?.email || null,
+                  initiatedDate: onb.createdAt,
+                  workflowName: w?.name || 'N/A',
+                  alias: w?.alias || 'N/A',
+                }
+              : {}),
+          },
+          ...(detail ? { primary, secondary } : {}),
         };
-        if (
-          p.isGlobal === true ||
-          p.isGlobalAccess === true ||
-          p.accessType === 'PRIMARY'
-        ) {
-          primary.push(access);
-        } else {
-          secondary.push(access);
-        }
-      });
-
-      return {
-        id: onb.id,
-        type,
-        impact: onb.impact || null,
-        oldData: isInitiate ? null : onb.oldData || dataBlob?.oldData || null,
-        newData: responseNewData,
-        approver: approve?.user || null,
-        basicDetails: {
-          name: basic.name ?? existingUser?.name ?? null,
-          email: basic.email ?? existingUser?.email ?? null,
-          phone: basic.phone ?? existingUser?.phone ?? null,
-          createdAt: onb.createdAt,
-          designation:
-            basic.designation !== undefined
-              ? basic.designation
-              : (existingMapping?.designation ?? null),
-          employeeId:
-            basic.employeeId !== undefined
-              ? basic.employeeId
-              : (existingMapping?.employeeId ?? null),
-          status:
-            basic.status !== undefined
-              ? basic.status
-              : (existingMapping?.status ?? null),
-          reportingManagerName:
-            managerInfo?.name || existingMapping?.manager?.name || null,
-          reportingManagerEmail:
-            managerInfo?.email || existingMapping?.manager?.email || null,
-          initiatorName: init?.user?.name || null,
-          initiatorEmail: init?.user?.email || null,
-          initiatedDate: onb.createdAt,
-          workflowName: w?.name || 'N/A',
-          alias: w?.alias || 'N/A',
-        },
-        primary,
-        secondary,
-      };
-    });
+      }),
+    );
   }
 
   /**
@@ -2721,7 +2891,15 @@ export class UserDbController {
    */
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode, companyId, userId, listType } = req.body;
+      const { companyCode, companyId, userId } = req.body;
+      const requestedListType = UserDbController.normalizeFilterText(
+        req.body?.listType ?? req.body?.type,
+      )?.toLowerCase();
+      const listType =
+        requestedListType &&
+        ['active', 'pending', 'inactive'].includes(requestedListType)
+          ? (requestedListType as 'active' | 'pending' | 'inactive')
+          : undefined;
       const query = UserDbController.normalizeFilterText(req.body?.query);
       const pagination = getPagination(req.body);
       const rawPage = Number(req.body?.page);
@@ -2911,7 +3089,10 @@ export class UserDbController {
           },
         },
         userAccesses: {
-          where: { companyId: resolvedCompanyId },
+          where: {
+            companyId: resolvedCompanyId,
+            OR: [{ accessType: 'PRIMARY' as const }, { isGlobalAccess: true }],
+          },
           include: {
             role: true,
             orgStructure: true,
@@ -3078,6 +3259,7 @@ export class UserDbController {
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
         resolvedCompanyId,
+        { detail: true },
       );
       const pendingCount =
         listType === 'active'
@@ -3114,6 +3296,233 @@ export class UserDbController {
           listType === 'active' || listType === 'inactive'
             ? selectedPage.pageInfo
             : (pendingResult as any).pageInfo || null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async fetchUserDetails(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { companyCode, companyId, userId, id } = req.body;
+      const email = UserDbController.normalizeFilterText(req.body?.email);
+
+      if (!id && !email) {
+        throw new AppError('id or email is required', 400);
+      }
+
+      let resolvedCompanyId = companyId;
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('Company code or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+          select: { id: true },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
+
+      let isGlobal = true;
+      let visibleNodeIds: string[] = [];
+
+      if (userId) {
+        const globalAccess = await prisma.userAccess.findFirst({
+          where: {
+            userId,
+            companyId: resolvedCompanyId,
+            isGlobalAccess: true,
+          },
+          select: { id: true },
+        });
+
+        if (!globalAccess) {
+          isGlobal = false;
+          const requesterAccesses = await prisma.userAccess.findMany({
+            where: {
+              userId,
+              companyId: resolvedCompanyId,
+              role: {
+                subCategory: 'USER_ACC',
+                view: true,
+              },
+            },
+            include: { orgStructure: { select: { nodePath: true } } },
+          });
+
+          if (requesterAccesses.length > 0) {
+            const nodePaths = requesterAccesses
+              .filter((access) => access.accessCategory === 'NODE')
+              .map((access) => access.orgStructure.nodePath);
+            const immediateChildPaths = requesterAccesses
+              .filter((access) => access.accessCategory === 'IMMEDIATE_CHILD')
+              .map((access) => access.orgStructure.nodePath);
+            const allChildPaths = requesterAccesses
+              .filter((access) => access.accessCategory === 'ALL_CHILD')
+              .map((access) => access.orgStructure.nodePath);
+            const visibleNodes = await prisma.orgStructure.findMany({
+              where: {
+                companyId: resolvedCompanyId,
+                OR: [
+                  {
+                    nodePath: {
+                      in: [
+                        ...nodePaths,
+                        ...immediateChildPaths,
+                        ...allChildPaths,
+                      ],
+                    },
+                  },
+                  ...allChildPaths.map((path) => ({
+                    nodePath: { startsWith: `${path}.` },
+                  })),
+                  ...immediateChildPaths.map((path) => ({
+                    parent: { nodePath: path },
+                  })),
+                ],
+              },
+              select: { id: true },
+            });
+            visibleNodeIds = visibleNodes.map((node) => node.id);
+          }
+        }
+      }
+
+      if (id) {
+        const approverRequestIds =
+          await UserDbController.getCurrentApproverRequestIds(
+            'user_onboarding',
+            userId,
+            resolvedCompanyId,
+          );
+        if (!approverRequestIds.includes(id)) {
+          throw new AppError('User request not found', 404);
+        }
+
+        const pendingOnboarding = await prisma.userOnboarding.findFirst({
+          where: {
+            id,
+            companyId: resolvedCompanyId,
+            status: 'PENDING',
+          },
+        });
+        if (!pendingOnboarding) {
+          throw new AppError('User request not found', 404);
+        }
+
+        const [detail] = await UserDbController.formatPendingUsers(
+          [pendingOnboarding],
+          resolvedCompanyId,
+          { detail: true },
+        );
+
+        return res.status(200).json({
+          message: 'User details fetched successfully!',
+          code: 200,
+          data: detail,
+        });
+      }
+
+      if (!email) {
+        throw new AppError('email is required', 400);
+      }
+
+      const visibilityWhere = isGlobal
+        ? {}
+        : {
+            AND: [
+              {
+                userAccesses: {
+                  some: {
+                    companyId: resolvedCompanyId,
+                    nodeId: { in: visibleNodeIds },
+                  },
+                },
+              },
+              {
+                userAccesses: {
+                  none: {
+                    isGlobalAccess: true,
+                    companyId: resolvedCompanyId,
+                  },
+                },
+              },
+            ],
+          };
+
+      const user = await prisma.user.findFirst({
+        where: {
+          email: { equals: email, mode: 'insensitive' },
+          userMappings: {
+            some: {
+              companyId: resolvedCompanyId,
+            },
+          },
+          ...visibilityWhere,
+        },
+        include: {
+          userMappings: {
+            where: { companyId: resolvedCompanyId },
+            include: {
+              company: true,
+              manager: true,
+            },
+          },
+          userAccesses: {
+            where: { companyId: resolvedCompanyId },
+            include: {
+              role: true,
+              orgStructure: true,
+            },
+          },
+        },
+      });
+
+      if (!user) {
+        throw new AppError('User not found', 404);
+      }
+
+      const pendingCandidates = await prisma.userOnboarding.findMany({
+        where: {
+          companyId: resolvedCompanyId,
+          status: 'PENDING',
+          OR: [
+            {
+              data: {
+                path: ['targetUserEmail'],
+                equals: user.email,
+              } as any,
+            },
+            {
+              data: {
+                path: ['basicDetails', 'email'],
+                equals: user.email,
+              } as any,
+            },
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const effectivePendingIds =
+        await UserDbController.filterEffectivelyPendingRequestIds(
+          'user_onboarding',
+          pendingCandidates.map((request: any) => request.id),
+        );
+      const pendingRequest = pendingCandidates.find((request: any) =>
+        effectivePendingIds.has(request.id),
+      );
+
+      res.status(200).json({
+        message: 'User details fetched successfully!',
+        code: 200,
+        data: UserDbController.formatProductionUser(user, pendingRequest, {
+          detail: true,
+        }),
       });
     } catch (error) {
       next(error);

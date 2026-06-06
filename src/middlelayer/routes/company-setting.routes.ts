@@ -155,6 +155,11 @@ router.post(
   UserController.fetchAllUsers,
 );
 router.post(
+  '/user/details',
+  authorize('view', 'USER_ACC'),
+  UserController.fetchUserDetails,
+);
+router.post(
   '/user/user-filter-option',
   authorize('view', 'USER_ACC'),
   UserController.fetchUserFilterOptions,
@@ -216,6 +221,11 @@ router.post(
   authorize('view', 'WORK_FLOW'),
   WorkflowController.fetchAllWorkflows,
 ); //done
+router.post(
+  '/workflow/details',
+  authorize('view', 'WORK_FLOW'),
+  WorkflowController.fetchWorkflowDetails,
+);
 router.post(
   '/workflow/fetch-history',
   authorize('view', 'WORK_FLOW'),

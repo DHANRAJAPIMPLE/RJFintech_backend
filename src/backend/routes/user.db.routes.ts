@@ -4,6 +4,7 @@ import { UserDbController } from '../modules/user/user.db.modules';
 const router = Router();
 
 router.post('/fetch-all', UserDbController.fetchAllUsers);
+router.post('/details', UserDbController.fetchUserDetails);
 router.post('/filter-option', UserDbController.fetchUserFilterOptions);
 router.post('/update-status', UserDbController.updateUserStatus);
 router.post('/create', UserDbController.createUserOnboarding);
