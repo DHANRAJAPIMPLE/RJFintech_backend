@@ -445,26 +445,27 @@ model WorkflowReqHistory {
 }
 
 model ApiSpan {
-  id         String      @id @default(uuid())
-  trackingId String      @map("tracking_id")
-  subCount   String?     @map("sub_count")
-  type       ApiSpanType
-  method     String
-  url        String
-  statusCode Int?        @map("status_code")
-  headers    Json?
-  reqBody    Json?       @map("req_body")
-  resBody    Json?       @map("res_body")
-  resHeaders Json?       @map("res_headers")
-  latency    Int?
-  ipAddress  String?     @map("ip_address")
-  companyId  String?     @map("company_id")
-  userId     String?     @map("user_id")
-  startedAt  DateTime    @default(now()) @map("started_at")
-  endedAt    DateTime?   @map("ended_at")
-  createdAt  DateTime    @default(now()) @map("created_at")
-  company    Company?    @relation("CompanyApiSpanRel", fields: [companyId], references: [id])
-  user       User?       @relation("UserApiSpanRel", fields: [userId], references: [id])
+  id           String      @id @default(uuid())
+  trackingId   String      @map("tracking_id")
+  subCount     String?     @map("sub_count")
+  type         ApiSpanType
+  method       String
+  url          String
+  statusCode   Int?        @map("status_code")
+  headers      Json?
+  reqBody      Json?       @map("req_body")
+  resBody      Json?       @map("res_body")
+  responseSize Int?        @map("response_size")
+  resHeaders   Json?       @map("res_headers")
+  latency      Int?
+  ipAddress    String?     @map("ip_address")
+  companyId    String?     @map("company_id")
+  userId       String?     @map("user_id")
+  startedAt    DateTime    @default(now()) @map("started_at")
+  endedAt      DateTime?   @map("ended_at")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  company      Company?    @relation("CompanyApiSpanRel", fields: [companyId], references: [id])
+  user         User?       @relation("UserApiSpanRel", fields: [userId], references: [id])
 
   @@index([trackingId])
   @@index([companyId])

@@ -33,6 +33,7 @@ export const monitoringApiSpanSchema = z
     headers: z.unknown().optional().nullable(),
     reqBody: z.unknown().optional().nullable(),
     resBody: z.unknown().optional().nullable(),
+    responseSize: z.number().int().min(0).optional().nullable(),
     resHeaders: z.unknown().optional().nullable(),
     latency: z.number().int().min(0).optional().nullable(),
     ipAddress: z.string().trim().max(128).optional().nullable(),
@@ -55,6 +56,7 @@ type CreateApiSpanInput = {
   headers?: unknown;
   reqBody?: unknown;
   resBody?: unknown;
+  responseSize?: number | null;
   resHeaders?: unknown;
   latency?: number | null;
   ipAddress?: string | null;
@@ -82,6 +84,7 @@ export const apiSpanDetailSelect = {
   headers: true,
   reqBody: true,
   resBody: true,
+  responseSize: true,
   resHeaders: true,
   startedAt: true,
   endedAt: true,
@@ -95,6 +98,7 @@ export const apiSpanMonitoringBasicSelect = {
   method: true,
   url: true,
   statusCode: true,
+  responseSize: true,
   latency: true,
   ipAddress: true,
   createdAt: true,
@@ -125,6 +129,7 @@ export const apiSpanMonitoringDetailSelect = {
   headers: true,
   reqBody: true,
   resBody: true,
+  responseSize: true,
   resHeaders: true,
 } as const;
 
@@ -248,11 +253,33 @@ const sortBySubCount = (left: SpanRow, right: SpanRow) => {
   return left.createdAt.getTime() - right.createdAt.getTime();
 };
 
+const formatResponseSize = (bytes?: number | null): string | null => {
+  if (bytes === null || bytes === undefined) return null;
+  if (!Number.isFinite(bytes) || bytes < 0) return null;
+
+  const units = ['Byte', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  if (unitIndex === 0) {
+    return `${bytes} ${bytes === 1 ? 'Byte' : 'Bytes'}`;
+  }
+
+  const formatted = value.toFixed(2).replace(/\.?0+$/, '');
+  return `${formatted} ${units[unitIndex]}`;
+};
+
 const formatFetchAllSpan = (row: SpanRow, spanCount: number) => ({
   trackingId: row.trackingId,
   subCount: row.subCount,
   apiUrl: row.url,
   statusCode: row.statusCode,
+  responseSize: formatResponseSize(row.responseSize),
   ip: row.ipAddress,
   spanCount,
   companyName: row.company?.legalName ?? null,
@@ -269,6 +296,7 @@ const formatDetailParentSpan = (row: SpanRow) => ({
   method: row.method,
   apiUrl: row.url,
   statusCode: row.statusCode,
+  responseSize: formatResponseSize(row.responseSize),
   ip: row.ipAddress,
   createdAt: row.createdAt,
   latency: row.latency,
@@ -287,6 +315,7 @@ const formatDetailChildSpan = (row: SpanRow) => ({
   method: row.method,
   apiUrl: row.url,
   statusCode: row.statusCode,
+  responseSize: formatResponseSize(row.responseSize),
   ip: row.ipAddress,
   createdAt: row.createdAt,
   latency: row.latency,
@@ -312,6 +341,7 @@ export class MonitoringService {
       headers: toPrismaJson(payload.headers ?? null),
       reqBody: toPrismaJson(payload.reqBody ?? null),
       resBody: toPrismaJson(payload.resBody ?? null),
+      responseSize: payload.responseSize ?? null,
       resHeaders: toPrismaJson(payload.resHeaders ?? null),
       latency: payload.latency ?? null,
       ipAddress: payload.ipAddress ?? null,

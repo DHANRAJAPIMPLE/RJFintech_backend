@@ -25,6 +25,7 @@ export class MonitoringController {
       trackingId: span.trackingId,
       apiUrl: span.apiUrl,
       statusCode: span.statusCode,
+      responseSize: span.responseSize,
       ip: span.ip,
       spanCount: span.spanCount,
       companyName: span.companyName,

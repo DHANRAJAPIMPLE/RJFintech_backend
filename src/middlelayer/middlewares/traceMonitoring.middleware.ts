@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { NextFunction, Response } from 'express';
-import { captureResponseBody } from '../../shared/utils/monitoring/captureResponseBody';
+import {
+  captureResponseBody,
+  getCapturedResponseSize,
+} from '../../shared/utils/monitoring/captureResponseBody';
 import { extractClientIp } from '../../shared/utils/monitoring/extractClientIp';
 import { asUuid } from '../../shared/utils/monitoring/monitoringIds';
 import { sanitizeMonitoringPayload } from '../../shared/utils/monitoring/sanitizeMonitoringPayload';
@@ -101,6 +104,7 @@ export const traceMonitoringMiddleware = (
       resBody: sanitizeMonitoringPayload(
         res.locals.monitoringResponseBody ?? null,
       ),
+      responseSize: getCapturedResponseSize(res),
       resHeaders: sanitizeMonitoringPayload(res.getHeaders()),
       latency: Date.now() - startedAtMs,
       ipAddress: extractClientIp(req),

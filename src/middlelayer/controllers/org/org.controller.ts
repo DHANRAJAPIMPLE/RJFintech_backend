@@ -51,11 +51,7 @@ export class OrgController {
       nodeType: node.nodeType,
       nodePath: node.nodePath,
       isPending: node.isPending ?? false,
-      status: node.status ?? 'ACTIVE',
-      isAutoDeleted: node.isAutoDeleted ?? false,
-      linkedOrgStructure: node.linkedOrgStructure
-        ? node.linkedOrgStructure.map(OrgController.formatActiveNode)
-        : [],
+      status: node.status ?? 'ACTIVE'
     };
   }
 

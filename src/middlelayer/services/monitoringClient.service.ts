@@ -12,6 +12,7 @@ export type MiddlelayerApiSpanPayload = {
   headers?: unknown;
   reqBody?: unknown;
   resBody?: unknown;
+  responseSize?: number | null;
   resHeaders?: unknown;
   latency?: number | null;
   ipAddress?: string | null;

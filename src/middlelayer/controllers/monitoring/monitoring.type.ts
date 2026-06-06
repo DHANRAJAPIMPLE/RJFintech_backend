@@ -2,6 +2,7 @@ export type FetchMonitoringSpanItem = {
   trackingId: string;
   apiUrl: string;
   statusCode: number | null;
+  responseSize: string | null;
   ip: string | null;
   spanCount: number;
   companyName: string | null;
@@ -56,6 +57,7 @@ export type MonitoringDetailsSpan = {
   method: string | null;
   apiUrl: string | null;
   statusCode: number | null;
+  responseSize: string | null;
   ip: string | null;
   createdAt: string | null;
   latency: number | null;

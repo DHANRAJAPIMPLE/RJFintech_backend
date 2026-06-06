@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
-import { captureResponseBody } from '../../shared/utils/monitoring/captureResponseBody';
+import {
+  captureResponseBody,
+  getCapturedResponseSize,
+} from '../../shared/utils/monitoring/captureResponseBody';
 import { extractClientIp } from '../../shared/utils/monitoring/extractClientIp';
 import {
   asNonEmptyString,
@@ -82,6 +85,7 @@ export const apiMonitoringMiddleware = (
     res,
     'backendMonitoringResponseBody',
     'backendMonitoringResponseCaptured',
+    'backendMonitoringResponseSize',
   );
 
   res.on('finish', () => {
@@ -98,6 +102,10 @@ export const apiMonitoringMiddleware = (
       headers: req.headers,
       reqBody: req.body ?? null,
       resBody: res.locals.backendMonitoringResponseBody ?? null,
+      responseSize: getCapturedResponseSize(
+        res,
+        'backendMonitoringResponseSize',
+      ),
       resHeaders: res.getHeaders(),
       latency: Date.now() - startedAtMs,
       ipAddress: extractClientIp(req),
