@@ -257,6 +257,7 @@ export type UserHistoryAuditUser = {
 };
 
 export type UserHistoryApprovedAuditUser = UserHistoryAuditUser & {
+  levelCount: `A${number}`;
   approvedAt: string;
 };
 
