@@ -851,6 +851,10 @@ export class UserDbController {
     );
   }
 
+  private static normalizeEmail(value: unknown): string {
+    return typeof value === 'string' ? value.trim().toLowerCase() : '';
+  }
+
   private static isPendingUserRequestVisible(params: {
     onboarding: any;
     isGlobal: boolean;
@@ -2413,10 +2417,14 @@ export class UserDbController {
   private static matchesPendingUserSearch(
     onboarding: any,
     query: string | null,
+    existingUser?: any,
   ) {
     if (!query) return true;
 
     const basicDetails = (onboarding.data as any)?.basicDetails || {};
+    const existingMapping = existingUser?.userMappings?.[0];
+    const targetEmail =
+      (onboarding.data as any)?.targetUserEmail || basicDetails.email;
     const normalizedQuery = query.toLowerCase();
 
     return [
@@ -2424,6 +2432,11 @@ export class UserDbController {
       basicDetails.email,
       basicDetails.designation,
       basicDetails.phone,
+      targetEmail,
+      existingUser?.name,
+      existingUser?.email,
+      existingUser?.phone,
+      existingMapping?.designation,
     ].some(
       (value) =>
         typeof value === 'string' &&
@@ -2563,17 +2576,91 @@ export class UserDbController {
       where,
       orderBy: UserDbController.getPageOrder(effectiveDirection),
     });
+    const pendingTargetEmails = Array.from(
+      new Set(
+        allPendingOnboardings
+          .map((onboarding) =>
+            UserDbController.normalizeEmail(
+              UserDbController.extractUserTargetEmail(onboarding.data),
+            ),
+          )
+          .filter(Boolean),
+      ),
+    );
+    const pendingExistingUsers =
+      pendingTargetEmails.length > 0
+        ? await prisma.user.findMany({
+            where: {
+              email: { in: pendingTargetEmails },
+              userMappings: {
+                some: {
+                  companyId: resolvedCompanyId,
+                },
+              },
+            },
+            select: {
+              name: true,
+              email: true,
+              phone: true,
+              userMappings: {
+                where: { companyId: resolvedCompanyId },
+                select: { designation: true },
+              },
+              userAccesses: {
+                where: { companyId: resolvedCompanyId },
+                select: {
+                  isGlobalAccess: true,
+                  orgStructure: {
+                    select: { nodePath: true },
+                  },
+                },
+              },
+            },
+          })
+        : [];
+    const pendingExistingUserMap = new Map(
+      pendingExistingUsers.map((user) => [
+        UserDbController.normalizeEmail(user.email),
+        user,
+      ]),
+    );
+    const visibleExistingUserEmails = new Set(
+      pendingExistingUsers
+        .filter((user) => {
+          if (visibleNodePaths.length === 0) return false;
+          const hasGlobalAccess = user.userAccesses.some(
+            (access) => access.isGlobalAccess,
+          );
+          if (hasGlobalAccess) return false;
+          return user.userAccesses.some((access) =>
+            visibleNodePaths.includes(access.orgStructure?.nodePath || ''),
+          );
+        })
+        .map((user) => UserDbController.normalizeEmail(user.email)),
+    );
 
     const visiblePendingOnboardings = allPendingOnboardings.filter(
-      (onb) =>
-        UserDbController.isPendingUserRequestVisible({
+      (onb) => {
+        const targetEmail = UserDbController.normalizeEmail(
+          UserDbController.extractUserTargetEmail(onb.data),
+        );
+        const existingUser = pendingExistingUserMap.get(targetEmail);
+        return (
+          (UserDbController.isPendingUserRequestVisible({
           onboarding: onb,
           isGlobal,
           visibleNodePaths,
           viewerUserId,
           visibleRequestIds,
-        }) &&
-        UserDbController.matchesPendingUserSearch(onb, query),
+        }) ||
+            visibleExistingUserEmails.has(targetEmail)) &&
+          UserDbController.matchesPendingUserSearch(
+            onb,
+            query,
+            existingUser,
+          )
+        );
+      },
     );
     const pendingCount = visiblePendingOnboardings.length;
     const newCount =
@@ -2928,6 +3015,7 @@ export class UserDbController {
 
         return {
           id: onb.id,
+          isPending: true,
           type,
           impact: onb.impact || null,
           ...(detail
@@ -3391,7 +3479,7 @@ export class UserDbController {
         resolvedCompanyId,
         { detail: true },
       );
-      const pendingCount =
+      const fetchedPendingCount =
         listType === 'active' || listType === 'archive'
           ? (
               await UserDbController.fetchPendingUserOnboardings({
@@ -3408,6 +3496,10 @@ export class UserDbController {
               })
             ).pendingCount
           : pendingResult.pendingCount;
+      const pendingCount =
+        listType === 'active' || listType === 'archive'
+          ? Math.max(fetchedPendingCount, activePendingRequests.length)
+          : fetchedPendingCount;
 
       res.status(200).json({
         message: 'Users fetched successfully!',
@@ -6162,7 +6254,7 @@ export class UserDbController {
             newData: null,
             event: 'APPROVED',
             levelCount: `A${approvalSummary.totalLevels}`,
-            createdAt: null,
+            createdAt: latestEvent?.createdAt ?? null,
             remarks: null,
             user: HistoryUserUtil.formatAuditUser(
               syntheticSource.user,

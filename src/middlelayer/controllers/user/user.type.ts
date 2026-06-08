@@ -176,6 +176,7 @@ export type PendingUserAccess = Omit<UserListAccess, 'nodeType'> & {
 
 export type PendingUserListItem = {
   id: string;
+  isPending?: boolean;
   type?: string;
   impact?: string | null;
   oldData?: unknown | null;
