@@ -830,6 +830,58 @@ export class UserDbController {
     return null;
   }
 
+  private static extractPendingUserRequestNodePaths(data: any): string[] {
+    const source = UserDbController.normalizeUserSnapshotSource(data);
+    const permissions = Array.isArray(source?.permissions)
+      ? source.permissions
+      : Array.isArray(source?.data?.permissions)
+        ? source.data.permissions
+        : [];
+
+    return Array.from(
+      new Set(
+        permissions
+          .map((permission: any) =>
+            typeof permission?.nodePath === 'string'
+              ? permission.nodePath.trim()
+              : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private static isPendingUserRequestVisible(params: {
+    onboarding: any;
+    isGlobal: boolean;
+    visibleNodePaths: string[];
+    viewerUserId?: string | null;
+    visibleRequestIds?: Set<string>;
+  }) {
+    const {
+      onboarding,
+      isGlobal,
+      visibleNodePaths,
+      viewerUserId = null,
+      visibleRequestIds = new Set<string>(),
+    } = params;
+
+    if (!onboarding?.id) return false;
+    if (isGlobal) return true;
+    if (visibleRequestIds.has(onboarding.id)) return true;
+    if (viewerUserId && onboarding.initiatorId === viewerUserId) return true;
+
+    const requestNodePaths = UserDbController.extractPendingUserRequestNodePaths(
+      onboarding.data,
+    );
+    if (requestNodePaths.length === 0 || visibleNodePaths.length === 0) {
+      return false;
+    }
+
+    const visibleNodePathSet = new Set(visibleNodePaths);
+    return requestNodePaths.some((nodePath) => visibleNodePathSet.has(nodePath));
+  }
+
   private static extractUserSnapshot(data: any): UserDataSnapshot | null {
     const source = UserDbController.normalizeUserSnapshotSource(data);
     const basicDetails = source?.basicDetails || source?.data?.basicDetails;
@@ -2412,19 +2464,18 @@ export class UserDbController {
       viewerUserId = null,
     } = params;
     const effectiveDirection = cursor ? direction : 'next';
-    const approverRequestIds =
+    const visibleRequestIds = new Set(
       await UserDbController.getCurrentApproverRequestIds(
         'user_onboarding',
         viewerUserId,
         resolvedCompanyId,
-      );
-    const pendingVisibleWhere = { id: { in: approverRequestIds } };
+      ),
+    );
 
     if (isGlobal && !query) {
       const where = {
         status: 'PENDING' as const,
         companyId: resolvedCompanyId,
-        ...pendingVisibleWhere,
       };
       const pageWhere =
         applyPagination && cursor
@@ -2485,7 +2536,7 @@ export class UserDbController {
     if (
       !isGlobal &&
       visibleNodePaths.length === 0 &&
-      approverRequestIds.length === 0
+      visibleRequestIds.size === 0
     ) {
       return {
         pendingCount: 0,
@@ -2503,12 +2554,9 @@ export class UserDbController {
       };
     }
 
-    const approverRequestIdSet = new Set(approverRequestIds);
-
     const where = {
       status: 'PENDING' as const,
       companyId: resolvedCompanyId,
-      ...pendingVisibleWhere,
     };
 
     const allPendingOnboardings = await prisma.userOnboarding.findMany({
@@ -2518,7 +2566,13 @@ export class UserDbController {
 
     const visiblePendingOnboardings = allPendingOnboardings.filter(
       (onb) =>
-        approverRequestIdSet.has(onb.id) &&
+        UserDbController.isPendingUserRequestVisible({
+          onboarding: onb,
+          isGlobal,
+          visibleNodePaths,
+          viewerUserId,
+          visibleRequestIds,
+        }) &&
         UserDbController.matchesPendingUserSearch(onb, query),
     );
     const pendingCount = visiblePendingOnboardings.length;
@@ -3284,13 +3338,28 @@ export class UserDbController {
               orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             })
           : [];
+      const activeVisiblePendingRequestIds = new Set(
+        await UserDbController.getCurrentApproverRequestIds(
+          'user_onboarding',
+          userId,
+          resolvedCompanyId,
+        ),
+      );
       const activeEffectivePendingIds =
         await UserDbController.filterEffectivelyPendingRequestIds(
           'user_onboarding',
           activePendingCandidates.map((request: any) => request.id),
         );
       const activePendingRequests = activePendingCandidates.filter(
-        (request: any) => activeEffectivePendingIds.has(request.id),
+        (request: any) =>
+          activeEffectivePendingIds.has(request.id) &&
+          UserDbController.isPendingUserRequestVisible({
+            onboarding: request,
+            isGlobal,
+            visibleNodePaths: allVisibleNodePaths,
+            viewerUserId: userId,
+            visibleRequestIds: activeVisiblePendingRequestIds,
+          }),
       );
       const activePendingByEmail = new Map<string, any>();
       activePendingRequests.forEach((request: any) => {
@@ -5847,17 +5916,21 @@ export class UserDbController {
       };
       const buildApprovedBy = (reqId: string) =>
         (workflowMap.get(reqId) || [])
-          .filter(
-            (level: any) => getApprovedEvents(reqId, level.level).length > 0,
-          )
-          .sort((left: any, right: any) => right.level - left.level)
-          .map((level: any) => ({
-            level: level.level,
-            rule: getLevelRule(level),
-            approvedBy: getApprovedEvents(reqId, level.level)
+          .map((level: any) => {
+            const approvers = getApprovedEvents(reqId, level.level)
               .map((event) => toApprovedUserSummary(event, level.level))
-              .filter(Boolean),
-          }));
+              .filter(Boolean);
+            return approvers.length > 0
+              ? {
+                  level: level.level,
+                  rule: getLevelRule(level),
+                  approvedBy: approvers,
+                  approvers,
+                }
+              : null;
+          })
+          .filter(Boolean)
+          .sort((left: any, right: any) => right.level - left.level);
 
       // Build eligible approvers for pending levels
       const buildEligibleApprovers = (reqId: string) => {
@@ -6048,13 +6121,9 @@ export class UserDbController {
         const isMultiLevel = approvalSummary.totalLevels > 1;
 
         // Get the latest history event for this reqId to derive timestamps
-        const latestEvent = history
-          .filter((entry) => entry.reqId === h.reqId)
-          .sort((a, b) => {
-            const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-            const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-            return bTime - aTime;
-          })[0];
+        const latestEntries = historyByReqId.get(h.reqId) || [];
+        const latestEvent = latestEntries[latestEntries.length - 1];
+        const syntheticSource = latestEvent || h;
 
         // PENDING: suppress individual APPROVED events, they go in L{n} Pending Approval
         if (isPending) {
@@ -6072,13 +6141,13 @@ export class UserDbController {
           suppressApprovedForReqIds.add(h.reqId);
 
           syntheticEvents.push({
-            id: h.id,
-            email: h.email,
+            id: syntheticSource.id,
+            email: syntheticSource.email,
             type: UserDbController.resolveUserHistoryRequestType(
               requestSnapshotMap.get(h.reqId),
             ),
             impact: requestSnapshotMap.get(h.reqId)?.impact || null,
-            companyCode: h.company.companyCode,
+            companyCode: syntheticSource.company.companyCode,
             oldData: null,
             newData: null,
             event: 'APPROVED',
@@ -6086,8 +6155,8 @@ export class UserDbController {
             createdAt: null,
             remarks: null,
             user: HistoryUserUtil.formatAuditUser(
-              latestEvent?.user || h.user,
-              latestEvent?.eventUserId || h.eventUserId,
+              syntheticSource.user,
+              syntheticSource.eventUserId,
               saasAdminUserIds,
               viewerUserId,
             ),
@@ -6115,13 +6184,13 @@ export class UserDbController {
           }
 
           syntheticEvents.push({
-            id: h.id,
-            email: h.email,
+            id: syntheticSource.id,
+            email: syntheticSource.email,
             type: UserDbController.resolveUserHistoryRequestType(
               requestSnapshotMap.get(h.reqId),
             ),
             impact: requestSnapshotMap.get(h.reqId)?.impact || null,
-            companyCode: h.company.companyCode,
+            companyCode: syntheticSource.company.companyCode,
             oldData: null,
             newData: null,
             event: 'APPROVAL_PROGRESS',
@@ -6133,8 +6202,8 @@ export class UserDbController {
               : null,
             remarks: null,
             user: HistoryUserUtil.formatAuditUser(
-              latestEvent?.user || h.user,
-              latestEvent?.eventUserId || h.eventUserId,
+              syntheticSource.user,
+              syntheticSource.eventUserId,
               saasAdminUserIds,
               viewerUserId,
             ),
@@ -6151,13 +6220,13 @@ export class UserDbController {
           const eligibleApprovers = buildEligibleApprovers(h.reqId);
 
           syntheticEvents.push({
-            id: h.id,
-            email: h.email,
+            id: syntheticSource.id,
+            email: syntheticSource.email,
             type: UserDbController.resolveUserHistoryRequestType(
               requestSnapshotMap.get(h.reqId),
             ),
             impact: requestSnapshotMap.get(h.reqId)?.impact || null,
-            companyCode: h.company.companyCode,
+            companyCode: syntheticSource.company.companyCode,
             oldData: null,
             newData: null,
             event: `L${pendingLevel} Pending Approval`,
@@ -6165,8 +6234,8 @@ export class UserDbController {
             createdAt: null,
             remarks: null,
             user: HistoryUserUtil.formatAuditUser(
-              latestEvent?.user || h.user,
-              latestEvent?.eventUserId || h.eventUserId,
+              syntheticSource.user,
+              syntheticSource.eventUserId,
               saasAdminUserIds,
               viewerUserId,
             ),

@@ -272,6 +272,7 @@ export type UserHistoryApprovedByGroup = {
   level: number;
   rule: 'AND' | null;
   approvedBy: UserHistoryApprovedAuditUser[];
+  approvers?: UserHistoryApprovedAuditUser[];
 };
 
 export type UserHistoryChangeCount = {
