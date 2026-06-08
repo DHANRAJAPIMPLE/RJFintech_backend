@@ -430,6 +430,9 @@ export class UserDbController {
     if (displayEvent === 'APPROVED' && options.approvalLevel) {
       return `A${options.approvalLevel}`;
     }
+    if (displayEvent === 'REJECTED' && options.approvalLevel) {
+      return `R${options.approvalLevel}`;
+    }
     if (displayEvent === 'ACTIVE') return 'AC';
     if (displayEvent === 'INACTIVE') return 'IN';
     if (displayEvent === 'ARCHIVE') return 'AR';
@@ -5816,10 +5819,26 @@ export class UserDbController {
           .map((level: any) => ({
             level: level.level,
             rule: getLevelRule(level),
-            approvers: getApprovedEvents(reqId, level.level)
+            approvedBy: getApprovedEvents(reqId, level.level)
               .map((event) => toApprovedUserSummary(event, level.level))
               .filter(Boolean),
           }));
+
+      // Build eligible approvers for pending levels
+      const buildEligibleApprovers = (reqId: string) => {
+        const levels = workflowMap.get(reqId) || [];
+        const pendingLevel = levels.find((l: any) => l.status === 'PENDING');
+        if (!pendingLevel) return [];
+        const approverIds = Array.isArray(pendingLevel.approversList)
+          ? (pendingLevel.approversList as string[])
+          : [];
+        return approverIds
+          .map((id: string) => {
+            const user = approverMap.get(id);
+            return user ? { name: user.name, email: user.email } : null;
+          })
+          .filter(Boolean);
+      };
 
       const modificationSequenceByReqId = new Map<string, number>();
       const historyByReqId = new Map<string, any[]>();
@@ -5887,7 +5906,7 @@ export class UserDbController {
           displayEvent === 'APPROVED' || displayEvent === 'REJECTED'
             ? h.level ?? null
             : approvalSummary.currentStatus === 'PENDING'
-              ? approvalSummary.currentPendingLevel ?? null
+              ? (approvalSummary as any).currentPendingLevel ?? null
               : null;
         const levelCount = UserDbController.getUserHistoryLevelCount(
           displayEvent || '',
@@ -5899,8 +5918,8 @@ export class UserDbController {
               : null,
           },
         );
-        const initiatedBy =
-          h.reqId && initiatorMap.get(h.reqId)
+        const eventUser =
+          h.reqId && h.event === 'INITIATE' && initiatorMap.get(h.reqId)
             ? historyUserMap.get(initiatorMap.get(h.reqId) as string) ||
               HistoryUserUtil.formatAuditUser(
                 h.user,
@@ -5916,7 +5935,7 @@ export class UserDbController {
               );
         const approvedBy = h.reqId ? buildApprovedBy(h.reqId) : [];
 
-        return {
+        const result: Record<string, any> = {
           id: h.id,
           email: h.email,
           type: requestType,
@@ -5935,24 +5954,185 @@ export class UserDbController {
           levelCount,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          initiatedBy,
+          user: eventUser,
           changeCount,
           approvalLevel,
-          approvalSummary: {
+        };
+
+        // Add level for APPROVED/REJECTED events
+        if (
+          (displayEvent === 'APPROVED' || displayEvent === 'REJECTED') &&
+          approvalLevel != null
+        ) {
+          result.level = approvalLevel;
+        }
+
+        // Include approvalSummary with rejectedAtLevel when applicable
+        if (approvalSummary.currentStatus) {
+          const summary: Record<string, any> = {
             currentStatus: approvalSummary.currentStatus,
             totalLevels: approvalSummary.totalLevels,
             completedLevels: approvalSummary.completedLevels,
-          },
-          approvedBy,
-        };
+          };
+          if ((approvalSummary as any).rejectedAtLevel) {
+            summary.rejectedAtLevel = (approvalSummary as any).rejectedAtLevel;
+          }
+          result.approvalSummary = summary;
+        }
+
+        // Include approvedBy when there are approved levels
+        if (approvedBy.length > 0) {
+          result.approvedBy = approvedBy;
+        }
+
+        return result;
       });
 
-      const resultList = [...formattedHistory].sort((left: any, right: any) => {
-        const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : 0;
-        const rightTime = right.createdAt
-          ? new Date(right.createdAt).getTime()
-          : 0;
+      // 4. Generate synthetic APPROVAL_PROGRESS and pending events per reqId
+      const syntheticEvents: any[] = [];
+      const processedReqIds = new Set<string>();
+
+      for (const h of history) {
+        if (!h.reqId || processedReqIds.has(h.reqId)) continue;
+        processedReqIds.add(h.reqId);
+
+        const approvalSummary = buildApprovalSummary(h.reqId);
+        const approvedBy = buildApprovedBy(h.reqId);
+        const changeCount = UserDbController.getUserHistoryChangeCount(
+          requestSnapshotMap.get(h.reqId)?.data,
+          requestSnapshotMap.get(h.reqId)?.oldData,
+          UserDbController.resolveUserHistoryRequestType(
+            requestSnapshotMap.get(h.reqId),
+          ),
+        );
+
+        // Only generate synthetic events if there are approval levels
+        if (approvalSummary.totalLevels === 0) continue;
+
+        const isPending = approvalSummary.currentStatus === 'PENDING';
+        const isRejected = approvalSummary.currentStatus === 'REJECTED';
+        const isApproved = approvalSummary.currentStatus === 'APPROVED';
+
+        // Get the latest history event for this reqId to derive timestamps
+        const latestEvent = history
+          .filter((entry) => entry.reqId === h.reqId)
+          .sort((a, b) => {
+            const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            return bTime - aTime;
+          })[0];
+
+        // Generate APPROVAL_PROGRESS event when there are completed/rejected approvals
+        if (
+          (approvedBy.length > 0 || isRejected || isApproved) &&
+          approvalSummary.completedLevels > 0
+        ) {
+          const progressSummary: Record<string, any> = {
+            currentStatus: approvalSummary.currentStatus,
+            totalLevels: approvalSummary.totalLevels,
+            completedLevels: approvalSummary.completedLevels,
+          };
+          if ((approvalSummary as any).rejectedAtLevel) {
+            progressSummary.rejectedAtLevel = (approvalSummary as any).rejectedAtLevel;
+          }
+
+          syntheticEvents.push({
+            id: h.id,
+            email: h.email,
+            type: UserDbController.resolveUserHistoryRequestType(
+              requestSnapshotMap.get(h.reqId),
+            ),
+            impact: requestSnapshotMap.get(h.reqId)?.impact || null,
+            companyCode: h.company.companyCode,
+            oldData: null,
+            newData: null,
+            event: 'APPROVAL_PROGRESS',
+            levelCount: null,
+            createdAt: latestEvent?.createdAt
+              ? new Date(
+                  new Date(latestEvent.createdAt).getTime() - 1000,
+                ).toISOString()
+              : null,
+            remarks: null,
+            user: HistoryUserUtil.formatAuditUser(
+              latestEvent?.user || h.user,
+              latestEvent?.eventUserId || h.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            changeCount,
+            approvalLevel: null,
+            approvalSummary: progressSummary,
+            approvedBy,
+          });
+        }
+
+        // Generate L{n} Pending Approval event for pending requests
+        if (isPending && (approvalSummary as any).currentPendingLevel) {
+          const pendingLevel = (approvalSummary as any).currentPendingLevel;
+          const eligibleApprovers = buildEligibleApprovers(h.reqId);
+
+          syntheticEvents.push({
+            id: h.id,
+            email: h.email,
+            type: UserDbController.resolveUserHistoryRequestType(
+              requestSnapshotMap.get(h.reqId),
+            ),
+            impact: requestSnapshotMap.get(h.reqId)?.impact || null,
+            companyCode: h.company.companyCode,
+            oldData: null,
+            newData: null,
+            event: `L${pendingLevel} Pending Approval`,
+            levelCount: `A${pendingLevel}`,
+            createdAt: null,
+            remarks: null,
+            user: HistoryUserUtil.formatAuditUser(
+              latestEvent?.user || h.user,
+              latestEvent?.eventUserId || h.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            changeCount,
+            approvalLevel: null,
+            approvalSummary: {
+              currentStatus: 'PENDING',
+              totalLevels: approvalSummary.totalLevels,
+              completedLevels: approvalSummary.completedLevels,
+            },
+            ...(eligibleApprovers.length > 0
+              ? { eligibleapprovers: eligibleApprovers }
+              : {}),
+            ...(approvedBy.length > 0 ? { approvedBy } : {}),
+          });
+        }
+      }
+
+      // Sort LIFO: null createdAt (pending) first, then newest to oldest
+      const eventPriority = (event: string) => {
+        if (event && event.includes('Pending Approval')) return 0;
+        if (event === 'APPROVAL_PROGRESS') return 1;
+        if (event === 'REJECTED') return 2;
+        if (event === 'APPROVED') return 3;
+        return 4;
+      };
+
+      const resultList = [...formattedHistory, ...syntheticEvents].sort((left: any, right: any) => {
+        // null createdAt always comes first (top)
+        if (!left.createdAt && right.createdAt) return -1;
+        if (left.createdAt && !right.createdAt) return 1;
+        if (!left.createdAt && !right.createdAt) {
+          return eventPriority(left.event) - eventPriority(right.event);
+        }
+
+        const leftTime = new Date(left.createdAt).getTime();
+        const rightTime = new Date(right.createdAt).getTime();
         if (leftTime !== rightTime) return rightTime - leftTime;
+
+        // Same timestamp: use event priority
+        const leftPriority = eventPriority(left.event);
+        const rightPriority = eventPriority(right.event);
+        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+
         return String(right.id).localeCompare(String(left.id));
       });
 

@@ -233,22 +233,41 @@ export class UserController {
   private static formatHistoryItem(
     item: UserHistoryInternalItem,
   ): UserHistoryItem {
-    return {
+    const result: UserHistoryItem = {
       id: item.id,
       email: item.email,
       event: item.event,
       levelCount: item.levelCount,
       createdAt: item.createdAt,
-      remarks: item.remarks,
-      initiatedBy: {
-        name: item.initiatedBy.name,
-        email: item.initiatedBy.email,
+      remarks: item.remarks ?? null,
+      user: {
+        name: item.user.name,
+        email: item.user.email,
       },
       changeCount: item.changeCount,
-      approvalLevel: item.approvalLevel,
-      approvalSummary: item.approvalSummary,
-      approvedBy: item.approvedBy,
     };
+
+    // Include level for APPROVED/REJECTED events
+    if (item.level != null) {
+      result.level = item.level;
+    }
+
+    // Include approvalSummary when present
+    if (item.approvalSummary) {
+      result.approvalSummary = item.approvalSummary;
+    }
+
+    // Include approvedBy when present and non-empty
+    if (item.approvedBy && item.approvedBy.length > 0) {
+      result.approvedBy = item.approvedBy;
+    }
+
+    // Include eligibleapprovers when present
+    if (item.eligibleapprovers && item.eligibleapprovers.length > 0) {
+      result.eligibleapprovers = item.eligibleapprovers;
+    }
+
+    return result;
   }
 
   private static async fetchAndProcessUsers(

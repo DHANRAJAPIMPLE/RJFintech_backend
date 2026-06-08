@@ -257,7 +257,7 @@ export type UserHistoryAuditUser = {
 };
 
 export type UserHistoryApprovedAuditUser = UserHistoryAuditUser & {
-  levelCount: `A${number}`;
+  levelCount: `A${number}` | `R${number}`;
   approvedAt: string | null;
 };
 
@@ -265,12 +265,13 @@ export type UserHistoryApprovalSummary = {
   currentStatus: 'APPROVED' | 'REJECTED' | 'PENDING' | null;
   totalLevels: number;
   completedLevels: number;
+  rejectedAtLevel?: number | null;
 };
 
 export type UserHistoryApprovedByGroup = {
   level: number;
   rule: 'AND' | null;
-  approvers: UserHistoryApprovedAuditUser[];
+  approvedBy: UserHistoryApprovedAuditUser[];
 };
 
 export type UserHistoryChangeCount = {
@@ -286,12 +287,15 @@ export type UserHistoryEvent =
   | 'MODIFY'
   | 'ACTIVE'
   | 'INACTIVE'
-  | 'ARCHIVE';
+  | 'ARCHIVE'
+  | 'APPROVAL_PROGRESS'
+  | `L${number} Pending Approval`;
 
 export type UserHistoryLevelCount =
   | 'I'
   | `M${number}`
   | `A${number}`
+  | `R${number}`
   | 'AR'
   | 'AC'
   | 'IN'
@@ -302,16 +306,22 @@ export type UserHistoryBaseItem = {
   email: string;
 };
 
+export type UserHistoryEligibleApprover = {
+  name: string;
+  email: string;
+};
+
 export type UserHistoryActionItem = UserHistoryBaseItem & {
   event: UserHistoryEvent;
+  level?: number | null;
   levelCount: UserHistoryLevelCount;
-  createdAt: string;
+  createdAt: string | null;
   remarks: string | null;
-  initiatedBy: UserHistoryAuditUser;
+  user: UserHistoryAuditUser;
   changeCount: UserHistoryChangeCount;
-  approvalLevel: number | null;
-  approvalSummary: UserHistoryApprovalSummary;
-  approvedBy: UserHistoryApprovedByGroup[];
+  approvalSummary?: UserHistoryApprovalSummary;
+  approvedBy?: UserHistoryApprovedByGroup[];
+  eligibleapprovers?: UserHistoryEligibleApprover[];
 };
 
 export type UserHistoryItem = UserHistoryActionItem;
@@ -328,6 +338,7 @@ export type UserHistoryInternalItem = UserHistoryActionItem & {
   companyCode: string;
   type?: string | null;
   impact?: string | null;
+  approvalLevel?: number | null;
 };
 
 export type FetchUserHistoryInternalSuccess = {
