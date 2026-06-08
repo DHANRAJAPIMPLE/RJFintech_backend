@@ -233,35 +233,21 @@ export class UserController {
   private static formatHistoryItem(
     item: UserHistoryInternalItem,
   ): UserHistoryItem {
-    const common = {
+    return {
       id: item.id,
       email: item.email,
-    };
-
-    if (item.event === 'APPROVAL_PROGRESS') {
-      return {
-        ...common,
-        event: item.event,
-        createdAt: item.createdAt,
-        approvalSummary: item.approvalSummary,
-        approvedBy: item.approvedBy,
-      };
-    }
-
-    return {
-      ...common,
       event: item.event,
-      level: item.level,
       levelCount: item.levelCount,
       createdAt: item.createdAt,
       remarks: item.remarks,
-      user: {
-        name: item.user.name,
-        email: item.user.email,
+      initiatedBy: {
+        name: item.initiatedBy.name,
+        email: item.initiatedBy.email,
       },
-      ...(item.changeCount ? { changeCount: item.changeCount } : {}),
-      ...(item.approvalSummary ? { approvalSummary: item.approvalSummary } : {}),
-      ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
+      changeCount: item.changeCount,
+      approvalLevel: item.approvalLevel,
+      approvalSummary: item.approvalSummary,
+      approvedBy: item.approvedBy,
     };
   }
 

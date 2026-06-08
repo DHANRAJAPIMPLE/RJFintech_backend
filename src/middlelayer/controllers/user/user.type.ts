@@ -258,30 +258,19 @@ export type UserHistoryAuditUser = {
 
 export type UserHistoryApprovedAuditUser = UserHistoryAuditUser & {
   levelCount: `A${number}`;
-  approvedAt: string;
+  approvedAt: string | null;
 };
 
 export type UserHistoryApprovalSummary = {
-  currentStatus: string;
+  currentStatus: 'APPROVED' | 'REJECTED' | 'PENDING' | null;
   totalLevels: number;
   completedLevels: number;
-  rejectedAtLevel?: number | null;
-  currentPendingLevel?: number | null;
 };
 
 export type UserHistoryApprovedByGroup = {
   level: number;
   rule: 'AND' | null;
   approvers: UserHistoryApprovedAuditUser[];
-};
-
-export type UserHistoryApprovalFlowItem = {
-  level: number;
-  rule: 'AND' | null;
-  status: string;
-  approvers: UserHistoryApprovedAuditUser[];
-  approvedAt: string | null;
-  eligibleapprovers: UserHistoryAuditUser[];
 };
 
 export type UserHistoryChangeCount = {
@@ -299,12 +288,13 @@ export type UserHistoryEvent =
   | 'INACTIVE'
   | 'ARCHIVE';
 
-export type UserHistorySyntheticEvent = 'APPROVAL_PROGRESS';
 export type UserHistoryLevelCount =
   | 'I'
   | `M${number}`
   | `A${number}`
-  | `R${number}`
+  | 'AR'
+  | 'AC'
+  | 'IN'
   | null;
 
 export type UserHistoryBaseItem = {
@@ -314,26 +304,17 @@ export type UserHistoryBaseItem = {
 
 export type UserHistoryActionItem = UserHistoryBaseItem & {
   event: UserHistoryEvent;
-  level: number | null;
   levelCount: UserHistoryLevelCount;
   createdAt: string;
   remarks: string | null;
-  user: UserHistoryAuditUser;
-  changeCount?: UserHistoryChangeCount;
-  approvalSummary?: UserHistoryApprovalSummary;
-  approvedBy?: UserHistoryApprovedByGroup[];
-};
-
-export type UserHistoryApprovalProgressItem = UserHistoryBaseItem & {
-  event: UserHistorySyntheticEvent;
-  createdAt: string;
+  initiatedBy: UserHistoryAuditUser;
+  changeCount: UserHistoryChangeCount;
+  approvalLevel: number | null;
   approvalSummary: UserHistoryApprovalSummary;
   approvedBy: UserHistoryApprovedByGroup[];
 };
 
-export type UserHistoryItem =
-  | UserHistoryActionItem
-  | UserHistoryApprovalProgressItem;
+export type UserHistoryItem = UserHistoryActionItem;
 
 export type FetchUserHistoryResponse = {
   message: 'User history fetched successfully!';
@@ -341,15 +322,13 @@ export type FetchUserHistoryResponse = {
   data: UserHistoryItem[];
 };
 
-export type UserHistoryInternalItem =
-  | (UserHistoryActionItem & {
-      oldData?: unknown | null;
-      companyCode: string;
-    })
-  | (UserHistoryApprovalProgressItem & {
-      oldData?: unknown | null;
-      companyCode: string;
-    });
+export type UserHistoryInternalItem = UserHistoryActionItem & {
+  oldData?: unknown | null;
+  newData?: unknown | null;
+  companyCode: string;
+  type?: string | null;
+  impact?: string | null;
+};
 
 export type FetchUserHistoryInternalSuccess = {
   message: 'User history fetched successfully!';
