@@ -5741,6 +5741,10 @@ export class UserDbController {
         ]),
       );
       const approvedEventsByReqLevel = new Map<string, any[]>();
+      const rejectedEventByReqId = new Map<
+        string,
+        { level: number | null; createdAt: Date | null }
+      >();
       history.forEach((h) => {
         if (h.reqId && h.event === 'APPROVED' && h.level) {
           const key = `${h.reqId}:${h.level}`;
@@ -5750,6 +5754,23 @@ export class UserDbController {
             createdAt: h.createdAt,
           });
           approvedEventsByReqLevel.set(key, existing);
+        }
+
+        if (h.reqId && h.event === 'REJECTED') {
+          const existing = rejectedEventByReqId.get(h.reqId);
+          const eventTime = h.createdAt ? new Date(h.createdAt) : null;
+          const existingTime = existing?.createdAt ?? null;
+
+          if (
+            !existing ||
+            (eventTime &&
+              (!existingTime || eventTime.getTime() > existingTime.getTime()))
+          ) {
+            rejectedEventByReqId.set(h.reqId, {
+              level: h.level ?? null,
+              createdAt: eventTime,
+            });
+          }
         }
       });
       const getLevelRule = (level: any) =>
@@ -5766,7 +5787,22 @@ export class UserDbController {
             }
           : null;
       const getApprovedEvents = (reqId: string, level: number) =>
-        approvedEventsByReqLevel.get(`${reqId}:${level}`) || [];
+        (approvedEventsByReqLevel.get(`${reqId}:${level}`) || []).sort(
+          (left: any, right: any) => {
+            const leftTime = left.createdAt
+              ? new Date(left.createdAt).getTime()
+              : 0;
+            const rightTime = right.createdAt
+              ? new Date(right.createdAt).getTime()
+              : 0;
+            return rightTime - leftTime;
+          },
+        );
+      const getLevelApprovalCount = (reqId: string, level: number) =>
+        getApprovedEvents(reqId, level).length;
+      const isLevelApproved = (reqId: string, level: any) =>
+        getLevelApprovalCount(reqId, level.level) >=
+        Number(level?.mandatoryCount || 1);
       const buildApprovalSummary = (reqId: string) => {
         const levels = workflowMap.get(reqId) || [];
         const requestStatus = requestSnapshotMap.get(reqId)?.status || null;
@@ -5784,16 +5820,19 @@ export class UserDbController {
           };
         }
 
-        const rejectedLevel =
-          levels.find((level: any) => level.status === 'REJECTED')?.level ?? null;
+        const rejectedLevel = rejectedEventByReqId.get(reqId)?.level ?? null;
+        const completedLevels = levels.filter((level: any) =>
+          isLevelApproved(reqId, level),
+        ).length;
         const currentPendingLevel =
-          levels.find((level: any) => level.status === 'PENDING')?.level ?? null;
-        const isRejected =
-          requestStatus === 'REJECTED' ||
-          levels.some((level: any) => level.status === 'REJECTED');
-        const allApproved = levels.every(
-          (level: any) => level.status === 'APPROVED',
-        );
+          normalizedRequestStatus === 'PENDING'
+            ? levels.find((level: any) => !isLevelApproved(reqId, level))
+                ?.level ?? null
+            : null;
+        const isRejected = normalizedRequestStatus === 'REJECTED';
+        const allApproved =
+          levels.length > 0 && completedLevels === levels.length;
+
         return {
           currentStatus: isRejected
             ? 'REJECTED'
@@ -5801,9 +5840,7 @@ export class UserDbController {
               ? 'APPROVED'
               : 'PENDING',
           totalLevels: levels.length,
-          completedLevels: levels.filter(
-            (level: any) => level.status === 'APPROVED',
-          ).length,
+          completedLevels,
           ...(rejectedLevel ? { rejectedAtLevel: rejectedLevel } : {}),
           ...(currentPendingLevel ? { currentPendingLevel } : {}),
         };
@@ -5811,9 +5848,7 @@ export class UserDbController {
       const buildApprovedBy = (reqId: string) =>
         (workflowMap.get(reqId) || [])
           .filter(
-            (level: any) =>
-              level.status === 'APPROVED' ||
-              getApprovedEvents(reqId, level.level).length > 0,
+            (level: any) => getApprovedEvents(reqId, level.level).length > 0,
           )
           .sort((left: any, right: any) => right.level - left.level)
           .map((level: any) => ({
