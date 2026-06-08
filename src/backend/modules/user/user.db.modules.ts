@@ -6127,6 +6127,8 @@ export class UserDbController {
 
         const isPending = approvalSummary.currentStatus === 'PENDING';
         const isRejected = approvalSummary.currentStatus === 'REJECTED';
+        const isApproved = approvalSummary.currentStatus === 'APPROVED';
+        const isMultiLevel = approvalSummary.totalLevels > 1;
 
         // Get the latest history event for this reqId to derive timestamps
         const latestEntries = historyByReqId.get(h.reqId) || [];
@@ -6141,6 +6143,42 @@ export class UserDbController {
         // REJECTED: suppress individual APPROVED events, they go in APPROVAL_PROGRESS
         if (isRejected) {
           suppressApprovedForReqIds.add(h.reqId);
+        }
+
+        // APPROVED multi-level: suppress individual APPROVED events,
+        // create consolidated APPROVED event
+        if (isApproved && isMultiLevel) {
+          suppressApprovedForReqIds.add(h.reqId);
+
+          syntheticEvents.push({
+            id: syntheticSource.id,
+            email: syntheticSource.email,
+            type: UserDbController.resolveUserHistoryRequestType(
+              requestSnapshotMap.get(h.reqId),
+            ),
+            impact: requestSnapshotMap.get(h.reqId)?.impact || null,
+            companyCode: syntheticSource.company.companyCode,
+            oldData: null,
+            newData: null,
+            event: 'APPROVED',
+            levelCount: `A${approvalSummary.totalLevels}`,
+            createdAt: null,
+            remarks: null,
+            user: HistoryUserUtil.formatAuditUser(
+              syntheticSource.user,
+              syntheticSource.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            changeCount,
+            approvalLevel: null,
+            approvalSummary: {
+              currentStatus: 'APPROVED',
+              totalLevels: approvalSummary.totalLevels,
+              completedLevels: approvalSummary.completedLevels,
+            },
+            approvedBy,
+          });
         }
 
         // APPROVAL_PROGRESS: ONLY for REJECTED requests
