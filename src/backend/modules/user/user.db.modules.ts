@@ -5846,11 +5846,15 @@ export class UserDbController {
         Number(level?.mandatoryCount || 1) > 1 ? 'AND' : null;
       const toUserSummary = (user: any) =>
         user ? { name: user.name, email: user.email } : null;
-      const toApprovedUserSummary = (event: any, level: number) =>
+      const toApprovedUserSummary = (
+        event: any,
+        level: number,
+        nameKey = 'name',
+      ) =>
         event?.user
           ? {
               levelCount: `A${level}`,
-              name: event.user.name,
+              [nameKey]: event.user.name,
               email: event.user.email,
               approvedAt: event.createdAt,
             }
@@ -5917,15 +5921,21 @@ export class UserDbController {
       const buildApprovedBy = (reqId: string) =>
         (workflowMap.get(reqId) || [])
           .map((level: any) => {
+            const rule = getLevelRule(level);
             const approvers = getApprovedEvents(reqId, level.level)
-              .map((event) => toApprovedUserSummary(event, level.level))
+              .map((event, index) =>
+                toApprovedUserSummary(
+                  event,
+                  level.level,
+                  rule === 'AND' ? `name${index + 1}` : 'name',
+                ),
+              )
               .filter(Boolean);
             return approvers.length > 0
               ? {
                   level: level.level,
-                  rule: getLevelRule(level),
+                  rule,
                   approvedBy: approvers,
-                  approvers,
                 }
               : null;
           })

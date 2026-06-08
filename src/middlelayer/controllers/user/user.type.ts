@@ -256,10 +256,12 @@ export type UserHistoryAuditUser = {
   email: string;
 };
 
-export type UserHistoryApprovedAuditUser = UserHistoryAuditUser & {
+export type UserHistoryApprovedAuditUser = {
+  name?: string;
+  email: string;
   levelCount: `A${number}` | `R${number}`;
   approvedAt: string | null;
-};
+} & Partial<Record<`name${number}`, string>>;
 
 export type UserHistoryApprovalSummary = {
   currentStatus: 'APPROVED' | 'REJECTED' | 'PENDING' | null;
@@ -272,7 +274,6 @@ export type UserHistoryApprovedByGroup = {
   level: number;
   rule: 'AND' | null;
   approvedBy: UserHistoryApprovedAuditUser[];
-  approvers?: UserHistoryApprovedAuditUser[];
 };
 
 export type UserHistoryChangeCount = {
