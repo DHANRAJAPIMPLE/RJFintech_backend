@@ -265,19 +265,21 @@ export type UserHistoryApprovalSummary = {
   currentStatus: string;
   totalLevels: number;
   completedLevels: number;
+  rejectedAtLevel?: number | null;
+  currentPendingLevel?: number | null;
 };
 
 export type UserHistoryApprovedByGroup = {
   level: number;
   rule: 'AND' | null;
-  approvedBy: UserHistoryApprovedAuditUser[];
+  approvers: UserHistoryApprovedAuditUser[];
 };
 
 export type UserHistoryApprovalFlowItem = {
   level: number;
   rule: 'AND' | null;
   status: string;
-  approvedBy: UserHistoryApprovedAuditUser[];
+  approvers: UserHistoryApprovedAuditUser[];
   approvedAt: string | null;
   eligibleapprovers: UserHistoryAuditUser[];
 };
@@ -297,37 +299,41 @@ export type UserHistoryEvent =
   | 'INACTIVE'
   | 'ARCHIVE';
 
-export type UserHistoryPendingApprovalEvent = `L${number} Pending Approval`;
-export type UserHistoryLevelCount = 'I' | `M${number}` | `A${number}` | null;
+export type UserHistorySyntheticEvent = 'APPROVAL_PROGRESS';
+export type UserHistoryLevelCount =
+  | 'I'
+  | `M${number}`
+  | `A${number}`
+  | `R${number}`
+  | null;
 
 export type UserHistoryBaseItem = {
   id: string;
   email: string;
-  changeCount: UserHistoryChangeCount;
-  levelCount: UserHistoryLevelCount;
 };
 
 export type UserHistoryActionItem = UserHistoryBaseItem & {
   event: UserHistoryEvent;
   level: number | null;
+  levelCount: UserHistoryLevelCount;
   createdAt: string;
   remarks: string | null;
   user: UserHistoryAuditUser;
+  changeCount?: UserHistoryChangeCount;
   approvalSummary?: UserHistoryApprovalSummary;
   approvedBy?: UserHistoryApprovedByGroup[];
 };
 
-export type UserHistoryPendingApprovalItem = UserHistoryBaseItem & {
-  event: UserHistoryPendingApprovalEvent;
-  createdAt: null;
-  eligibleapprovers: UserHistoryAuditUser[];
-  approvalSummary?: UserHistoryApprovalSummary | null;
-  approvedBy?: UserHistoryApprovedByGroup[];
+export type UserHistoryApprovalProgressItem = UserHistoryBaseItem & {
+  event: UserHistorySyntheticEvent;
+  createdAt: string;
+  approvalSummary: UserHistoryApprovalSummary;
+  approvedBy: UserHistoryApprovedByGroup[];
 };
 
 export type UserHistoryItem =
   | UserHistoryActionItem
-  | UserHistoryPendingApprovalItem;
+  | UserHistoryApprovalProgressItem;
 
 export type FetchUserHistoryResponse = {
   message: 'User history fetched successfully!';
@@ -340,8 +346,7 @@ export type UserHistoryInternalItem =
       oldData?: unknown | null;
       companyCode: string;
     })
-  | (UserHistoryPendingApprovalItem & {
-      approvalFlow?: UserHistoryApprovalFlowItem[];
+  | (UserHistoryApprovalProgressItem & {
       oldData?: unknown | null;
       companyCode: string;
     });

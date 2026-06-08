@@ -236,23 +236,15 @@ export class UserController {
     const common = {
       id: item.id,
       email: item.email,
-      changeCount: item.changeCount,
-      levelCount: item.levelCount,
     };
 
-    if ('eligibleapprovers' in item) {
+    if (item.event === 'APPROVAL_PROGRESS') {
       return {
         ...common,
         event: item.event,
-        createdAt: null,
-        eligibleapprovers: item.eligibleapprovers.map((approver) => ({
-          name: approver.name,
-          email: approver.email,
-        })),
-        ...(item.approvalSummary !== undefined
-          ? { approvalSummary: item.approvalSummary }
-          : {}),
-        ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
+        createdAt: item.createdAt,
+        approvalSummary: item.approvalSummary,
+        approvedBy: item.approvedBy,
       };
     }
 
@@ -260,12 +252,14 @@ export class UserController {
       ...common,
       event: item.event,
       level: item.level,
+      levelCount: item.levelCount,
       createdAt: item.createdAt,
       remarks: item.remarks,
       user: {
         name: item.user.name,
         email: item.user.email,
       },
+      ...(item.changeCount ? { changeCount: item.changeCount } : {}),
       ...(item.approvalSummary ? { approvalSummary: item.approvalSummary } : {}),
       ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
     };

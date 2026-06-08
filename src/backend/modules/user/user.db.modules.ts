@@ -5735,6 +5735,10 @@ export class UserDbController {
         const levels = workflowMap.get(reqId) || [];
         if (levels.length === 0) return null;
         const requestStatus = requestSnapshotMap.get(reqId)?.status || null;
+        const rejectedLevel =
+          levels.find((level: any) => level.status === 'REJECTED')?.level ?? null;
+        const currentPendingLevel =
+          levels.find((level: any) => level.status === 'PENDING')?.level ?? null;
         const isRejected =
           requestStatus === 'REJECTED' ||
           levels.some((level: any) => level.status === 'REJECTED');
@@ -5751,6 +5755,8 @@ export class UserDbController {
           completedLevels: levels.filter(
             (level: any) => level.status === 'APPROVED',
           ).length,
+          ...(rejectedLevel ? { rejectedAtLevel: rejectedLevel } : {}),
+          ...(currentPendingLevel ? { currentPendingLevel } : {}),
         };
       };
       const buildApprovedBy = (reqId: string) =>
@@ -5764,7 +5770,7 @@ export class UserDbController {
           .map((level: any) => ({
             level: level.level,
             rule: getLevelRule(level),
-            approvedBy: getApprovedEvents(reqId, level.level)
+            approvers: getApprovedEvents(reqId, level.level)
               .map((event) => toApprovedUserSummary(event, level.level))
               .filter(Boolean),
           }));
@@ -5779,7 +5785,7 @@ export class UserDbController {
             level: level.level,
             rule: getLevelRule(level),
             status: level.status,
-            approvedBy: approvedEvents
+            approvers: approvedEvents
               .map((event) => toApprovedUserSummary(event, level.level))
               .filter(Boolean),
             approvedAt,
@@ -5792,9 +5798,8 @@ export class UserDbController {
           };
         });
 
-      const resultList: any[] = [];
-      const handledPendingReqs = new Set<string>();
       const modificationSequenceByReqId = new Map<string, number>();
+      const historyByReqId = new Map<string, any[]>();
       history
         .filter((history) => history.reqId)
         .sort((left, right) => {
@@ -5807,71 +5812,61 @@ export class UserDbController {
           if (leftTime !== rightTime) return leftTime - rightTime;
           return String(left.id).localeCompare(String(right.id));
         })
-        .forEach((history) => {
-          const requestType = history.reqId
+        .forEach((entry) => {
+          if (entry.reqId) {
+            const existingEntries = historyByReqId.get(entry.reqId) || [];
+            existingEntries.push(entry);
+            historyByReqId.set(entry.reqId, existingEntries);
+          }
+          const requestType = entry.reqId
             ? UserDbController.resolveUserHistoryRequestType(
-                requestSnapshotMap.get(history.reqId),
+                requestSnapshotMap.get(entry.reqId),
               )
             : 'INITIATE';
           if (
-            history.event === 'INITIATE' &&
+            entry.event === 'INITIATE' &&
             UserDbController.isUserModificationHistoryType(requestType) &&
-            history.reqId &&
-            !modificationSequenceByReqId.has(history.reqId)
+            entry.reqId &&
+            !modificationSequenceByReqId.has(entry.reqId)
           ) {
             modificationSequenceByReqId.set(
-              history.reqId,
+              entry.reqId,
               modificationSequenceByReqId.size + 1,
             );
           }
         });
+      const approvalProgressEntries = Array.from(historyByReqId.entries())
+        .map(([reqId, reqHistory]) => {
+          const approvalSummary = buildApprovalSummary(reqId);
+          const workflowLevels = workflowMap.get(reqId) || [];
+          if (!approvalSummary || workflowLevels.length === 0) return null;
+          if (approvalSummary.currentStatus !== 'REJECTED') return null;
 
-      // 3. Inject "Pending Approval" entries for any active requests
-      history.forEach((h) => {
-        if (h.reqId && !handledPendingReqs.has(h.reqId)) {
-          const levels = workflowMap.get(h.reqId);
-          if (levels) {
-            const currentPending = levels.find((l) => l.status === 'PENDING');
-            if (currentPending) {
-              const requestSnapshot = requestSnapshotMap.get(h.reqId);
-              const changeCount = UserDbController.getUserHistoryChangeCount(
-                requestSnapshot?.data,
-                requestSnapshot?.oldData,
-                requestSnapshot?.type,
+          const anchorHistory =
+            reqHistory.find((item: any) => {
+              const normalizedEvent = String(item.event || '').toUpperCase();
+              return (
+                normalizedEvent === 'REJECTED' || normalizedEvent === 'APPROVED'
               );
-              const approvers = (currentPending.approversList as string[])
-                .map((id) => {
-                  const u = approverMap.get(id);
-                  return u ? { name: u.name, email: u.email } : null;
-                })
-                .filter(Boolean);
+            }) || reqHistory[0];
 
-              resultList.push({
-                id: h.id,
-                email: h.email,
-                type: requestSnapshotMap.get(h.reqId)?.type || null,
-                impact: requestSnapshotMap.get(h.reqId)?.impact || null,
-                companyCode: h.company.companyCode,
-                oldData:
-                  requestSnapshotMap.get(h.reqId)?.oldData ||
-                  ((requestSnapshotMap.get(h.reqId)?.data as any)?.oldData ??
-                    null),
-                newData: requestSnapshotMap.get(h.reqId)?.data || null,
-                changeCount,
-                levelCount: `A${currentPending.level}`,
-                event: `L${currentPending.level} Pending Approval`,
-                createdAt: null,
-                eligibleapprovers: approvers,
-                approvalSummary: buildApprovalSummary(h.reqId),
-                approvalFlow: buildApprovalFlow(h.reqId),
-              });
-            }
-          }
-          handledPendingReqs.add(h.reqId);
-        }
-      });
+          if (!anchorHistory?.createdAt) return null;
 
-      // 4. Add actual history entries
+          return {
+            id: anchorHistory.id,
+            email: anchorHistory.email,
+            companyCode: anchorHistory.company.companyCode,
+            event: 'APPROVAL_PROGRESS',
+            createdAt: new Date(
+              new Date(anchorHistory.createdAt).getTime() - 1,
+            ).toISOString(),
+            approvalSummary,
+            approvedBy: buildApprovedBy(reqId),
+          };
+        })
+        .filter(Boolean);
+
+      // 3. Add actual history entries
       const formattedHistory = history.map((h) => {
         const requestType = h.reqId
           ? UserDbController.resolveUserHistoryRequestType(
@@ -5899,51 +5894,16 @@ export class UserDbController {
               ? 'I'
               : displayEvent === 'APPROVED' && h.level
                 ? `A${h.level}`
+                : displayEvent === 'REJECTED' && h.level
+                  ? `R${h.level}`
                 : null;
-        const levels = h.reqId ? workflowMap.get(h.reqId) : null;
-        let workflowStatus = null;
-
-        if (levels && levels.length > 0) {
-          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
-          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
-          const currentPending = levels.find(
-            (l: any) => l.status === 'PENDING',
-          );
-
-          workflowStatus = {
-            overallStatus: isRejected
-              ? 'REJECTED'
-              : allApproved
-                ? 'APPROVED'
-                : 'PENDING',
-            currentLevel: currentPending
-              ? currentPending.level
-              : allApproved
-                ? levels.length
-                : null,
-            totalLevels: levels.length,
-            levels: levels
-              .filter(
-                (l: any) => l.level <= (currentPending?.level || levels.length),
-              )
-              .map((l: any) => ({
-                level: l.level,
-                status: l.status,
-                eligibleapprovers: (l.approversList as string[])
-                  .map((id: string) => {
-                    const u = approverMap.get(id);
-                    return u ? { name: u.name, email: u.email } : null;
-                  })
-                  .filter(Boolean),
-              })),
-          };
-        }
-
+        const shouldIncludeChangeCount =
+          displayEvent === 'INITIATE' ||
+          displayEvent === 'MODIFY' ||
+          displayEvent === 'APPROVED';
         const approvalSummary = h.reqId ? buildApprovalSummary(h.reqId) : null;
-        const includeApprovalContext =
-          h.reqId &&
-          approvalSummary &&
-          (displayEvent === 'APPROVED' || displayEvent === 'REJECTED');
+        const includeApprovedContext =
+          displayEvent === 'APPROVED' && h.reqId && approvalSummary;
 
         return {
           id: h.id,
@@ -5965,14 +5925,14 @@ export class UserDbController {
           level: h.level,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          changeCount,
           user: HistoryUserUtil.formatAuditUser(
             h.user,
             h.eventUserId,
             saasAdminUserIds,
             viewerUserId,
           ),
-          ...(includeApprovalContext
+          ...(shouldIncludeChangeCount ? { changeCount } : {}),
+          ...(includeApprovedContext
             ? {
                 approvalSummary,
                 approvedBy: buildApprovedBy(h.reqId as string),
@@ -5981,7 +5941,18 @@ export class UserDbController {
         };
       });
 
-      resultList.push(...formattedHistory);
+      const resultList = [...formattedHistory, ...approvalProgressEntries].sort(
+        (left: any, right: any) => {
+          const leftTime = left.createdAt
+            ? new Date(left.createdAt).getTime()
+            : 0;
+          const rightTime = right.createdAt
+            ? new Date(right.createdAt).getTime()
+            : 0;
+          if (leftTime !== rightTime) return rightTime - leftTime;
+          return String(right.id).localeCompare(String(left.id));
+        },
+      );
 
       res.status(200).json({
         message: 'User history fetched successfully!',
