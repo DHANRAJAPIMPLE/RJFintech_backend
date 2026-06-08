@@ -51,7 +51,9 @@ export class OrgController {
       nodeType: node.nodeType,
       nodePath: node.nodePath,
       isPending: node.isPending ?? false,
-      status: node.status ?? 'ACTIVE'
+      status: node.status ?? 'ACTIVE',
+      affectedUserAccessCount: node.affectedUserAccessCount ?? 0,
+      affectedWorkflowCount: node.affectedWorkflowCount ?? 0,
     };
   }
 
@@ -382,15 +384,6 @@ export class OrgController {
         parentId = parentNodeRecord.id;
       }
 
-      // Check if path exists in Backend
-      const { data: existingNode } = await internalPost<OrgNodeInternal | null>(
-        `${config.backendUrl}/internal/org/get-node`,
-        { nodePath: newNodePath },
-      );
-      if (existingNode) {
-        throw new AppError('Node path already exists', 400);
-      }
-
       // 5. Commit Transaction in Backend
       const {
         data: commitRes,
@@ -425,7 +418,7 @@ export class OrgController {
         message:
           commitRes?.message ||
           'Org structure request approved and node created',
-        nodePath: newNodePath,
+        nodePath: commitRes?.data?.nodePath || newNodePath,
       });
     } catch (error) {
       next(error);
@@ -487,6 +480,8 @@ export class OrgController {
             initiatedDate: req.createdAt,
             workflowName: req.workflowName,
             alias: req.alias,
+            affectedUserAccessCount: req.affectedUserAccessCount ?? 0,
+            affectedWorkflowCount: req.affectedWorkflowCount ?? 0,
           };
         },
       );

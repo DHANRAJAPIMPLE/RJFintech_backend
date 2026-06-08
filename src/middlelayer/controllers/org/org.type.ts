@@ -15,6 +15,8 @@ export type OrgActiveNode = {
   isPending: boolean;
   status?: OrgNodeStatus;
   isAutoDeleted?: boolean;
+  affectedUserAccessCount?: number;
+  affectedWorkflowCount?: number;
   linkedOrgStructure?: OrgActiveNode[];
 };
 
@@ -53,6 +55,8 @@ export type OrgPendingInternalItem = {
   initiator?: OrgPendingInitiator | null;
   workflowName: string;
   alias: string;
+  affectedUserAccessCount?: number;
+  affectedWorkflowCount?: number;
 };
 
 export type OrgPendingItem = {
@@ -70,6 +74,8 @@ export type OrgPendingItem = {
   initiatedDate: string;
   workflowName: string;
   alias: string;
+  affectedUserAccessCount?: number;
+  affectedWorkflowCount?: number;
 };
 
 export type OrgPendingRequestSnapshot = {
@@ -155,6 +161,7 @@ export type OrgActionInternalResponse = {
   data?: {
     status?: 'APPROVED' | 'REJECTED' | 'PARTIAL_APPROVED';
     level?: number | null;
+    nodePath?: string | null;
   };
 };
 
