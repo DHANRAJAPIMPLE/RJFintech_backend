@@ -2205,7 +2205,9 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      if (String(req.body?.type || 'INITIATE').toUpperCase() === 'UPDATE') {
+      if (
+        String(req.body?.statusType || 'INITIATE').toUpperCase() === 'UPDATE'
+      ) {
         return OrgStructureDbController.createModificationRequest(
           req,
           res,
@@ -2213,8 +2215,14 @@ export class OrgStructureDbController {
         );
       }
 
-      const { initiatorId, companyCode, companyId, levelsHash, ...rest } =
-        req.body;
+      const {
+        initiatorId,
+        companyCode,
+        companyId,
+        levelsHash,
+        statusType: _statusType,
+        ...rest
+      } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -2259,6 +2267,7 @@ export class OrgStructureDbController {
         const reqRecord = await tx.orgStructureReq.create({
           data: {
             ...rest,
+            type: 'INITIATE',
             impact: OrgStructureDbController.formatUserAccessImpact(
               propagatedAccessCount,
             ),
@@ -2629,6 +2638,96 @@ export class OrgStructureDbController {
           ),
         ]),
       );
+      const historyUserMap = new Map(
+        histories.map((h) => [
+          h.eventUserId,
+          HistoryUserUtil.formatAuditUser(
+            h.user,
+            h.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+        ]),
+      );
+      const approvedEventsByReqLevel = new Map<string, any[]>();
+      histories.forEach((h) => {
+        if (h.orgReqId && h.event === 'APPROVED' && h.level) {
+          const key = `${h.orgReqId}:${h.level}`;
+          const existing = approvedEventsByReqLevel.get(key) || [];
+          existing.push({
+            user: historyUserMap.get(h.eventUserId),
+            createdAt: h.createdAt,
+          });
+          approvedEventsByReqLevel.set(key, existing);
+        }
+      });
+      const getLevelRule = (level: any) =>
+        Number(level?.mandatoryCount || 1) > 1 ? 'AND' : null;
+      const toUserSummary = (user: any) =>
+        user ? { name: user.name, email: user.email } : null;
+      const getApprovedEvents = (reqId: string, level: number) =>
+        approvedEventsByReqLevel.get(`${reqId}:${level}`) || [];
+      const buildApprovalSummary = (reqId: string) => {
+        const levels = workflowMap.get(reqId) || [];
+        if (levels.length === 0) return null;
+        const request = histories.find((history) => history.orgReqId === reqId);
+        const requestStatus = request?.orgReq?.status || null;
+        const isRejected =
+          requestStatus === 'REJECTED' ||
+          levels.some((level: any) => level.status === 'REJECTED');
+        const allApproved = levels.every(
+          (level: any) => level.status === 'APPROVED',
+        );
+        return {
+          currentStatus: isRejected
+            ? 'REJECTED'
+            : allApproved || requestStatus === 'APPROVED'
+              ? 'APPROVED'
+              : 'PENDING',
+          totalLevels: levels.length,
+          completedLevels: levels.filter(
+            (level: any) => level.status === 'APPROVED',
+          ).length,
+        };
+      };
+      const buildApprovedBy = (reqId: string) =>
+        (workflowMap.get(reqId) || [])
+          .filter(
+            (level: any) =>
+              level.status === 'APPROVED' ||
+              getApprovedEvents(reqId, level.level).length > 0,
+          )
+          .sort((left: any, right: any) => right.level - left.level)
+          .map((level: any) => ({
+            level: level.level,
+            rule: getLevelRule(level),
+            approvedBy: getApprovedEvents(reqId, level.level)
+              .map((event) => toUserSummary(event.user))
+              .filter(Boolean),
+          }));
+      const buildApprovalFlow = (reqId: string) =>
+        (workflowMap.get(reqId) || []).map((level: any) => {
+          const approvedEvents = getApprovedEvents(reqId, level.level);
+          const approvedAt =
+            approvedEvents.length > 0
+              ? approvedEvents[approvedEvents.length - 1].createdAt
+              : null;
+          return {
+            level: level.level,
+            rule: getLevelRule(level),
+            status: level.status,
+            approvedBy: approvedEvents
+              .map((event) => toUserSummary(event.user))
+              .filter(Boolean),
+            approvedAt,
+            eligibleapprovers: (level.approversList as string[])
+              .map((id: string) => {
+                const user = approverMap.get(id);
+                return user ? { name: user.name, email: user.email } : null;
+              })
+              .filter(Boolean),
+          };
+        });
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
@@ -2691,6 +2790,9 @@ export class OrgStructureDbController {
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
+                approvalSummary: buildApprovalSummary(h.orgReqId),
+                approvedBy: buildApprovedBy(h.orgReqId),
+                approvalFlow: buildApprovalFlow(h.orgReqId),
                 nodeId: data?.nodeId || data?.orgStructureId || null,
                 orgStructureId: data?.orgStructureId || data?.nodeId || null,
                 newNodeName: data?.newNodeName || null,
@@ -2763,6 +2865,14 @@ export class OrgStructureDbController {
           };
         }
 
+        const approvalSummary = h.orgReqId
+          ? buildApprovalSummary(h.orgReqId)
+          : null;
+        const includeApprovalContext =
+          h.orgReqId &&
+          approvalSummary &&
+          (displayEvent === 'APPROVED' || displayEvent === 'REJECTED');
+
         return {
           id: h.id,
           orgReqId: h.orgReqId,
@@ -2783,6 +2893,12 @@ export class OrgStructureDbController {
             saasAdminUserIds,
             viewerUserId,
           ),
+          ...(includeApprovalContext
+            ? {
+                approvalSummary,
+                approvedBy: buildApprovedBy(h.orgReqId as string),
+              }
+            : {}),
           nodeId: data?.nodeId || data?.orgStructureId || null,
           orgStructureId: data?.orgStructureId || data?.nodeId || null,
           newNodeName: data?.newNodeName || null,
@@ -2977,6 +3093,21 @@ export class OrgStructureDbController {
   static async fetchStructure(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId, userId } = req.body;
+      const requestedStatusType = String(
+        req.body?.statusType ?? '',
+      ).toLowerCase();
+      if (
+        requestedStatusType &&
+        !['active', 'inactive', 'archive'].includes(requestedStatusType)
+      ) {
+        throw new AppError('Invalid statusType', 400);
+      }
+      const statusType =
+        requestedStatusType === 'inactive'
+          ? 'INACTIVE'
+          : requestedStatusType === 'archive'
+            ? 'ARCHIVE'
+            : 'ACTIVE';
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -3003,7 +3134,9 @@ export class OrgStructureDbController {
         where: { companyId: resolvedCompanyId },
         orderBy: { nodePath: 'asc' },
       });
-      const activeNodes = allNodes.filter((node) => node.status === 'ACTIVE');
+      const visibleNodes = allNodes.filter(
+        (node) => node.status === statusType,
+      );
 
       // 2. Fetch pending requests for parallel tracking
       const pendingRequestsRaw = await prisma.orgStructureReq.findMany({
@@ -3093,7 +3226,7 @@ export class OrgStructureDbController {
       });
 
       // 4. Remove internal UUIDs and format for the tree UI
-      const safeNodes = activeNodes.map((node) => ({
+      const safeNodes = visibleNodes.map((node) => ({
         id: node.id,
         nodeId: node.id,
         nodeName: node.nodeName,

@@ -26,9 +26,12 @@ const parentNodeSchema = z
   })
   .strict();
 
+const normalizeStatusType = (value: unknown) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : value;
+
 export const orgOnboardingSchema = z
   .object({
-    type: z
+    statusType: z
       .preprocess(
         (value) =>
           typeof value === 'string' ? value.trim().toLowerCase() : value,
@@ -48,7 +51,7 @@ export const orgOnboardingSchema = z
 
 export const orgModificationSchema = z
   .object({
-    type: z.preprocess(
+    statusType: z.preprocess(
       (value) =>
         typeof value === 'string' ? value.trim().toLowerCase() : value,
       z.literal('update'),
@@ -106,4 +109,11 @@ export const orgHistory = z
     }
   });
 
-export const orgFetchSchema = z.object({}).strict();
+export const orgFetchSchema = z
+  .object({
+    statusType: z.preprocess(
+      normalizeStatusType,
+      z.enum(['active', 'inactive', 'archive']).optional(),
+    ),
+  })
+  .strict();

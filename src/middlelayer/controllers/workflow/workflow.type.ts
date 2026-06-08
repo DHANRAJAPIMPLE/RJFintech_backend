@@ -203,6 +203,27 @@ export type WorkflowHistoryAuditUser = {
   email: string;
 };
 
+export type WorkflowHistoryApprovalSummary = {
+  currentStatus: string;
+  totalLevels: number;
+  completedLevels: number;
+};
+
+export type WorkflowHistoryApprovedByGroup = {
+  level: number;
+  rule: 'AND' | null;
+  approvedBy: WorkflowHistoryAuditUser[];
+};
+
+export type WorkflowHistoryApprovalFlowItem = {
+  level: number;
+  rule: 'AND' | null;
+  status: string;
+  approvedBy: WorkflowHistoryAuditUser[];
+  approvedAt: string | null;
+  eligibleapprovers: WorkflowHistoryAuditUser[];
+};
+
 export type WorkflowHistoryChangeCount = {
   added: number;
   modify: number;
@@ -245,12 +266,17 @@ export type WorkflowHistoryActionItem = WorkflowHistoryBaseItem & {
   remarks: string | null;
   linkedWorkflow?: WorkflowHistoryLinkedWorkflow | null;
   user: WorkflowHistoryAuditUser;
+  approvalSummary?: WorkflowHistoryApprovalSummary;
+  approvedBy?: WorkflowHistoryApprovedByGroup[];
 };
 
 export type WorkflowHistoryPendingApprovalItem = WorkflowHistoryBaseItem & {
   event: WorkflowHistoryPendingApprovalEvent;
   createdAt: null;
   eligibleapprovers: WorkflowHistoryAuditUser[];
+  approvalSummary?: WorkflowHistoryApprovalSummary | null;
+  approvedBy?: WorkflowHistoryApprovedByGroup[];
+  approvalFlow?: WorkflowHistoryApprovalFlowItem[];
 };
 
 export type WorkflowHistoryItem =

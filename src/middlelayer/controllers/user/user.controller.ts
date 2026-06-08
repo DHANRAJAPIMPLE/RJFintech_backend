@@ -245,6 +245,11 @@ export class UserController {
           name: approver.name,
           email: approver.email,
         })),
+        ...(item.approvalSummary !== undefined
+          ? { approvalSummary: item.approvalSummary }
+          : {}),
+        ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
+        ...(item.approvalFlow ? { approvalFlow: item.approvalFlow } : {}),
       };
     }
 
@@ -258,12 +263,14 @@ export class UserController {
         name: item.user.name,
         email: item.user.email,
       },
+      ...(item.approvalSummary ? { approvalSummary: item.approvalSummary } : {}),
+      ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
     };
   }
 
   private static async fetchAndProcessUsers(
     req: Request & { user?: { id: string; companyId: string } },
-    listType?: 'active' | 'pending' | 'inactive',
+    statusType?: 'active' | 'pending' | 'inactive' | 'archive',
   ): Promise<FetchAndProcessUsersResult> {
     const {
       direction,
@@ -293,7 +300,7 @@ export class UserController {
       {
         companyId,
         userId,
-        listType,
+        statusType,
         direction,
         cursor,
         topCursor,
@@ -312,6 +319,7 @@ export class UserController {
     // Expected from backend: { data: { activeUsers: [], pendingUsers: [], inactiveUsers: [] } }
     const {
       activeUsers = [],
+      archiveUsers = [],
       inactiveUsers = [],
       pendingUsers = [],
     } = data?.data || data || {};
@@ -321,7 +329,9 @@ export class UserController {
         UserController.formatPendingUserListItem(user),
       ),
       inactiveUsers: inactiveUsers.map(UserController.formatUserListItem),
+      archiveUsers: archiveUsers.map(UserController.formatUserListItem),
       activeCount: data?.activeCount ?? activeUsers.length,
+      archiveCount: data?.archiveCount ?? archiveUsers.length,
       inactiveCount: data?.inactiveCount ?? inactiveUsers.length,
       pendingCount: data?.pendingCount ?? pendingUsers.length,
       limit: data?.limit ?? limit,
@@ -345,25 +355,30 @@ export class UserController {
     next: NextFunction,
   ) {
     try {
-      const { type } = zodParse(fetchAllUserSchema, req.body ?? {});
+      const { statusType } = zodParse(fetchAllUserSchema, req.body ?? {});
       const {
         activeUsers,
+        archiveUsers,
         inactiveUsers,
         pendingUsers,
         activeCount,
+        archiveCount,
         inactiveCount,
         pendingCount,
         pageInfo,
-      } = await UserController.fetchAndProcessUsers(req, type);
+      } = await UserController.fetchAndProcessUsers(req, statusType);
 
       const response: FetchAllUsersResponse = {
         data:
-          type === 'active'
+          statusType === 'active'
             ? activeUsers
-            : type === 'inactive'
+            : statusType === 'inactive'
               ? inactiveUsers
+              : statusType === 'archive'
+                ? archiveUsers
               : pendingUsers,
         activeCount,
+        archiveCount,
         inactiveCount,
         pendingCount,
         pageInfo,
@@ -504,8 +519,8 @@ export class UserController {
   ) {
     try {
       const requestType =
-        typeof req.body?.type === 'string'
-          ? req.body.type.trim().toLowerCase()
+        typeof req.body?.statusType === 'string'
+          ? req.body.statusType.trim().toLowerCase()
           : 'initiate';
 
       if (requestType !== 'initiate') {
@@ -526,7 +541,7 @@ export class UserController {
           {
             initiatorId,
             companyId,
-            type: modification.type.toUpperCase(),
+            statusType: modification.statusType.toUpperCase(),
             targetEmail: modification.targetUserEmail,
             levelsHash: modification.levelsHash || null,
             remarks: modification.remarks,
@@ -720,7 +735,7 @@ export class UserController {
           companyId,
           companyCode,
           groupCode,
-          type: 'INITIATE',
+          statusType: 'INITIATE',
           levelsHash: levelsHash || null,
           data: {
             basicDetails,

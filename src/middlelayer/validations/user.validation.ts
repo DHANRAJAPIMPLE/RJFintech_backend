@@ -40,7 +40,7 @@ const normalizeUserListType = (value: unknown) =>
 
 const requiredUserListTypeSchema = z.preprocess(
   normalizeUserListType,
-  z.enum(['active', 'pending', 'inactive']),
+  z.enum(['active', 'pending', 'inactive', 'archive']),
 );
 
 const optionalUserSearchQuerySchema = z.preprocess((value) => {
@@ -53,7 +53,7 @@ const optionalUserSearchQuerySchema = z.preprocess((value) => {
 
 export const userOnboardingSchema = z
   .object({
-    type: z
+    statusType: z
       .preprocess(
         (value) =>
           typeof value === 'string' ? value.trim().toLowerCase() : value,
@@ -113,7 +113,7 @@ const userPermissionMutationSchema = permissionSchema.extend({
 
 export const userModificationSchema = z
   .object({
-    type: z.preprocess(
+    statusType: z.preprocess(
       normalizeRequestType,
       z.enum(['update', 'active', 'inactive', 'archive']),
     ),
@@ -156,23 +156,23 @@ export const userModificationSchema = z
   .strict()
   .superRefine((value, context) => {
     if (
-      value.type === 'update' &&
+      value.statusType === 'update' &&
       !value.basicDetails &&
       (!value.permissions || value.permissions.length === 0)
     ) {
       context.addIssue({
         code: 'custom',
         message: 'At least one changed field or permission is required',
-        path: ['type'],
+        path: ['statusType'],
       });
     }
   });
 
 export const userListSchema = z
   .object({
-    type: z.preprocess(
+    statusType: z.preprocess(
       normalizeUserListType,
-      z.enum(['active', 'pending', 'inactive']).optional(),
+      z.enum(['active', 'pending', 'inactive', 'archive']).optional(),
     ),
     query: optionalUserSearchQuerySchema,
     page: z.preprocess(
@@ -210,7 +210,7 @@ export const userListSchema = z
   .strict();
 
 export const fetchAllUserSchema = userListSchema.extend({
-  type: requiredUserListTypeSchema,
+  statusType: requiredUserListTypeSchema,
 });
 
 export const userDetailsSchema = z

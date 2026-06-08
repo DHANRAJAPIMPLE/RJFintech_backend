@@ -2893,12 +2893,20 @@ export class UserDbController {
     try {
       const { companyCode, companyId, userId } = req.body;
       const requestedListType = UserDbController.normalizeFilterText(
-        req.body?.listType ?? req.body?.type,
+        req.body?.statusType,
       )?.toLowerCase();
+      if (
+        requestedListType &&
+        !['active', 'pending', 'inactive', 'archive'].includes(
+          requestedListType,
+        )
+      ) {
+        throw new AppError('Invalid statusType', 400);
+      }
       const listType =
         requestedListType &&
-        ['active', 'pending', 'inactive'].includes(requestedListType)
-          ? (requestedListType as 'active' | 'pending' | 'inactive')
+        ['active', 'pending', 'inactive', 'archive'].includes(requestedListType)
+          ? (requestedListType as 'active' | 'pending' | 'inactive' | 'archive')
           : undefined;
       const query = UserDbController.normalizeFilterText(req.body?.query);
       const pagination = getPagination(req.body);
@@ -3029,7 +3037,7 @@ export class UserDbController {
         }
       }
 
-      const buildUserWhere = (status: 'ACTIVE' | 'INACTIVE') => ({
+      const buildUserWhere = (status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE') => ({
         userMappings: {
           some: {
             companyId: resolvedCompanyId,
@@ -3100,17 +3108,28 @@ export class UserDbController {
         },
       };
 
-      const [activeCount, inactiveCount] = await prisma.$transaction([
-        prisma.user.count({ where: buildUserWhere('ACTIVE') }),
-        prisma.user.count({ where: buildUserWhere('INACTIVE') }),
-      ]);
+      const [activeCount, inactiveCount, archiveCount] =
+        await prisma.$transaction([
+          prisma.user.count({ where: buildUserWhere('ACTIVE') }),
+          prisma.user.count({ where: buildUserWhere('INACTIVE') }),
+          prisma.user.count({ where: buildUserWhere('ARCHIVE') }),
+        ]);
 
       const activeWhere = buildUserWhere('ACTIVE');
       const inactiveWhere = buildUserWhere('INACTIVE');
+      const archiveWhere = buildUserWhere('ARCHIVE');
+      const isProductionStatusType =
+        listType === 'active' ||
+        listType === 'inactive' ||
+        listType === 'archive';
       const selectedUserWhere =
-        listType === 'inactive' ? inactiveWhere : activeWhere;
+        listType === 'inactive'
+          ? inactiveWhere
+          : listType === 'archive'
+            ? archiveWhere
+            : activeWhere;
       const selectedUserPageWhere =
-        (listType === 'active' || listType === 'inactive') && cursor
+        isProductionStatusType && cursor
           ? UserDbController.appendCursorWhere(
               selectedUserWhere,
               cursor,
@@ -3118,7 +3137,7 @@ export class UserDbController {
             )
           : selectedUserWhere;
       const selectedUserNewWhere =
-        (listType === 'active' || listType === 'inactive') && topCursor
+        isProductionStatusType && topCursor
           ? UserDbController.appendCursorWhere(
               selectedUserWhere,
               topCursor,
@@ -3134,7 +3153,7 @@ export class UserDbController {
                 where: selectedUserPageWhere,
                 include: userInclude,
                 orderBy: UserDbController.getPageOrder(effectiveDirection),
-                ...(listType === 'active' || listType === 'inactive'
+                ...(isProductionStatusType
                   ? { skip: cursor ? 0 : offset, take: limit + 1 }
                   : {}),
               }),
@@ -3145,7 +3164,7 @@ export class UserDbController {
                 include: userInclude,
                 orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
               }),
-          listType === 'active'
+          listType === 'active' || listType === 'archive'
             ? Promise.resolve({ pendingCount: 0, pendingOnboardings: [] })
             : UserDbController.fetchPendingUserOnboardings({
                 resolvedCompanyId,
@@ -3168,22 +3187,21 @@ export class UserDbController {
             : Promise.resolve(0),
         ]);
 
-      const selectedPage =
-        listType === 'active' || listType === 'inactive'
-          ? UserDbController.buildPageInfo(
-              selectedRows,
-              limit,
-              requestedTopCursor,
-              selectedNewCount,
-              effectiveDirection,
-              cursor,
-              page,
-              isPagePagination,
-            )
-          : { pageRows: selectedRows, pageInfo: null };
+      const selectedPage = isProductionStatusType
+        ? UserDbController.buildPageInfo(
+            selectedRows,
+            limit,
+            requestedTopCursor,
+            selectedNewCount,
+            effectiveDirection,
+            cursor,
+            page,
+            isPagePagination,
+          )
+        : { pageRows: selectedRows, pageInfo: null };
       const firstActivePageRow = selectedPage.pageRows[0];
       if (
-        (listType === 'active' || listType === 'inactive') &&
+        isProductionStatusType &&
         !isPagePagination &&
         cursor &&
         firstActivePageRow &&
@@ -3251,18 +3269,20 @@ export class UserDbController {
           activePendingByEmail.get((user.email || '').toLowerCase()),
         ),
       );
-      const activeUsers = listType === 'inactive' ? [] : selectedUsers;
+      const activeUsers =
+        listType === 'inactive' || listType === 'archive' ? [] : selectedUsers;
       const inactiveUsers =
         listType === 'inactive'
           ? selectedUsers
           : inactiveRows.map(UserDbController.formatProductionUser);
+      const archiveUsers = listType === 'archive' ? selectedUsers : [];
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
         resolvedCompanyId,
         { detail: true },
       );
       const pendingCount =
-        listType === 'active'
+        listType === 'active' || listType === 'archive'
           ? (
               await UserDbController.fetchPendingUserOnboardings({
                 resolvedCompanyId,
@@ -3286,16 +3306,17 @@ export class UserDbController {
           activeUsers,
           pendingUsers,
           inactiveUsers,
+          archiveUsers,
         },
         activeCount,
         inactiveCount,
+        archiveCount,
         pendingCount,
         limit,
         offset,
-        pageInfo:
-          listType === 'active' || listType === 'inactive'
-            ? selectedPage.pageInfo
-            : (pendingResult as any).pageInfo || null,
+        pageInfo: isProductionStatusType
+          ? selectedPage.pageInfo
+          : (pendingResult as any).pageInfo || null,
       });
     } catch (error) {
       next(error);
@@ -4547,7 +4568,9 @@ export class UserDbController {
    */
   static async createUserOnboarding(req: Request, res: Response) {
     try {
-      const type = UserDbController.normalizeUserRequestType(req.body?.type);
+      const type = UserDbController.normalizeUserRequestType(
+        req.body?.statusType,
+      );
       if (type !== 'INITIATE') {
         try {
           return await UserDbController.createUserModificationRequest(
@@ -4585,6 +4608,7 @@ export class UserDbController {
         companyId,
         groupCode,
         levelsHash,
+        statusType: _statusType,
         ...onboardingData
       } = req.body;
       let resolvedCompanyId = companyId;
@@ -5528,6 +5552,7 @@ export class UserDbController {
                 type: true,
                 impact: true,
                 initiatorId: true,
+                status: true,
               },
             })
           : Promise.resolve([]),
@@ -5665,6 +5690,95 @@ export class UserDbController {
           ),
         ]),
       );
+      const historyUserMap = new Map(
+        history.map((h) => [
+          h.eventUserId,
+          HistoryUserUtil.formatAuditUser(
+            h.user,
+            h.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+        ]),
+      );
+      const approvedEventsByReqLevel = new Map<string, any[]>();
+      history.forEach((h) => {
+        if (h.reqId && h.event === 'APPROVED' && h.level) {
+          const key = `${h.reqId}:${h.level}`;
+          const existing = approvedEventsByReqLevel.get(key) || [];
+          existing.push({
+            user: historyUserMap.get(h.eventUserId),
+            createdAt: h.createdAt,
+          });
+          approvedEventsByReqLevel.set(key, existing);
+        }
+      });
+      const getLevelRule = (level: any) =>
+        Number(level?.mandatoryCount || 1) > 1 ? 'AND' : null;
+      const toUserSummary = (user: any) =>
+        user ? { name: user.name, email: user.email } : null;
+      const getApprovedEvents = (reqId: string, level: number) =>
+        approvedEventsByReqLevel.get(`${reqId}:${level}`) || [];
+      const buildApprovalSummary = (reqId: string) => {
+        const levels = workflowMap.get(reqId) || [];
+        if (levels.length === 0) return null;
+        const requestStatus = requestSnapshotMap.get(reqId)?.status || null;
+        const isRejected =
+          requestStatus === 'REJECTED' ||
+          levels.some((level: any) => level.status === 'REJECTED');
+        const allApproved = levels.every(
+          (level: any) => level.status === 'APPROVED',
+        );
+        return {
+          currentStatus: isRejected
+            ? 'REJECTED'
+            : allApproved || requestStatus === 'APPROVED'
+              ? 'APPROVED'
+              : 'PENDING',
+          totalLevels: levels.length,
+          completedLevels: levels.filter(
+            (level: any) => level.status === 'APPROVED',
+          ).length,
+        };
+      };
+      const buildApprovedBy = (reqId: string) =>
+        (workflowMap.get(reqId) || [])
+          .filter(
+            (level: any) =>
+              level.status === 'APPROVED' ||
+              getApprovedEvents(reqId, level.level).length > 0,
+          )
+          .sort((left: any, right: any) => right.level - left.level)
+          .map((level: any) => ({
+            level: level.level,
+            rule: getLevelRule(level),
+            approvedBy: getApprovedEvents(reqId, level.level)
+              .map((event) => toUserSummary(event.user))
+              .filter(Boolean),
+          }));
+      const buildApprovalFlow = (reqId: string) =>
+        (workflowMap.get(reqId) || []).map((level: any) => {
+          const approvedEvents = getApprovedEvents(reqId, level.level);
+          const approvedAt =
+            approvedEvents.length > 0
+              ? approvedEvents[approvedEvents.length - 1].createdAt
+              : null;
+          return {
+            level: level.level,
+            rule: getLevelRule(level),
+            status: level.status,
+            approvedBy: approvedEvents
+              .map((event) => toUserSummary(event.user))
+              .filter(Boolean),
+            approvedAt,
+            eligibleapprovers: (level.approversList as string[])
+              .map((id: string) => {
+                const user = approverMap.get(id);
+                return user ? { name: user.name, email: user.email } : null;
+              })
+              .filter(Boolean),
+          };
+        });
 
       const resultList: any[] = [];
       const handledPendingReqs = new Set<string>();
@@ -5736,6 +5850,9 @@ export class UserDbController {
                 event: `L${currentPending.level} Pending Approval`,
                 createdAt: null,
                 eligibleapprovers: approvers,
+                approvalSummary: buildApprovalSummary(h.reqId),
+                approvedBy: buildApprovedBy(h.reqId),
+                approvalFlow: buildApprovalFlow(h.reqId),
               });
             }
           }
@@ -5811,6 +5928,12 @@ export class UserDbController {
           };
         }
 
+        const approvalSummary = h.reqId ? buildApprovalSummary(h.reqId) : null;
+        const includeApprovalContext =
+          h.reqId &&
+          approvalSummary &&
+          (displayEvent === 'APPROVED' || displayEvent === 'REJECTED');
+
         return {
           id: h.id,
           email: h.email,
@@ -5838,6 +5961,12 @@ export class UserDbController {
             saasAdminUserIds,
             viewerUserId,
           ),
+          ...(includeApprovalContext
+            ? {
+                approvalSummary,
+                approvedBy: buildApprovedBy(h.reqId as string),
+              }
+            : {}),
         };
       });
 

@@ -75,6 +75,11 @@ export class OrgController {
           name: approver.name,
           email: approver.email,
         })),
+        ...(item.approvalSummary !== undefined
+          ? { approvalSummary: item.approvalSummary }
+          : {}),
+        ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
+        ...(item.approvalFlow ? { approvalFlow: item.approvalFlow } : {}),
       };
     }
 
@@ -88,6 +93,8 @@ export class OrgController {
         name: item.user.name,
         email: item.user.email,
       },
+      ...(item.approvalSummary ? { approvalSummary: item.approvalSummary } : {}),
+      ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
     };
   }
 
@@ -98,8 +105,8 @@ export class OrgController {
   ) {
     try {
       const requestType =
-        typeof req.body?.type === 'string'
-          ? req.body.type.trim().toLowerCase()
+        typeof req.body?.statusType === 'string'
+          ? req.body.statusType.trim().toLowerCase()
           : 'initiate';
       const initiatorId = req.user?.id;
       const companyId = req.user?.companyId;
@@ -117,7 +124,7 @@ export class OrgController {
             {
               initiatorId,
               companyId,
-              type: 'UPDATE',
+              statusType: 'UPDATE',
               targetNodePath: modification.nodePath,
               levelsHash: modification.levelsHash || null,
               remarks: modification.remarks,
@@ -209,7 +216,7 @@ export class OrgController {
           {
             initiatorId,
             companyId,
-            type: 'INITIATE',
+            statusType: 'INITIATE',
             levelsHash: levelsHash || null,
             data: {
               newNodeName,
@@ -431,7 +438,7 @@ export class OrgController {
     next: NextFunction,
   ) {
     try {
-      zodParse(orgFetchSchema, req.body ?? {});
+      const { statusType } = zodParse(orgFetchSchema, req.body ?? {});
       const userId = req.user?.id;
       const companyId = req.user?.companyId;
 
@@ -443,7 +450,7 @@ export class OrgController {
       const { data, ok, status } =
         await internalPost<FetchOrgStructureInternalResponse>(
           `${config.backendUrl}/internal/org/fetch`,
-          { companyId, userId },
+          { companyId, userId, statusType },
         );
 
       if (!ok) {

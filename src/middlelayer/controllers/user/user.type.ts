@@ -197,9 +197,11 @@ export type UserListPageInfo = {
 
 export type FetchAndProcessUsersResult = {
   activeUsers: UserListItem[];
+  archiveUsers: UserListItem[];
   pendingUsers: PendingUserListItem[];
   inactiveUsers: UserListItem[];
   activeCount: number;
+  archiveCount: number;
   inactiveCount: number;
   pendingCount: number;
   limit: number;
@@ -210,6 +212,7 @@ export type FetchAndProcessUsersResult = {
 export type FetchAllUsersResponse = {
   data: UserListItem[] | PendingUserListItem[];
   activeCount: number;
+  archiveCount: number;
   inactiveCount: number;
   pendingCount: number;
   pageInfo: UserListPageInfo;
@@ -252,6 +255,27 @@ export type UserHistoryAuditUser = {
   email: string;
 };
 
+export type UserHistoryApprovalSummary = {
+  currentStatus: string;
+  totalLevels: number;
+  completedLevels: number;
+};
+
+export type UserHistoryApprovedByGroup = {
+  level: number;
+  rule: 'AND' | null;
+  approvedBy: UserHistoryAuditUser[];
+};
+
+export type UserHistoryApprovalFlowItem = {
+  level: number;
+  rule: 'AND' | null;
+  status: string;
+  approvedBy: UserHistoryAuditUser[];
+  approvedAt: string | null;
+  eligibleapprovers: UserHistoryAuditUser[];
+};
+
 export type UserHistoryChangeCount = {
   added: number;
   modify: number;
@@ -283,12 +307,17 @@ export type UserHistoryActionItem = UserHistoryBaseItem & {
   createdAt: string;
   remarks: string | null;
   user: UserHistoryAuditUser;
+  approvalSummary?: UserHistoryApprovalSummary;
+  approvedBy?: UserHistoryApprovedByGroup[];
 };
 
 export type UserHistoryPendingApprovalItem = UserHistoryBaseItem & {
   event: UserHistoryPendingApprovalEvent;
   createdAt: null;
   eligibleapprovers: UserHistoryAuditUser[];
+  approvalSummary?: UserHistoryApprovalSummary | null;
+  approvedBy?: UserHistoryApprovedByGroup[];
+  approvalFlow?: UserHistoryApprovalFlowItem[];
 };
 
 export type UserHistoryItem =

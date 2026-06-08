@@ -6,7 +6,7 @@ export type OrgNodeType =
   | 'PLANT'
   | 'LOCATION';
 
-export type OrgNodeStatus = 'ACTIVE' | 'INACTIVE';
+export type OrgNodeStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVE';
 
 export type OrgActiveNode = {
   nodeName: string;
@@ -33,7 +33,7 @@ export type OrgPendingRequestData = {
   nodeType: OrgNodeType;
   parentNode: OrgParentNode;
   nodePath?: string;
-  status?: 'ACTIVE' | 'INACTIVE';
+  status?: OrgNodeStatus;
   [key: string]: unknown;
 };
 
@@ -63,7 +63,7 @@ export type OrgPendingItem = {
   newData?: unknown | null;
   newNodeName: string;
   nodeType: OrgNodeType;
-  status?: 'ACTIVE' | 'INACTIVE' | null;
+  status?: OrgNodeStatus | null;
   parentNode: OrgParentNode;
   initiatorName: string | null;
   initiatorEmail: string | null;
@@ -183,6 +183,27 @@ export type OrgHistoryAuditUser = {
   email: string;
 };
 
+export type OrgHistoryApprovalSummary = {
+  currentStatus: string;
+  totalLevels: number;
+  completedLevels: number;
+};
+
+export type OrgHistoryApprovedByGroup = {
+  level: number;
+  rule: 'AND' | null;
+  approvedBy: OrgHistoryAuditUser[];
+};
+
+export type OrgHistoryApprovalFlowItem = {
+  level: number;
+  rule: 'AND' | null;
+  status: string;
+  approvedBy: OrgHistoryAuditUser[];
+  approvedAt: string | null;
+  eligibleapprovers: OrgHistoryAuditUser[];
+};
+
 export type OrgHistoryEvent =
   | 'INITIATE'
   | 'APPROVED'
@@ -209,12 +230,17 @@ export type OrgHistoryActionItem = OrgHistoryBaseItem & {
   createdAt: string;
   remarks: string | null;
   user: OrgHistoryAuditUser;
+  approvalSummary?: OrgHistoryApprovalSummary;
+  approvedBy?: OrgHistoryApprovedByGroup[];
 };
 
 export type OrgHistoryPendingApprovalItem = OrgHistoryBaseItem & {
   event: OrgHistoryPendingApprovalEvent;
   createdAt: null;
   eligibleapprovers: OrgHistoryAuditUser[];
+  approvalSummary?: OrgHistoryApprovalSummary | null;
+  approvedBy?: OrgHistoryApprovedByGroup[];
+  approvalFlow?: OrgHistoryApprovalFlowItem[];
 };
 
 export type OrgHistoryItem =

@@ -171,6 +171,11 @@ export class WorkflowController {
           name: approver.name,
           email: approver.email,
         })),
+        ...(item.approvalSummary !== undefined
+          ? { approvalSummary: item.approvalSummary }
+          : {}),
+        ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
+        ...(item.approvalFlow ? { approvalFlow: item.approvalFlow } : {}),
       };
     }
 
@@ -193,6 +198,8 @@ export class WorkflowController {
         name: item.user.name,
         email: item.user.email,
       },
+      ...(item.approvalSummary ? { approvalSummary: item.approvalSummary } : {}),
+      ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
     };
   }
 
@@ -209,15 +216,15 @@ export class WorkflowController {
         throw new AppError('Unauthorized', 401);
       }
 
-      const type =
-        typeof req.body?.type === 'string'
-          ? req.body.type.trim().toLowerCase()
+      const statusType =
+        typeof req.body?.statusType === 'string'
+          ? req.body.statusType.trim().toLowerCase()
           : 'initiate';
       const isModification =
-        type === 'update' ||
-        type === 'inactive' ||
-        type === 'active' ||
-        type === 'archive';
+        statusType === 'update' ||
+        statusType === 'inactive' ||
+        statusType === 'active' ||
+        statusType === 'archive';
       const validatedData = isModification
         ? zodParse(workflowModificationSchema, req.body)
         : zodParse(workflowOnboardingSchema, req.body);
@@ -226,7 +233,13 @@ export class WorkflowController {
         const modification = validatedData as ReturnType<
           typeof workflowModificationSchema.parse
         >;
-        const { target, levelsHash, remarks, ...requestData } = modification;
+        const {
+          target,
+          levelsHash,
+          remarks,
+          statusType: _statusType,
+          ...requestData
+        } = modification;
         const {
           data: createRes,
           ok: createOk,
@@ -236,7 +249,7 @@ export class WorkflowController {
           {
             initiatorId,
             companyId,
-            type: modification.type.toUpperCase(),
+            statusType: modification.statusType.toUpperCase(),
             target,
             levelsHash: levelsHash || null,
             remarks,
@@ -315,7 +328,7 @@ export class WorkflowController {
           initiatorId,
           companyId,
           levelsHash: levelsHash || null,
-          type: 'INITIATE',
+          statusType: 'INITIATE',
           data: initiation,
           eligibleApprovers,
         },
@@ -453,9 +466,9 @@ export class WorkflowController {
 
       const workflowData = data as FetchWorkflowsInternalData;
       const publicData =
-        body.type === 'active' ||
-        body.type === 'inactive' ||
-        body.type === 'archive'
+        body.statusType === 'active' ||
+        body.statusType === 'inactive' ||
+        body.statusType === 'archive'
           ? workflowData.data.map((workflow) =>
               WorkflowController.formatActiveWorkflow(
                 workflow as WorkflowActiveInternalItem,
