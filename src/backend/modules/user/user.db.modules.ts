@@ -5959,31 +5959,26 @@ export class UserDbController {
           approvalLevel,
         };
 
-        // Add level for APPROVED/REJECTED events
-        if (
-          (displayEvent === 'APPROVED' || displayEvent === 'REJECTED') &&
-          approvalLevel != null
-        ) {
+        // APPROVED: include level, approvalSummary, approvedBy
+        if (displayEvent === 'APPROVED' && approvalLevel != null) {
           result.level = approvalLevel;
-        }
-
-        // Include approvalSummary with rejectedAtLevel when applicable
-        if (approvalSummary.currentStatus) {
           const summary: Record<string, any> = {
             currentStatus: approvalSummary.currentStatus,
             totalLevels: approvalSummary.totalLevels,
             completedLevels: approvalSummary.completedLevels,
           };
-          if ((approvalSummary as any).rejectedAtLevel) {
-            summary.rejectedAtLevel = (approvalSummary as any).rejectedAtLevel;
-          }
           result.approvalSummary = summary;
+          if (approvedBy.length > 0) {
+            result.approvedBy = approvedBy;
+          }
         }
 
-        // Include approvedBy when there are approved levels
-        if (approvedBy.length > 0) {
-          result.approvedBy = approvedBy;
+        // REJECTED: include level only (approvalSummary/approvedBy go in APPROVAL_PROGRESS)
+        if (displayEvent === 'REJECTED' && approvalLevel != null) {
+          result.level = approvalLevel;
         }
+
+        // INITIATE, MODIFY, ACTIVE, INACTIVE, ARCHIVE: no extra fields
 
         return result;
       });
@@ -6011,7 +6006,6 @@ export class UserDbController {
 
         const isPending = approvalSummary.currentStatus === 'PENDING';
         const isRejected = approvalSummary.currentStatus === 'REJECTED';
-        const isApproved = approvalSummary.currentStatus === 'APPROVED';
 
         // Get the latest history event for this reqId to derive timestamps
         const latestEvent = history
@@ -6022,11 +6016,9 @@ export class UserDbController {
             return bTime - aTime;
           })[0];
 
-        // Generate APPROVAL_PROGRESS event when there are completed/rejected approvals
-        if (
-          (approvedBy.length > 0 || isRejected || isApproved) &&
-          approvalSummary.completedLevels > 0
-        ) {
+        // APPROVAL_PROGRESS: ONLY for REJECTED requests
+        // Shows partial approval progress before the rejection happened
+        if (isRejected && approvalSummary.completedLevels > 0) {
           const progressSummary: Record<string, any> = {
             currentStatus: approvalSummary.currentStatus,
             totalLevels: approvalSummary.totalLevels,
