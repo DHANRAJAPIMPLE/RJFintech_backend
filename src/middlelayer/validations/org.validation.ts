@@ -31,18 +31,15 @@ const normalizeStatusType = (value: unknown) =>
 
 export const orgOnboardingSchema = z
   .object({
-    statusType: z
+    type: z
       .preprocess(
         (value) =>
           typeof value === 'string' ? value.trim().toLowerCase() : value,
         z.literal('initiate'),
       )
       .optional(),
-    newNodeName: nameSchema('New node name').min(
-      1,
-      'New node name is required',
-    ),
-    status:z.string().nullable().optional(),
+    newNodeName: nameSchema('New node name').min(1, 'New node name is required'),
+    status: z.string().nullable().optional(),
     nodeType: nodeTypeSchema,
     parentNode: parentNodeSchema,
     levelsHash: z.string().nullable().optional(),
@@ -51,7 +48,7 @@ export const orgOnboardingSchema = z
 
 export const orgModificationSchema = z
   .object({
-    statusType: z.preprocess(
+    type: z.preprocess(
       (value) =>
         typeof value === 'string' ? value.trim().toLowerCase() : value,
       z.literal('update'),

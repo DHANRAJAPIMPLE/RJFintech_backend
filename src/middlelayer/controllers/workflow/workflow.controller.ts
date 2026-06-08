@@ -216,15 +216,15 @@ export class WorkflowController {
         throw new AppError('Unauthorized', 401);
       }
 
-      const statusType =
-        typeof req.body?.statusType === 'string'
-          ? req.body.statusType.trim().toLowerCase()
+      const requestType =
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
           : 'initiate';
       const isModification =
-        statusType === 'update' ||
-        statusType === 'inactive' ||
-        statusType === 'active' ||
-        statusType === 'archive';
+        requestType === 'update' ||
+        requestType === 'inactive' ||
+        requestType === 'active' ||
+        requestType === 'archive';
       const validatedData = isModification
         ? zodParse(workflowModificationSchema, req.body)
         : zodParse(workflowOnboardingSchema, req.body);
@@ -237,7 +237,7 @@ export class WorkflowController {
           target,
           levelsHash,
           remarks,
-          statusType: _statusType,
+          type: _type,
           ...requestData
         } = modification;
         const {
@@ -249,7 +249,7 @@ export class WorkflowController {
           {
             initiatorId,
             companyId,
-            statusType: modification.statusType.toUpperCase(),
+            type: modification.type.toUpperCase(),
             target,
             levelsHash: levelsHash || null,
             remarks,
@@ -274,7 +274,12 @@ export class WorkflowController {
       const initiation = validatedData as ReturnType<
         typeof workflowOnboardingSchema.parse
       >;
-      const { nodePath, levelsHash } = initiation;
+      const {
+        nodePath,
+        levelsHash,
+        type: _type,
+        ...initiationData
+      } = initiation;
 
       const { data: company, ok: companyOk } = await internalPost<
         WorkflowCompanyLookupInternalResponse | WorkflowApiErrorResponse | null
@@ -328,8 +333,8 @@ export class WorkflowController {
           initiatorId,
           companyId,
           levelsHash: levelsHash || null,
-          statusType: 'INITIATE',
-          data: initiation,
+          type: 'INITIATE',
+          data: initiationData,
           eligibleApprovers,
         },
       );

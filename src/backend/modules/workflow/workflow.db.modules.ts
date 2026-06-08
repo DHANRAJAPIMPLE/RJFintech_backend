@@ -2895,11 +2895,11 @@ export class WorkflowDbController {
         data,
         eligibleApprovers,
         levelsHash: parentLevelsHash,
-        statusType = 'INITIATE',
+        type,
         target,
         remarks,
       } = req.body;
-      const requestType = String(statusType || 'INITIATE').toUpperCase();
+      const requestType = String(type ?? 'INITIATE').toUpperCase();
 
       if (!initiatorId) {
         throw new AppError('initiatorId is required', 400);
@@ -2979,7 +2979,6 @@ export class WorkflowDbController {
       );
       const workflowData = { ...(data || {}), workflowType };
       delete workflowData.type;
-      delete workflowData.statusType;
       const { module, subModule, nodePath, levels } = workflowData;
       await WorkflowDbController.assertNoPendingOrgModificationForNode(
         resolvedCompanyId,

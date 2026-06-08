@@ -4573,9 +4573,7 @@ export class UserDbController {
    */
   static async createUserOnboarding(req: Request, res: Response) {
     try {
-      const type = UserDbController.normalizeUserRequestType(
-        req.body?.statusType,
-      );
+      const type = UserDbController.normalizeUserRequestType(req.body?.type);
       if (type !== 'INITIATE') {
         try {
           return await UserDbController.createUserModificationRequest(
@@ -4613,7 +4611,7 @@ export class UserDbController {
         companyId,
         groupCode,
         levelsHash,
-        statusType: _statusType,
+        type: _type,
         ...onboardingData
       } = req.body;
       let resolvedCompanyId = companyId;

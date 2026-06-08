@@ -105,8 +105,8 @@ export class OrgController {
   ) {
     try {
       const requestType =
-        typeof req.body?.statusType === 'string'
-          ? req.body.statusType.trim().toLowerCase()
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
           : 'initiate';
       const initiatorId = req.user?.id;
       const companyId = req.user?.companyId;
@@ -124,7 +124,7 @@ export class OrgController {
             {
               initiatorId,
               companyId,
-              statusType: 'UPDATE',
+              type: 'UPDATE',
               targetNodePath: modification.nodePath,
               levelsHash: modification.levelsHash || null,
               remarks: modification.remarks,
@@ -216,7 +216,7 @@ export class OrgController {
           {
             initiatorId,
             companyId,
-            statusType: 'INITIATE',
+            type: 'INITIATE',
             levelsHash: levelsHash || null,
             data: {
               newNodeName,

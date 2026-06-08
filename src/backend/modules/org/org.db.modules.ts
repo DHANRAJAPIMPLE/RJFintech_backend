@@ -2205,9 +2205,7 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      if (
-        String(req.body?.statusType || 'INITIATE').toUpperCase() === 'UPDATE'
-      ) {
+      if (String(req.body?.type ?? 'INITIATE').toUpperCase() === 'UPDATE') {
         return OrgStructureDbController.createModificationRequest(
           req,
           res,
@@ -2220,7 +2218,7 @@ export class OrgStructureDbController {
         companyCode,
         companyId,
         levelsHash,
-        statusType: _statusType,
+        type: _type,
         ...rest
       } = req.body;
       let resolvedCompanyId = companyId;

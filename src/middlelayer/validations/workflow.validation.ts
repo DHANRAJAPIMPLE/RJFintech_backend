@@ -66,7 +66,7 @@ const workflowTypeSchema = z.preprocess(
 
 export const workflowOnboardingSchema = z
   .object({
-    statusType: z
+    type: z
       .preprocess(normalizeRequestType, z.literal('initiate'))
       .optional(),
     workflowType: workflowTypeSchema.default('NODE'),
@@ -83,7 +83,7 @@ export const workflowOnboardingSchema = z
 
 export const workflowModificationSchema = z
   .object({
-    statusType: z.preprocess(
+    type: z.preprocess(
       normalizeRequestType,
       z.enum(['update', 'inactive', 'active', 'archive']),
     ),
@@ -115,7 +115,7 @@ export const workflowModificationSchema = z
   .strict()
   .superRefine((value, context) => {
     if (
-      value.statusType === 'update' &&
+      value.type === 'update' &&
       !value.name &&
       !value.module &&
       !value.nodePath &&
@@ -126,7 +126,7 @@ export const workflowModificationSchema = z
       context.addIssue({
         code: 'custom',
         message: 'At least one changed workflow field is required',
-        path: ['statusType'],
+        path: ['type'],
       });
     }
 

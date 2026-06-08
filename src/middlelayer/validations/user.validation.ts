@@ -53,7 +53,7 @@ const optionalUserSearchQuerySchema = z.preprocess((value) => {
 
 export const userOnboardingSchema = z
   .object({
-    statusType: z
+    type: z
       .preprocess(
         (value) =>
           typeof value === 'string' ? value.trim().toLowerCase() : value,
@@ -113,7 +113,7 @@ const userPermissionMutationSchema = permissionSchema.extend({
 
 export const userModificationSchema = z
   .object({
-    statusType: z.preprocess(
+    type: z.preprocess(
       normalizeRequestType,
       z.enum(['update', 'active', 'inactive', 'archive']),
     ),
@@ -156,14 +156,14 @@ export const userModificationSchema = z
   .strict()
   .superRefine((value, context) => {
     if (
-      value.statusType === 'update' &&
+      value.type === 'update' &&
       !value.basicDetails &&
       (!value.permissions || value.permissions.length === 0)
     ) {
       context.addIssue({
         code: 'custom',
         message: 'At least one changed field or permission is required',
-        path: ['statusType'],
+        path: ['type'],
       });
     }
   });

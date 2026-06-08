@@ -318,7 +318,6 @@ export type UserHistoryPendingApprovalItem = UserHistoryBaseItem & {
   eligibleapprovers: UserHistoryAuditUser[];
   approvalSummary?: UserHistoryApprovalSummary | null;
   approvedBy?: UserHistoryApprovedByGroup[];
-  approvalFlow?: UserHistoryApprovalFlowItem[];
 };
 
 export type UserHistoryItem =
@@ -331,10 +330,16 @@ export type FetchUserHistoryResponse = {
   data: UserHistoryItem[];
 };
 
-export type UserHistoryInternalItem = UserHistoryItem & {
-  oldData?: unknown | null;
-  companyCode: string;
-};
+export type UserHistoryInternalItem =
+  | (UserHistoryActionItem & {
+      oldData?: unknown | null;
+      companyCode: string;
+    })
+  | (UserHistoryPendingApprovalItem & {
+      approvalFlow?: UserHistoryApprovalFlowItem[];
+      oldData?: unknown | null;
+      companyCode: string;
+    });
 
 export type FetchUserHistoryInternalSuccess = {
   message: 'User history fetched successfully!';

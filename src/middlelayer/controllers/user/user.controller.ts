@@ -253,7 +253,6 @@ export class UserController {
           ? { approvalSummary: item.approvalSummary }
           : {}),
         ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
-        ...(item.approvalFlow ? { approvalFlow: item.approvalFlow } : {}),
       };
     }
 
@@ -523,8 +522,8 @@ export class UserController {
   ) {
     try {
       const requestType =
-        typeof req.body?.statusType === 'string'
-          ? req.body.statusType.trim().toLowerCase()
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
           : 'initiate';
 
       if (requestType !== 'initiate') {
@@ -545,7 +544,7 @@ export class UserController {
           {
             initiatorId,
             companyId,
-            statusType: modification.statusType.toUpperCase(),
+            type: modification.type.toUpperCase(),
             targetEmail: modification.targetUserEmail,
             levelsHash: modification.levelsHash || null,
             remarks: modification.remarks,
@@ -734,15 +733,15 @@ export class UserController {
         status: createStatus,
       } = await internalPost<CreateUserOnboardingInternalResponse>(
         `${config.backendUrl}/internal/user/create`,
-        {
-          initiatorId,
-          companyId,
-          companyCode,
-          groupCode,
-          statusType: 'INITIATE',
-          levelsHash: levelsHash || null,
-          data: {
-            basicDetails,
+          {
+            initiatorId,
+            companyId,
+            companyCode,
+            groupCode,
+            type: 'INITIATE',
+            levelsHash: levelsHash || null,
+            data: {
+              basicDetails,
             permissions,
           },
           status: 'PENDING',
