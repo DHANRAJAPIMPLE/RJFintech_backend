@@ -122,6 +122,7 @@ export type UserListBasicDetails = {
   phone: string;
   designation: string | null;
   nodeName?: string | null;
+  nodePath?: string | null;
   createdAt?: string;
   employeeId?: string | null;
   reportingManagerName?: string | null;

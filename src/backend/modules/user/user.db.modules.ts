@@ -2303,7 +2303,12 @@ export class UserDbController {
         email: u.email,
         phone: u.phone,
         designation: mapping?.designation || null,
-        ...(!detail ? { nodeName: primary[0]?.nodeName || null } : {}),
+        ...(!detail
+          ? {
+              nodeName: primary[0]?.nodeName || null,
+              nodePath: primary[0]?.nodePath || null,
+            }
+          : {}),
         ...(detail
           ? {
               createdAt: u.createdAt,

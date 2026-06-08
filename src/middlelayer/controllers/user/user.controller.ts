@@ -105,6 +105,8 @@ export class UserController {
           ? {
               nodeName:
                 user.basicDetails.nodeName ?? primary[0]?.nodeName ?? null,
+              nodePath:
+                user.basicDetails.nodePath ?? primary[0]?.nodePath ?? null,
             }
           : {}),
         ...(detail && user.basicDetails.createdAt !== undefined
@@ -155,6 +157,8 @@ export class UserController {
           ? {
               nodeName:
                 user.basicDetails.nodeName ?? primary[0]?.nodeName ?? null,
+              nodePath:
+                user.basicDetails.nodePath ?? primary[0]?.nodePath ?? null,
             }
           : {}),
         ...(detail && user.basicDetails.createdAt !== undefined
