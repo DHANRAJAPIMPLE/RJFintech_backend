@@ -259,11 +259,7 @@ export class UserController {
 
     // Include approvedBy when present and non-empty
     if (item.approvedBy && item.approvedBy.length > 0) {
-      result.approvedBy = item.approvedBy.map((group) => ({
-        level: group.level,
-        rule: group.rule,
-        approvedBy: group.approvedBy,
-      }));
+      result.approvedBy = item.approvedBy;
     }
 
     // Include eligibleapprovers when present
