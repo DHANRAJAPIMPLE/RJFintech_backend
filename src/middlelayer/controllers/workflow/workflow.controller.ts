@@ -103,6 +103,10 @@ export class WorkflowController {
     options: { detail?: boolean } = {},
   ): WorkflowPendingItem {
     const detail = options.detail === true;
+    const nextData = workflow.newData as
+      | { module?: string | null; subModule?: string | null }
+      | null
+      | undefined;
     return {
       id: workflow.id,
       workflowId: workflow.workflowId ?? null,
@@ -110,6 +114,16 @@ export class WorkflowController {
       impact: workflow.impact ?? null,
       status: workflow.status,
       alias: workflow.alias,
+      module:
+        workflow.module ??
+        workflow.data?.module ??
+        nextData?.module ??
+        null,
+      subModule:
+        workflow.subModule ??
+        workflow.data?.subModule ??
+        nextData?.subModule ??
+        null,
       nodeType: workflow.nodeType,
       nodeName: workflow.nodeName,
       workflowName: workflow.workflowName,

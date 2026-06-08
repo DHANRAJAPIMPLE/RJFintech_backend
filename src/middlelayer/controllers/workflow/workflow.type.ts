@@ -119,6 +119,8 @@ export type WorkflowPendingItem = {
   newData?: unknown | null;
   status: 'PENDING';
   alias: string;
+  module?: WorkflowModule | null;
+  subModule?: WorkflowSubModule | null;
   approvalRemark?: string | null;
   levelsHash?: string;
   createdAt?: string;

@@ -630,6 +630,21 @@ export class WorkflowDbController {
   }
 
   private static formatPendingWorkflowSummary(row: any) {
+    const rowData = row?.data || {};
+    const rowTarget = rowData?.target || {};
+    const module =
+      row?.module ??
+      row?.newData?.module ??
+      rowData?.module ??
+      rowTarget?.module ??
+      null;
+    const subModule =
+      row?.subModule ??
+      row?.newData?.subModule ??
+      rowData?.subModule ??
+      rowTarget?.subModule ??
+      null;
+
     return {
       id: row.id,
       workflowId: row.workflowId ?? null,
@@ -637,6 +652,8 @@ export class WorkflowDbController {
       impact: row.impact ?? null,
       status: row.status,
       alias: row.alias,
+      module,
+      subModule,
       nodeType: row.nodeType ?? null,
       nodeName: row.nodeName ?? null,
       workflowName: row.workflowName,
@@ -3426,24 +3443,54 @@ export class WorkflowDbController {
           }
 
           // ── All levels approved — proceed with production workflow creation ──
-          const reqData = request.data as any;
-          const {
-            name,
-            module: reqModule,
-            subModule: reqSubModule,
-            nodePath,
-            levels,
-          } = reqData;
+          const reqData = (request.data as any) || {};
+          const reqTarget = reqData?.target || {};
+          const name =
+            reqData?.name ||
+            reqTarget?.name ||
+            request.alias ||
+            'Workflow';
+          const reqModule =
+            reqData?.module || reqTarget?.module || request.module;
+          const reqSubModule =
+            reqData?.subModule || reqTarget?.subModule || request.subModule;
+          const nodePath = reqData?.nodePath || reqTarget?.nodePath;
+          const levels = reqData?.levels;
           const workflowType = WorkflowDbController.normalizeWorkflowType(
             reqData?.workflowType,
           );
 
+          if (!reqModule || !reqSubModule) {
+            throw new AppError(
+              'Workflow request is missing module or sub-module details',
+              400,
+            );
+          }
+
           // 1. Resolve the organizational node from the path
-          const nodeRecord = await tx.orgStructure.findUnique({
-            where: { nodePath },
+          const nodeRecord = await tx.orgStructure.findFirst({
+            where: {
+              companyId: request.companyId,
+              ...(request.nodeId
+                ? { id: request.nodeId }
+                : nodePath
+                  ? { nodePath }
+                  : {}),
+            },
           });
 
-          if (!nodeRecord) throw new Error(`Node path '${nodePath}' not found`);
+          if (!nodeRecord) {
+            if (!nodePath && !request.nodeId) {
+              throw new AppError(
+                'Workflow request is missing target node information',
+                400,
+              );
+            }
+            throw new AppError(
+              `Node path '${nodePath || request.nodeId}' not found`,
+              404,
+            );
+          }
 
           // Fetch the corresponding roleCode for the module and subModule
           const roleRecord = await tx.roles.findFirst({
@@ -5635,6 +5682,8 @@ export class WorkflowDbController {
         nodeId: true,
         workflowId: true,
         approvalWorkflowId: true,
+        module: true,
+        subModule: true,
         data: true,
         oldData: true,
         type: true,
@@ -6090,6 +6139,20 @@ export class WorkflowDbController {
           : null;
         const associatedWorkflow = targetWorkflow || linkedWorkflow || null;
         const requestData = (req.data as any) || {};
+        const targetModule = target?.module || null;
+        const targetSubModule = target?.subModule || null;
+        const rowModule =
+          requestData?.module ||
+          targetModule ||
+          associatedWorkflow?.module ||
+          req.module ||
+          null;
+        const rowSubModule =
+          requestData?.subModule ||
+          targetSubModule ||
+          associatedWorkflow?.subModule ||
+          req.subModule ||
+          null;
         const fallbackAlias = requestData?.levels
           ? WorkflowDbController.buildAlias(requestData.levels)
           : null;
@@ -6155,6 +6218,8 @@ export class WorkflowDbController {
           newData: newDataObj,
           initiator,
           initiatorTimestamp,
+          module: rowModule,
+          subModule: rowSubModule,
           nodeType,
           nodeName: node?.nodeName || (req.data as any)?.nodeName || null,
           nodePath: node?.nodePath || (req.data as any)?.nodePath || null,

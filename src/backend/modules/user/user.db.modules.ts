@@ -5957,6 +5957,7 @@ export class UserDbController {
           user: eventUser,
           changeCount,
           approvalLevel,
+          _reqId: h.reqId || null,
         };
 
         // APPROVED: include level, approvalSummary, approvedBy
@@ -5983,9 +5984,11 @@ export class UserDbController {
         return result;
       });
 
-      // 4. Generate synthetic APPROVAL_PROGRESS and pending events per reqId
+      // 4. Generate synthetic events and track which reqIds need APPROVED filtering
       const syntheticEvents: any[] = [];
       const processedReqIds = new Set<string>();
+      // reqIds whose individual APPROVED events should be filtered from formattedHistory
+      const suppressApprovedForReqIds = new Set<string>();
 
       for (const h of history) {
         if (!h.reqId || processedReqIds.has(h.reqId)) continue;
@@ -6006,6 +6009,8 @@ export class UserDbController {
 
         const isPending = approvalSummary.currentStatus === 'PENDING';
         const isRejected = approvalSummary.currentStatus === 'REJECTED';
+        const isApproved = approvalSummary.currentStatus === 'APPROVED';
+        const isMultiLevel = approvalSummary.totalLevels > 1;
 
         // Get the latest history event for this reqId to derive timestamps
         const latestEvent = history
@@ -6015,6 +6020,52 @@ export class UserDbController {
             const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
             return bTime - aTime;
           })[0];
+
+        // PENDING: suppress individual APPROVED events, they go in L{n} Pending Approval
+        if (isPending) {
+          suppressApprovedForReqIds.add(h.reqId);
+        }
+
+        // REJECTED: suppress individual APPROVED events, they go in APPROVAL_PROGRESS
+        if (isRejected) {
+          suppressApprovedForReqIds.add(h.reqId);
+        }
+
+        // APPROVED multi-level: suppress individual APPROVED events,
+        // create consolidated APPROVED event
+        if (isApproved && isMultiLevel) {
+          suppressApprovedForReqIds.add(h.reqId);
+
+          syntheticEvents.push({
+            id: h.id,
+            email: h.email,
+            type: UserDbController.resolveUserHistoryRequestType(
+              requestSnapshotMap.get(h.reqId),
+            ),
+            impact: requestSnapshotMap.get(h.reqId)?.impact || null,
+            companyCode: h.company.companyCode,
+            oldData: null,
+            newData: null,
+            event: 'APPROVED',
+            levelCount: `A${approvalSummary.totalLevels}`,
+            createdAt: null,
+            remarks: null,
+            user: HistoryUserUtil.formatAuditUser(
+              latestEvent?.user || h.user,
+              latestEvent?.eventUserId || h.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            changeCount,
+            approvalLevel: null,
+            approvalSummary: {
+              currentStatus: 'APPROVED',
+              totalLevels: approvalSummary.totalLevels,
+              completedLevels: approvalSummary.completedLevels,
+            },
+            approvedBy,
+          });
+        }
 
         // APPROVAL_PROGRESS: ONLY for REJECTED requests
         // Shows partial approval progress before the rejection happened
@@ -6059,7 +6110,7 @@ export class UserDbController {
           });
         }
 
-        // Generate L{n} Pending Approval event for pending requests
+        // L{n} Pending Approval: for PENDING requests
         if (isPending && (approvalSummary as any).currentPendingLevel) {
           const pendingLevel = (approvalSummary as any).currentPendingLevel;
           const eligibleApprovers = buildEligibleApprovers(h.reqId);
@@ -6099,7 +6150,19 @@ export class UserDbController {
         }
       }
 
-      // Sort LIFO: null createdAt (pending) first, then newest to oldest
+      // 5. Filter out individual APPROVED events for reqIds that have synthetic events
+      const filteredHistory = formattedHistory.filter((item: any) => {
+        if (
+          item.event === 'APPROVED' &&
+          item._reqId &&
+          suppressApprovedForReqIds.has(item._reqId)
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      // Sort LIFO: null createdAt (pending/consolidated) first, then newest to oldest
       const eventPriority = (event: string) => {
         if (event && event.includes('Pending Approval')) return 0;
         if (event === 'APPROVAL_PROGRESS') return 1;
@@ -6108,7 +6171,7 @@ export class UserDbController {
         return 4;
       };
 
-      const resultList = [...formattedHistory, ...syntheticEvents].sort((left: any, right: any) => {
+      const resultList = [...filteredHistory, ...syntheticEvents].sort((left: any, right: any) => {
         // null createdAt always comes first (top)
         if (!left.createdAt && right.createdAt) return -1;
         if (left.createdAt && !right.createdAt) return 1;
@@ -6128,10 +6191,13 @@ export class UserDbController {
         return String(right.id).localeCompare(String(left.id));
       });
 
+      // Remove internal _reqId before sending response
+      const cleanedResultList = resultList.map(({ _reqId, ...rest }: any) => rest);
+
       res.status(200).json({
         message: 'User history fetched successfully!',
         code: 200,
-        data: resultList,
+        data: cleanedResultList,
       });
     } catch (error) {
       next(error);
