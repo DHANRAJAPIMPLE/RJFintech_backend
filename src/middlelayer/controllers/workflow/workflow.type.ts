@@ -203,6 +203,10 @@ export type WorkflowHistoryAuditUser = {
   email: string;
 };
 
+export type WorkflowHistoryApprovedAuditUser = WorkflowHistoryAuditUser & {
+  approvedAt: string;
+};
+
 export type WorkflowHistoryApprovalSummary = {
   currentStatus: string;
   totalLevels: number;
@@ -212,14 +216,14 @@ export type WorkflowHistoryApprovalSummary = {
 export type WorkflowHistoryApprovedByGroup = {
   level: number;
   rule: 'AND' | null;
-  approvedBy: WorkflowHistoryAuditUser[];
+  approvedBy: WorkflowHistoryApprovedAuditUser[];
 };
 
 export type WorkflowHistoryApprovalFlowItem = {
   level: number;
   rule: 'AND' | null;
   status: string;
-  approvedBy: WorkflowHistoryAuditUser[];
+  approvedBy: WorkflowHistoryApprovedAuditUser[];
   approvedAt: string | null;
   eligibleapprovers: WorkflowHistoryAuditUser[];
 };

@@ -5720,6 +5720,14 @@ export class UserDbController {
         Number(level?.mandatoryCount || 1) > 1 ? 'AND' : null;
       const toUserSummary = (user: any) =>
         user ? { name: user.name, email: user.email } : null;
+      const toApprovedUserSummary = (event: any) =>
+        event?.user
+          ? {
+              name: event.user.name,
+              email: event.user.email,
+              approvedAt: event.createdAt,
+            }
+          : null;
       const getApprovedEvents = (reqId: string, level: number) =>
         approvedEventsByReqLevel.get(`${reqId}:${level}`) || [];
       const buildApprovalSummary = (reqId: string) => {
@@ -5756,7 +5764,7 @@ export class UserDbController {
             level: level.level,
             rule: getLevelRule(level),
             approvedBy: getApprovedEvents(reqId, level.level)
-              .map((event) => toUserSummary(event.user))
+              .map((event) => toApprovedUserSummary(event))
               .filter(Boolean),
           }));
       const buildApprovalFlow = (reqId: string) =>
@@ -5771,7 +5779,7 @@ export class UserDbController {
             rule: getLevelRule(level),
             status: level.status,
             approvedBy: approvedEvents
-              .map((event) => toUserSummary(event.user))
+              .map((event) => toApprovedUserSummary(event))
               .filter(Boolean),
             approvedAt,
             eligibleapprovers: (level.approversList as string[])

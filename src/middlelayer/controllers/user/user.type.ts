@@ -256,6 +256,10 @@ export type UserHistoryAuditUser = {
   email: string;
 };
 
+export type UserHistoryApprovedAuditUser = UserHistoryAuditUser & {
+  approvedAt: string;
+};
+
 export type UserHistoryApprovalSummary = {
   currentStatus: string;
   totalLevels: number;
@@ -265,14 +269,14 @@ export type UserHistoryApprovalSummary = {
 export type UserHistoryApprovedByGroup = {
   level: number;
   rule: 'AND' | null;
-  approvedBy: UserHistoryAuditUser[];
+  approvedBy: UserHistoryApprovedAuditUser[];
 };
 
 export type UserHistoryApprovalFlowItem = {
   level: number;
   rule: 'AND' | null;
   status: string;
-  approvedBy: UserHistoryAuditUser[];
+  approvedBy: UserHistoryApprovedAuditUser[];
   approvedAt: string | null;
   eligibleapprovers: UserHistoryAuditUser[];
 };
