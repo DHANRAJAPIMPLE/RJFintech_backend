@@ -140,7 +140,7 @@ export const companyCodeOnly = z
 
 export const companyListSchema = z
   .object({
-    type: requiredActivePendingTypeSchema,
+    statusType: requiredActivePendingTypeSchema,
     ...cursorPaginationFields,
   })
   .strict();

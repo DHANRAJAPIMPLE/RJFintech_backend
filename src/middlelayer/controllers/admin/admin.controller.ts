@@ -65,7 +65,7 @@ export class AdminController {
 
       const backendData = data as FetchAdminGroupsInternalSuccess;
       const publicData =
-        body.type === 'active'
+        body.statusType === 'active'
           ? (backendData.data as AdminBackendCompany[]).map(
               (company): AdminCompanyGroup => {
                 const group = company.companyMappings?.[0]?.group;

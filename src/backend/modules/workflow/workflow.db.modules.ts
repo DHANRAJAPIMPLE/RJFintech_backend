@@ -2567,18 +2567,23 @@ export class WorkflowDbController {
     client: any,
     requestId: string,
     companyId: string,
+    approverId?: string | null,
   ) {
-    const rows = await client.workflowApprover.findMany({
-      where: { reqId: requestId, reqTable: 'workflow_req' },
-      select: { approversList: true },
-    });
-    const approverIds = Array.from(
-      new Set(
-        rows.flatMap((row: any) =>
-          Array.isArray(row.approversList) ? row.approversList : [],
-        ),
-      ),
-    ) as string[];
+    const approverIds =
+      typeof approverId === 'string' && approverId.trim().length > 0
+        ? [approverId]
+        : Array.from(
+            new Set(
+              (
+                await client.workflowApprover.findMany({
+                  where: { reqId: requestId, reqTable: 'workflow_req' },
+                  select: { approversList: true },
+                })
+              ).flatMap((row: any) =>
+                Array.isArray(row.approversList) ? row.approversList : [],
+              ),
+            ),
+          );
 
     if (approverIds.length === 0) return;
 
@@ -2619,6 +2624,7 @@ export class WorkflowDbController {
     tx: any,
     request: any,
     remark?: string | null,
+    approverId?: string | null,
   ) {
     const requestData = request.data as any;
     const requestedTarget = requestData.target;
@@ -2705,6 +2711,7 @@ export class WorkflowDbController {
         tx,
         request.id,
         request.companyId,
+        approverId,
       ),
       ...familyWorkflows.map((workflow: any) =>
         WorkflowDbController.assertWorkflowNotUsedInPendingApproval(
@@ -3388,6 +3395,7 @@ export class WorkflowDbController {
                 tx,
                 request,
                 remark,
+                approverId,
               );
             return { ...updated, status: 'APPROVED' };
           }

@@ -65,7 +65,14 @@ export class CompanyDbController {
     try {
       const viewerUserId =
         typeof req.body?.userId === 'string' ? req.body.userId : null;
-      const type = req.body?.type === 'pending' ? 'pending' : 'active';
+      const rawStatusType =
+        typeof req.body?.statusType === 'string'
+          ? req.body.statusType.trim().toLowerCase()
+          : '';
+      if (rawStatusType !== 'active' && rawStatusType !== 'pending') {
+        throw new AppError('Invalid statusType', 400);
+      }
+      const statusType = rawStatusType as 'active' | 'pending';
       const query =
         typeof req.body?.query === 'string' && req.body.query.trim()
           ? req.body.query.trim()
@@ -141,7 +148,8 @@ export class CompanyDbController {
             );
           })
         : null;
-      const listWhere = type === 'active' ? activeWhere : pendingWhere;
+      const listWhere =
+        statusType === 'active' ? activeWhere : pendingWhere;
       const pageWhere = pagination.cursor
         ? appendCursorWhere(
             listWhere as any,
@@ -173,7 +181,7 @@ export class CompanyDbController {
           filteredPendingRows
             ? Promise.resolve(filteredPendingRows.length)
             : prisma.companyOnboarding.count({ where: pendingWhere }),
-          type === 'active'
+          statusType === 'active'
             ? prisma.company.findMany({
                 where: pageWhere as any,
                 include: companyInclude,
@@ -192,7 +200,7 @@ export class CompanyDbController {
                   take: pagination.limit + 1,
                 }),
           newWhere
-            ? type === 'active'
+            ? statusType === 'active'
               ? prisma.company.count({ where: newWhere as any })
               : filteredPendingRows && pagination.topCursor
                 ? Promise.resolve(
@@ -216,7 +224,7 @@ export class CompanyDbController {
           'newer',
         );
         const newerCount =
-          type === 'active'
+          statusType === 'active'
             ? await prisma.company.count({ where: newerWhere as any })
             : filteredPendingRows
               ? filteredPendingRows.filter((onboarding) =>
@@ -228,7 +236,7 @@ export class CompanyDbController {
         pageData.pageInfo.page = Math.floor(newerCount / pagination.limit) + 1;
       }
 
-      if (type === 'active') {
+      if (statusType === 'active') {
         const companies = pageData.pageRows.map((company: any) => {
           const signatories = company.userAccesses.map((userAccess: any) => {
             const mapping = userAccess.user.userMappings.find(
