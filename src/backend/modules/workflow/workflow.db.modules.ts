@@ -1260,6 +1260,29 @@ export class WorkflowDbController {
     };
   }
 
+  private static buildPendingWorkflowChangeSet(
+    request: any,
+    associatedWorkflow?: any,
+  ) {
+    const snapshots = WorkflowDbController.resolveWorkflowHistoryRequestSnapshots(
+      request,
+      associatedWorkflow,
+    );
+    const detailData = WorkflowDbController.buildWorkflowHistoryDetailDiff(
+      snapshots.oldData,
+      snapshots.newData,
+      request?.type,
+    );
+
+    return {
+      oldData:
+        detailData.oldData ??
+        request?.oldData ??
+        ((request?.data as any)?.oldData ?? null),
+      newData: detailData.newData,
+    };
+  }
+
   private static buildWorkflowRequestSnapshotFallback(
     request: any,
     relatedWorkflow?: any,
@@ -5700,22 +5723,16 @@ export class WorkflowDbController {
       delete rest.workflowHistories;
       delete rest.approvalWorkflowId;
 
-      const newData =
-        request.type === 'INITIATE'
-          ? null
-          : request.data
-            ? { ...(request.data as any) }
-            : null;
-      if (newData) {
-        delete newData.target;
-        delete newData.subModule;
-      }
+      const changeSet = WorkflowDbController.buildPendingWorkflowChangeSet(
+        request,
+        associatedWorkflow || undefined,
+      );
 
       return {
         ...rest,
         impact: request.impact ?? null,
-        oldData: request.oldData || requestData?.oldData || null,
-        newData,
+        oldData: changeSet.oldData,
+        newData: changeSet.newData,
         initiator,
         initiatorTimestamp,
         nodeType: node?.nodeType || null,
@@ -6459,22 +6476,16 @@ export class WorkflowDbController {
         delete rest.workflowHistories;
         delete rest.approvalWorkflowId;
 
-        const newDataObj =
-          req.type === 'INITIATE'
-            ? null
-            : req.data
-              ? { ...(req.data as any) }
-              : null;
-        if (newDataObj) {
-          delete newDataObj.target;
-          delete newDataObj.subModule;
-        }
+        const changeSet = WorkflowDbController.buildPendingWorkflowChangeSet(
+          req,
+          associatedWorkflow || undefined,
+        );
 
         return {
           ...rest,
           impact: req.impact ?? null,
-          oldData: req.oldData || ((req.data as any)?.oldData ?? null),
-          newData: newDataObj,
+          oldData: changeSet.oldData,
+          newData: changeSet.newData,
           initiator,
           initiatorTimestamp,
           module: rowModule,

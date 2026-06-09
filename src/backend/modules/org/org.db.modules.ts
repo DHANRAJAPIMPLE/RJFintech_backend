@@ -1254,6 +1254,47 @@ export class OrgStructureDbController {
     }
   }
 
+  private static async assertNoPendingInitiationConflict(
+    companyId: string,
+    node: { nodePath: string; nodeName?: string },
+  ) {
+    if (!node.nodePath) return;
+
+    const pendingRequests = await prisma.orgStructureReq.findMany({
+      where: { companyId, status: 'PENDING' },
+      include: {
+        orgHistories: { where: { event: 'INITIATE' }, include: { user: true } },
+      },
+    });
+    const effectivePendingIds =
+      await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+        'org_structure_req',
+        pendingRequests.map((request) => request.id),
+      );
+
+    for (const request of pendingRequests) {
+      if (!effectivePendingIds.has(request.id)) continue;
+
+      const data = request.data as any;
+      const pendingNodePath = OrgStructureDbController.resolveRequestedNodePath(
+        data,
+        OrgStructureDbController.extractOrgTargetPath(data),
+      );
+
+      if (pendingNodePath !== node.nodePath) continue;
+
+      const initiator = request.orgHistories?.[0]?.user;
+      const initiatedAt =
+        request.orgHistories?.[0]?.createdAt || request.createdAt;
+      const pendingTitle = data?.newNodeName || data?.nodeName || pendingNodePath;
+
+      throw new AppError(
+        `Cannot initiate organization '${node.nodeName || node.nodePath}'. A pending request for the same organization already exists as '${pendingTitle}', initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
+        400,
+      );
+    }
+  }
+
   private static async assertSelectedApprovalWorkflowNotPendingModification(
     companyId: string,
     levelsHash?: string | null,
@@ -2503,6 +2544,15 @@ export class OrgStructureDbController {
         const reqData = rest.data || {};
         const requestedNodePath =
           OrgStructureDbController.resolveRequestedNodePath(reqData);
+        if (requestedNodePath) {
+          await OrgStructureDbController.assertNoPendingInitiationConflict(
+            resolvedCompanyId,
+            {
+              nodePath: requestedNodePath,
+              nodeName: reqData?.newNodeName,
+            },
+          );
+        }
         const propagatedAccessCount =
           await OrgStructureDbController.countPropagatedUserAccesses(
             tx,
@@ -2662,6 +2712,21 @@ export class OrgStructureDbController {
             message: 'Parent node not found in organization structure',
           });
         }
+      }
+
+      const requestedNodePath = OrgStructureDbController.resolveRequestedNodePath({
+        parentNode,
+        newNodeName,
+        nodePath: req.body?.nodePath,
+      });
+      if (requestedNodePath) {
+        await OrgStructureDbController.assertNoPendingInitiationConflict(
+          resolvedCompanyId,
+          {
+            nodePath: requestedNodePath,
+            nodeName: newNodeName,
+          },
+        );
       }
 
       res.status(200).json({ success: true });

@@ -109,6 +109,7 @@ export class AdminController {
                   address: company.address || '',
                   initiatorName: onboarding.initiator?.name || null,
                   initiatorEmail: onboarding.initiator?.email || null,
+                  initiator: onboarding.initiator || null,
                   initiatedDate: onboarding.createdAt,
                   signatories: signatories.map((signatory) => ({
                     name: signatory.name || '',
@@ -468,7 +469,16 @@ export class AdminController {
 
       const response: FetchCompanyDetailsResponse = {
         message: 'Company details fetched successfully!',
-        data: data as FetchCompanyDetailsResponse['data'],
+        data: {
+          groupDetails: (data as FetchCompanyDetailsResponse['data'])
+            .groupDetails,
+          companyDetails: (
+            (data as FetchCompanyDetailsResponse['data']).companyDetails || []
+          ).map((company) => ({
+            ...company,
+            initiator: company.initiator || null,
+          })),
+        },
       };
 
       res.status(200).json(response);

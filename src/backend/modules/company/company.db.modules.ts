@@ -34,6 +34,55 @@ export class CompanyDbController {
     return mapping?.companyId || null;
   }
 
+  private static async getPendingInitiatorByCompanyCodes(
+    companyCodes: string[],
+    viewerUserId?: string | null,
+  ) {
+    const uniqueCompanyCodes = Array.from(
+      new Set(
+        companyCodes.filter(
+          (companyCode): companyCode is string =>
+            typeof companyCode === 'string' && companyCode.trim().length > 0,
+        ),
+      ),
+    );
+    if (uniqueCompanyCodes.length === 0) {
+      return new Map<string, unknown>();
+    }
+
+    const histories = await prisma.companyHistory.findMany({
+      where: {
+        companyCode: { in: uniqueCompanyCodes },
+        event: 'INITIATE',
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+      viewerUserId,
+      ...histories.map((history) => history.eventUserId),
+    ]);
+    const initiatorByCompanyCode = new Map<string, unknown>();
+
+    histories.forEach((history) => {
+      if (!initiatorByCompanyCode.has(history.companyCode)) {
+        initiatorByCompanyCode.set(
+          history.companyCode,
+          HistoryUserUtil.formatAuditUser(
+            history.user,
+            history.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+        );
+      }
+    });
+
+    return initiatorByCompanyCode;
+  }
+
   /**
    * Fetches all companies that a specific user is mapped to.
    */
@@ -267,34 +316,11 @@ export class CompanyDbController {
       const pendingCodes = pageData.pageRows.map(
         (onboarding: any) => onboarding.companyCode,
       );
-      const histories = await prisma.companyHistory.findMany({
-        where: {
-          companyCode: { in: pendingCodes },
-          event: 'INITIATE',
-        },
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
-        viewerUserId,
-        ...histories.map((history) => history.eventUserId),
-      ]);
-      const initiatorByCompanyCode = new Map<string, unknown>();
-      histories.forEach((history) => {
-        if (!initiatorByCompanyCode.has(history.companyCode)) {
-          initiatorByCompanyCode.set(
-            history.companyCode,
-            HistoryUserUtil.formatAuditUser(
-              history.user,
-              history.eventUserId,
-              saasAdminUserIds,
-              viewerUserId,
-            ),
-          );
-        }
-      });
+      const initiatorByCompanyCode =
+        await CompanyDbController.getPendingInitiatorByCompanyCodes(
+          pendingCodes,
+          viewerUserId,
+        );
       const pending = pageData.pageRows.map((onboarding: any) => ({
         ...onboarding,
         initiator: initiatorByCompanyCode.get(onboarding.companyCode) || null,
@@ -341,7 +367,7 @@ export class CompanyDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode, userId: viewerUserId } = req.body;
       if (!companyCode) {
         throw new AppError('companyCode is required', 400);
       }
@@ -412,6 +438,11 @@ export class CompanyDbController {
       const onboardingData = (onboarding.data as any) || {};
       const group = onboardingData.group || {};
       const pendingCompany = onboardingData.company || {};
+      const initiatorByCompanyCode =
+        await CompanyDbController.getPendingInitiatorByCompanyCodes(
+          [onboarding.companyCode],
+          viewerUserId,
+        );
       const signatories = Array.isArray(onboardingData.signatories)
         ? onboardingData.signatories.map((signatory: any) => ({
             name: signatory.name || '',
@@ -438,6 +469,8 @@ export class CompanyDbController {
             ieCode: pendingCompany.ieCode || '',
             registration: pendingCompany.registeredAt || '',
             address: pendingCompany.address || '',
+            initiator:
+              initiatorByCompanyCode.get(onboarding.companyCode) || null,
             signatories,
           },
         ],

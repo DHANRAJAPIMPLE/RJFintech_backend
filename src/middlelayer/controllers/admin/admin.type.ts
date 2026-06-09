@@ -33,6 +33,7 @@ export type AdminPendingCompanyDetails = {
   address: string;
   initiatorName: string | null;
   initiatorEmail: string | null;
+  initiator?: AdminAuditUser | null;
   initiatedDate: string;
   signatories: AdminCompanySignatory[];
 };
@@ -79,6 +80,7 @@ export type FetchCompanyDetailsResponse = {
       ieCode: string;
       registration: string;
       address: string;
+      initiator?: AdminAuditUser | null;
       signatories: AdminCompanySignatory[];
     }>;
   };
@@ -157,6 +159,7 @@ export type AdminBackendCompanyDetails = {
     ieCode: string;
     registration: string;
     address: string;
+    initiator?: AdminAuditUser | null;
     signatories: AdminCompanySignatory[];
   }>;
 };
