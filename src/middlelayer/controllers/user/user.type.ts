@@ -123,6 +123,7 @@ export type UserListBasicDetails = {
   designation: string | null;
   nodeName?: string | null;
   nodePath?: string | null;
+  nodeType?: UserCompanyNodeType | null;
   createdAt?: string;
   employeeId?: string | null;
   reportingManagerName?: string | null;

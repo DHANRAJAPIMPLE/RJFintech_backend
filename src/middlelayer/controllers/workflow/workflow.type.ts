@@ -210,9 +210,11 @@ export type WorkflowHistoryApprovedAuditUser = WorkflowHistoryAuditUser & {
 };
 
 export type WorkflowHistoryApprovalSummary = {
-  currentStatus: string;
+  currentStatus: string | null;
   totalLevels: number;
   completedLevels: number;
+  rejectedAtLevel?: number | null;
+  currentPendingLevel?: number | null;
 };
 
 export type WorkflowHistoryApprovedByGroup = {
@@ -248,6 +250,7 @@ export type WorkflowHistoryEvent =
   | 'INITIATE'
   | 'APPROVED'
   | 'REJECTED'
+  | 'APPROVAL_PROGRESS'
   | 'MODIFY'
   | 'ACTIVE'
   | 'INACTIVE'
@@ -267,7 +270,7 @@ export type WorkflowHistoryBaseItem = {
 
 export type WorkflowHistoryActionItem = WorkflowHistoryBaseItem & {
   event: WorkflowHistoryEvent;
-  level: number | null;
+  level?: number | null;
   createdAt: string;
   remarks: string | null;
   linkedWorkflow?: WorkflowHistoryLinkedWorkflow | null;
@@ -282,7 +285,6 @@ export type WorkflowHistoryPendingApprovalItem = WorkflowHistoryBaseItem & {
   eligibleapprovers: WorkflowHistoryAuditUser[];
   approvalSummary?: WorkflowHistoryApprovalSummary | null;
   approvedBy?: WorkflowHistoryApprovedByGroup[];
-  approvalFlow?: WorkflowHistoryApprovalFlowItem[];
 };
 
 export type WorkflowHistoryItem =

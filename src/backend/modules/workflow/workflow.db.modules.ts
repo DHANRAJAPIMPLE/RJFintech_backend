@@ -130,6 +130,42 @@ export class WorkflowDbController {
     return 'INITIATE';
   }
 
+  private static getEmptyWorkflowHistoryApprovalSummary() {
+    return {
+      currentStatus: null,
+      totalLevels: 0,
+      completedLevels: 0,
+      rejectedAtLevel: null,
+      currentPendingLevel: null,
+    };
+  }
+
+  private static getWorkflowHistoryLevelCount(
+    displayEvent: string,
+    options: {
+      approvalLevel?: number | null;
+      isChangeRequestStart?: boolean;
+      modificationSequence?: number | null;
+    } = {},
+  ) {
+    if (options.isChangeRequestStart) {
+      return `M${options.modificationSequence || 1}`;
+    }
+
+    if (displayEvent === 'INITIATE') return 'I';
+    if (displayEvent === 'APPROVED' && options.approvalLevel) {
+      return `A${options.approvalLevel}`;
+    }
+    if (displayEvent === 'REJECTED' && options.approvalLevel) {
+      return `R${options.approvalLevel}`;
+    }
+    if (displayEvent === 'ACTIVE') return 'AC';
+    if (displayEvent === 'INACTIVE') return 'IN';
+    if (displayEvent === 'ARCHIVE') return 'AR';
+
+    return null;
+  }
+
   private static resolveWorkflowHistoryRequestType(
     request:
       | {
@@ -2544,6 +2580,11 @@ export class WorkflowDbController {
         'initiated',
         newData.name,
       );
+    const initiatorReportingManagerUserIds =
+      await NotificationService.getReportingManagerUserIds(
+        companyId,
+        initiatorId,
+      );
     await NotificationService.createRequestNotification({
       companyId,
       type: WorkflowDbController.getWorkflowNotificationType(type, 'PENDING'),
@@ -2555,6 +2596,7 @@ export class WorkflowDbController {
       createdBy: initiatorId,
       recipientUserIds: NotificationService.mergeRecipientUserIds(
         notificationRecipients,
+        initiatorReportingManagerUserIds,
         await NotificationService.getCorpAdminUserIds(companyId),
       ),
       includeCreatedBy: true,
@@ -3141,6 +3183,11 @@ export class WorkflowDbController {
         return request;
       });
 
+      const initiatorReportingManagerUserIds =
+        await NotificationService.getReportingManagerUserIds(
+          resolvedCompanyId,
+          initiatorId,
+        );
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
         type: 'INITIATE',
@@ -3150,6 +3197,7 @@ export class WorkflowDbController {
         createdBy: initiatorId,
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipients,
+          initiatorReportingManagerUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
         includeCreatedBy: true,
@@ -3631,6 +3679,12 @@ export class WorkflowDbController {
 
       const requestInitiatorId =
         await NotificationService.getRequestInitiatorId(id, 'workflow_req');
+      const requestInitiatorReportingManagerUserIds =
+        await NotificationService.getRequestInitiatorReportingManagerIds(
+          request.companyId,
+          id,
+          'workflow_req',
+        );
       const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
         request.companyId,
       );
@@ -3638,6 +3692,7 @@ export class WorkflowDbController {
         NotificationService.mergeRecipientUserIds(
           notificationRecipients,
           requestInitiatorId,
+          requestInitiatorReportingManagerUserIds,
         );
       const workflowReferenceName =
         (request.data as any)?.name || request.alias || request.id;
@@ -4233,6 +4288,10 @@ export class WorkflowDbController {
         ]),
       );
       const approvedEventsByReqLevel = new Map<string, any[]>();
+      const rejectedEventByReqId = new Map<
+        string,
+        { level: number | null; createdAt: Date | string | null }
+      >();
       histories.forEach((h) => {
         if (h.workflowReqId && h.event === 'APPROVED' && h.level) {
           const key = `${h.workflowReqId}:${h.level}`;
@@ -4243,88 +4302,135 @@ export class WorkflowDbController {
           });
           approvedEventsByReqLevel.set(key, existing);
         }
+        if (h.workflowReqId && h.event === 'REJECTED') {
+          const existing = rejectedEventByReqId.get(h.workflowReqId);
+          const currentTime = h.createdAt ? new Date(h.createdAt).getTime() : 0;
+          const existingTime = existing?.createdAt
+            ? new Date(existing.createdAt).getTime()
+            : -1;
+          if (!existing || currentTime >= existingTime) {
+            rejectedEventByReqId.set(h.workflowReqId, {
+              level: h.level ?? null,
+              createdAt: h.createdAt,
+            });
+          }
+        }
       });
       const getLevelRule = (level: any) =>
         Number(level?.mandatoryCount || 1) > 1 ? 'AND' : null;
-      const toUserSummary = (user: any) =>
-        user ? { name: user.name, email: user.email } : null;
-      const toApprovedUserSummary = (event: any) =>
+      const toApprovedUserSummary = (
+        event: any,
+        level: number,
+        nameKey = 'name',
+      ) =>
         event?.user
           ? {
-              name: event.user.name,
+              levelCount: `A${level}`,
+              [nameKey]: event.user.name,
               email: event.user.email,
               approvedAt: event.createdAt,
             }
           : null;
       const getApprovedEvents = (reqId: string, level: number) =>
-        approvedEventsByReqLevel.get(`${reqId}:${level}`) || [];
+        (approvedEventsByReqLevel.get(`${reqId}:${level}`) || []).sort(
+          (left: any, right: any) => {
+            const leftTime = left.createdAt
+              ? new Date(left.createdAt).getTime()
+              : 0;
+            const rightTime = right.createdAt
+              ? new Date(right.createdAt).getTime()
+              : 0;
+            return rightTime - leftTime;
+          },
+        );
+      const getLevelApprovalCount = (reqId: string, level: number) =>
+        getApprovedEvents(reqId, level).length;
+      const isLevelApproved = (reqId: string, level: any) =>
+        getLevelApprovalCount(reqId, level.level) >=
+        Number(level?.mandatoryCount || 1);
       const buildApprovalSummary = (reqId: string) => {
         const levels = workflowMap.get(reqId) || [];
-        if (levels.length === 0) return null;
         const request = histories.find(
           (history) => history.workflowReqId === reqId,
         );
         const requestStatus = request?.workflowReq?.status || null;
-        const isRejected =
-          requestStatus === 'REJECTED' ||
-          levels.some((level: any) => level.status === 'REJECTED');
-        const allApproved = levels.every(
-          (level: any) => level.status === 'APPROVED',
-        );
+        const normalizedRequestStatus = String(requestStatus || '').toUpperCase();
+
+        if (levels.length === 0) {
+          return {
+            ...WorkflowDbController.getEmptyWorkflowHistoryApprovalSummary(),
+            currentStatus:
+              normalizedRequestStatus === 'APPROVED' ||
+              normalizedRequestStatus === 'REJECTED' ||
+              normalizedRequestStatus === 'PENDING'
+                ? normalizedRequestStatus
+                : null,
+          };
+        }
+
+        const rejectedLevel = rejectedEventByReqId.get(reqId)?.level ?? null;
+        const completedLevels = levels.filter((level: any) =>
+          isLevelApproved(reqId, level),
+        ).length;
+        const currentPendingLevel =
+          normalizedRequestStatus === 'PENDING'
+            ? levels.find((level: any) => !isLevelApproved(reqId, level))
+                ?.level ?? null
+            : null;
+        const isRejected = normalizedRequestStatus === 'REJECTED';
+        const allApproved = levels.length > 0 && completedLevels === levels.length;
         return {
           currentStatus: isRejected
             ? 'REJECTED'
-            : allApproved || requestStatus === 'APPROVED'
+            : allApproved || normalizedRequestStatus === 'APPROVED'
               ? 'APPROVED'
               : 'PENDING',
           totalLevels: levels.length,
-          completedLevels: levels.filter(
-            (level: any) => level.status === 'APPROVED',
-          ).length,
+          completedLevels,
+          ...(rejectedLevel ? { rejectedAtLevel: rejectedLevel } : {}),
+          ...(currentPendingLevel ? { currentPendingLevel } : {}),
         };
       };
       const buildApprovedBy = (reqId: string) =>
         (workflowMap.get(reqId) || [])
-          .filter(
-            (level: any) =>
-              level.status === 'APPROVED' ||
-              getApprovedEvents(reqId, level.level).length > 0,
-          )
-          .sort((left: any, right: any) => right.level - left.level)
-          .map((level: any) => ({
-            level: level.level,
-            rule: getLevelRule(level),
-            approvedBy: getApprovedEvents(reqId, level.level)
-              .map((event) => toApprovedUserSummary(event))
-              .filter(Boolean),
-          }));
-      const buildApprovalFlow = (reqId: string) =>
-        (workflowMap.get(reqId) || []).map((level: any) => {
-          const approvedEvents = getApprovedEvents(reqId, level.level);
-          const approvedAt =
-            approvedEvents.length > 0
-              ? approvedEvents[approvedEvents.length - 1].createdAt
+          .map((level: any) => {
+            const rule = getLevelRule(level);
+            const approvers = getApprovedEvents(reqId, level.level)
+              .map((event, index) =>
+                toApprovedUserSummary(
+                  event,
+                  level.level,
+                  rule === 'AND' ? `name${index + 1}` : 'name',
+                ),
+              )
+              .filter(Boolean);
+            return approvers.length > 0
+              ? {
+                  level: level.level,
+                  rule,
+                  approvedBy: approvers,
+                }
               : null;
-          return {
-            level: level.level,
-            rule: getLevelRule(level),
-            status: level.status,
-            approvedBy: approvedEvents
-              .map((event) => toApprovedUserSummary(event))
-              .filter(Boolean),
-            approvedAt,
-            eligibleapprovers: (level.approversList as string[])
-              .map((id: string) => {
-                const user = approverMap.get(id);
-                return user ? { name: user.name, email: user.email } : null;
-              })
-              .filter(Boolean),
-          };
-        });
+          })
+          .filter(Boolean)
+          .sort((left: any, right: any) => right.level - left.level);
+      const buildEligibleApprovers = (reqId: string) => {
+        const levels = workflowMap.get(reqId) || [];
+        const pendingLevel = levels.find((l: any) => l.status === 'PENDING');
+        if (!pendingLevel) return [];
+        const approverIds = Array.isArray(pendingLevel.approversList)
+          ? (pendingLevel.approversList as string[])
+          : [];
+        return approverIds
+          .map((id: string) => {
+            const user = approverMap.get(id);
+            return user ? { name: user.name, email: user.email } : null;
+          })
+          .filter(Boolean);
+      };
 
-      const resultList: any[] = [];
-      const handledPendingReqs = new Set<string>();
       const modificationSequenceByReqId = new Map<string, number>();
+      const historyByReqId = new Map<string, any[]>();
       histories
         .filter((history) => history.workflowReqId)
         .sort((left, right) => {
@@ -4338,6 +4444,12 @@ export class WorkflowDbController {
           return String(left.id).localeCompare(String(right.id));
         })
         .forEach((history) => {
+          if (history.workflowReqId) {
+            const existingEntries =
+              historyByReqId.get(history.workflowReqId) || [];
+            existingEntries.push(history);
+            historyByReqId.set(history.workflowReqId, existingEntries);
+          }
           const requestType =
             WorkflowDbController.resolveWorkflowHistoryRequestType(
               history.workflowReq,
@@ -4357,86 +4469,7 @@ export class WorkflowDbController {
           }
         });
 
-      // 3. Inject "Pending Approval" entries for any active requests
-      histories.forEach((h) => {
-        if (h.workflowReqId && !handledPendingReqs.has(h.workflowReqId)) {
-          const levels = workflowMap.get(h.workflowReqId);
-          if (levels) {
-            const currentPending = levels.find((l) => l.status === 'PENDING');
-            if (currentPending) {
-              const snapshots = h.workflowReqId
-                ? requestReplayMap.get(h.workflowReqId) || {
-                    oldData: null,
-                    newData: null,
-                  }
-                : {
-                    oldData: null,
-                    newData: null,
-                  };
-              const requestChangeCount = snapshots.newData
-                ? WorkflowDbController.getWorkflowHistoryChangeCountFromSnapshots(
-                    snapshots.oldData,
-                    snapshots.newData,
-                    h.workflowReq?.type,
-                  )
-                : WorkflowDbController.getWorkflowHistoryChangeCount(
-                    h.workflowReq?.data,
-                    h.workflowReq?.oldData,
-                    h.workflowReq?.type,
-                  );
-              const approvers = (currentPending.approversList as string[])
-                .map((id) => {
-                  const u = approverMap.get(id);
-                  return u ? { name: u.name, email: u.email } : null;
-                })
-                .filter(Boolean);
-
-              const newDataObj =
-                WorkflowDbController.sanitizeWorkflowHistoryData(
-                  h.workflowReq?.data,
-                  h.workflowReq?.type,
-                );
-
-              resultList.push({
-                id: `${h.workflowReqId}`,
-                workflowReqId: h.workflowReqId,
-                workflowId: h.workflowReq?.workflowId || null,
-                type: h.workflowReq?.type || null,
-                impact: h.workflowReq?.impact || null,
-                oldData:
-                  h.workflowReq?.oldData ||
-                  ((h.workflowReq?.data as any)?.oldData ?? null),
-                newData: newDataObj,
-                nodeId: h.workflowReq?.nodeId || null,
-                workflowName: h.workflowReq
-                  ? WorkflowDbController.getWorkflowRequestDisplayName(
-                      h.workflowReq,
-                    )
-                  : null,
-                module: h.workflowReq?.module || null,
-                subModule: h.workflowReq?.subModule || null,
-                levelsHash: h.workflowReq?.levelsHash || null,
-                alias: h.workflowReq?.alias || null,
-                nodePath: (h.workflowReq?.data as any)?.nodePath || null,
-                nodeName: (h.workflowReq?.data as any)?.nodeName || null,
-                nodeType: (h.workflowReq?.data as any)?.nodeType || null,
-                companyCode: h.company.companyCode,
-                changeCount: requestChangeCount,
-                levelCount: `A${currentPending.level}`,
-                event: `L${currentPending.level} Pending Approval`,
-                createdAt: null,
-                eligibleapprovers: approvers,
-                approvalSummary: buildApprovalSummary(h.workflowReqId),
-                approvedBy: buildApprovedBy(h.workflowReqId),
-                approvalFlow: buildApprovalFlow(h.workflowReqId),
-              });
-            }
-          }
-          handledPendingReqs.add(h.workflowReqId);
-        }
-      });
-
-      // 4. Format the output for the UI
+      // 3. Format actual history entries
       const formattedHistories = histories.map((h) => {
         const requestType =
           WorkflowDbController.resolveWorkflowHistoryRequestType(h.workflowReq);
@@ -4452,14 +4485,6 @@ export class WorkflowDbController {
             h.event,
             requestType,
           );
-        const levelCount =
-          isChangeRequestStart && h.workflowReqId
-            ? `M${modificationSequenceByReqId.get(h.workflowReqId) || 1}`
-            : displayEvent === 'INITIATE'
-              ? 'I'
-              : displayEvent === 'APPROVED' && h.level
-                ? `A${h.level}`
-                : null;
         const snapshots = h.workflowReqId
           ? requestReplayMap.get(h.workflowReqId) || {
               oldData: null,
@@ -4497,17 +4522,30 @@ export class WorkflowDbController {
 
         const approvalSummary = h.workflowReqId
           ? buildApprovalSummary(h.workflowReqId)
-          : null;
-        const includeApprovalContext =
-          h.workflowReqId &&
-          approvalSummary &&
-          (displayEvent === 'APPROVED' || displayEvent === 'REJECTED');
+          : WorkflowDbController.getEmptyWorkflowHistoryApprovalSummary();
+        const approvalLevel =
+          displayEvent === 'APPROVED' || displayEvent === 'REJECTED'
+            ? h.level ?? null
+            : approvalSummary.currentStatus === 'PENDING'
+              ? (approvalSummary as any).currentPendingLevel ?? null
+              : null;
+        const levelCount = WorkflowDbController.getWorkflowHistoryLevelCount(
+          displayEvent || '',
+          {
+            approvalLevel,
+            isChangeRequestStart,
+            modificationSequence: h.workflowReqId
+              ? modificationSequenceByReqId.get(h.workflowReqId) || 1
+              : null,
+          },
+        );
+        const approvedBy = h.workflowReqId ? buildApprovedBy(h.workflowReqId) : [];
 
-        return {
+        const result: Record<string, any> = {
           id: h.id,
           workflowReqId: h.workflowReqId,
           workflowId: h.workflowReq?.workflowId || null,
-          type: h.workflowReq?.type || null,
+          type: requestType,
           impact: h.workflowReq?.impact || null,
           oldData: isAutoHistory
             ? null
@@ -4528,7 +4566,6 @@ export class WorkflowDbController {
           companyCode: h.company.companyCode,
           event: displayEvent,
           levelCount,
-          level: h.level,
           createdAt: h.createdAt,
           remarks: WorkflowDbController.formatWorkflowHistoryRemarks(h),
           changeCount,
@@ -4539,31 +4576,245 @@ export class WorkflowDbController {
             saasAdminUserIds,
             userId,
           ),
-          ...(includeApprovalContext
-            ? {
-                approvalSummary,
-                approvedBy: buildApprovedBy(h.workflowReqId as string),
-              }
-            : {}),
+          approvalLevel,
+          _reqId: h.workflowReqId || null,
         };
+
+        if (displayEvent === 'APPROVED' && approvalLevel != null) {
+          result.level = approvalLevel;
+          result.approvalSummary = {
+            currentStatus: approvalSummary.currentStatus,
+            totalLevels: approvalSummary.totalLevels,
+            completedLevels: approvalSummary.completedLevels,
+          };
+          if (approvedBy.length > 0) {
+            result.approvedBy = approvedBy;
+          }
+        }
+
+        if (displayEvent === 'REJECTED' && approvalLevel != null) {
+          result.level = approvalLevel;
+        }
+
+        return result;
       });
 
-      resultList.push(...formattedHistories);
-      resultList.sort((left, right) => {
-        const leftTime = left.createdAt
-          ? new Date(left.createdAt).getTime()
-          : Number.MAX_SAFE_INTEGER;
-        const rightTime = right.createdAt
-          ? new Date(right.createdAt).getTime()
-          : Number.MAX_SAFE_INTEGER;
-        if (leftTime !== rightTime) return rightTime - leftTime;
-        return String(left.id).localeCompare(String(right.id));
+      // 4. Generate synthetic approval-state events
+      const syntheticEvents: any[] = [];
+      const processedReqIds = new Set<string>();
+      const suppressApprovedForReqIds = new Set<string>();
+
+      for (const h of histories) {
+        if (!h.workflowReqId || processedReqIds.has(h.workflowReqId)) continue;
+        processedReqIds.add(h.workflowReqId);
+
+        const approvalSummary = buildApprovalSummary(h.workflowReqId);
+        const approvedBy = buildApprovedBy(h.workflowReqId);
+        const latestEntries = historyByReqId.get(h.workflowReqId) || [];
+        const latestEvent = latestEntries[latestEntries.length - 1];
+        const syntheticSource = latestEvent || h;
+        const sourceRequestType =
+          WorkflowDbController.resolveWorkflowHistoryRequestType(
+            syntheticSource.workflowReq,
+          );
+        const sourceIsAutoHistory = WorkflowDbController.isWorkflowAutoHistoryType(
+          sourceRequestType,
+          syntheticSource.event,
+        );
+        const sourceLinkedParentWorkflow =
+          WorkflowDbController.buildWorkflowHistoryLinkedWorkflow(
+            syntheticSource,
+          );
+        const sourceSnapshots = requestReplayMap.get(h.workflowReqId) || {
+          oldData: null,
+          newData: null,
+        };
+        const sourceChangeCount = sourceIsAutoHistory
+          ? {
+              added: 0,
+              modify: 0,
+              remove: 0,
+            }
+          : sourceSnapshots.newData
+            ? WorkflowDbController.getWorkflowHistoryChangeCountFromSnapshots(
+                sourceSnapshots.oldData,
+                sourceSnapshots.newData,
+                syntheticSource.workflowReq?.type,
+              )
+            : WorkflowDbController.getWorkflowHistoryChangeCount(
+                syntheticSource.workflowReq?.data,
+                syntheticSource.workflowReq?.oldData,
+                syntheticSource.workflowReq?.type,
+              );
+
+        if (approvalSummary.totalLevels === 0) continue;
+
+        const isPending = approvalSummary.currentStatus === 'PENDING';
+        const isRejected = approvalSummary.currentStatus === 'REJECTED';
+        const isApproved = approvalSummary.currentStatus === 'APPROVED';
+        const isMultiLevel = approvalSummary.totalLevels > 1;
+
+        if (isPending || isRejected) {
+          suppressApprovedForReqIds.add(h.workflowReqId);
+        }
+
+        const syntheticBase = {
+          id: syntheticSource.id,
+          workflowReqId: h.workflowReqId,
+          workflowId: syntheticSource.workflowReq?.workflowId || null,
+          type: sourceRequestType,
+          impact: syntheticSource.workflowReq?.impact || null,
+          oldData: null,
+          newData: null,
+          nodeId: syntheticSource.workflowReq?.nodeId || null,
+          workflowName: syntheticSource.workflowReq
+            ? WorkflowDbController.getWorkflowRequestDisplayName(
+                syntheticSource.workflowReq,
+              )
+            : null,
+          module: syntheticSource.workflowReq?.module || null,
+          subModule: syntheticSource.workflowReq?.subModule || null,
+          levelsHash: syntheticSource.workflowReq?.levelsHash || null,
+          alias: syntheticSource.workflowReq?.alias || null,
+          nodePath: (syntheticSource.workflowReq?.data as any)?.nodePath || null,
+          nodeName: (syntheticSource.workflowReq?.data as any)?.nodeName || null,
+          nodeType: (syntheticSource.workflowReq?.data as any)?.nodeType || null,
+          companyCode: syntheticSource.company.companyCode,
+          remarks: null,
+          changeCount: sourceChangeCount,
+          linkedWorkflow: sourceLinkedParentWorkflow,
+          user: HistoryUserUtil.formatAuditUser(
+            syntheticSource.user,
+            syntheticSource.eventUserId,
+            saasAdminUserIds,
+            userId,
+          ),
+          approvalLevel: null,
+          _reqId: h.workflowReqId,
+        };
+
+        if (isApproved && isMultiLevel) {
+          suppressApprovedForReqIds.add(h.workflowReqId);
+          syntheticEvents.push({
+            ...syntheticBase,
+            event: 'APPROVED',
+            levelCount: `A${approvalSummary.totalLevels}`,
+            createdAt: latestEvent?.createdAt ?? null,
+            approvalSummary: {
+              currentStatus: 'APPROVED',
+              totalLevels: approvalSummary.totalLevels,
+              completedLevels: approvalSummary.completedLevels,
+            },
+            approvedBy,
+          });
+        }
+
+        if (isRejected && approvalSummary.completedLevels > 0) {
+          const progressSummary: Record<string, any> = {
+            currentStatus: approvalSummary.currentStatus,
+            totalLevels: approvalSummary.totalLevels,
+            completedLevels: approvalSummary.completedLevels,
+          };
+          if ((approvalSummary as any).rejectedAtLevel) {
+            progressSummary.rejectedAtLevel = (
+              approvalSummary as any
+            ).rejectedAtLevel;
+          }
+
+          syntheticEvents.push({
+            ...syntheticBase,
+            event: 'APPROVAL_PROGRESS',
+            levelCount: null,
+            createdAt: latestEvent?.createdAt
+              ? new Date(
+                  new Date(latestEvent.createdAt).getTime() - 1000,
+                ).toISOString()
+              : null,
+            approvalSummary: progressSummary,
+            approvedBy,
+          });
+        }
+
+        if (isPending && (approvalSummary as any).currentPendingLevel) {
+          const pendingLevel = (approvalSummary as any).currentPendingLevel;
+          const eligibleApprovers = buildEligibleApprovers(h.workflowReqId);
+
+          syntheticEvents.push({
+            ...syntheticBase,
+            event: `L${pendingLevel} Pending Approval`,
+            levelCount: `A${pendingLevel}`,
+            createdAt: null,
+            approvalSummary: {
+              currentStatus: 'PENDING',
+              totalLevels: approvalSummary.totalLevels,
+              completedLevels: approvalSummary.completedLevels,
+            },
+            ...(eligibleApprovers.length > 0
+              ? { eligibleapprovers: eligibleApprovers }
+              : {}),
+            ...(approvedBy.length > 0 ? { approvedBy } : {}),
+          });
+        }
+      }
+
+      // 5. Filter duplicate approved rows and sort like user history
+      const filteredHistory = formattedHistories.filter((item: any) => {
+        if (
+          item.event === 'APPROVED' &&
+          item._reqId &&
+          suppressApprovedForReqIds.has(item._reqId)
+        ) {
+          return false;
+        }
+        return true;
       });
+
+      const eventPriority = (event: string) => {
+        if (event && event.includes('Pending Approval')) return 0;
+        if (event === 'APPROVAL_PROGRESS') return 1;
+        if (event === 'REJECTED') return 2;
+        if (event === 'APPROVED') return 3;
+        return 4;
+      };
+
+      const resultList = [...filteredHistory, ...syntheticEvents].sort(
+        (left, right) => {
+          if (!left.createdAt && right.createdAt) return -1;
+          if (left.createdAt && !right.createdAt) return 1;
+          if (!left.createdAt && !right.createdAt) {
+            return eventPriority(left.event) - eventPriority(right.event);
+          }
+
+          const leftTime = new Date(left.createdAt).getTime();
+          const rightTime = new Date(right.createdAt).getTime();
+          if (leftTime !== rightTime) return rightTime - leftTime;
+
+          const leftPriority = eventPriority(left.event);
+          const rightPriority = eventPriority(right.event);
+          if (leftPriority !== rightPriority) {
+            return leftPriority - rightPriority;
+          }
+
+          return String(right.id).localeCompare(String(left.id));
+        },
+      );
+
+      const seenApprovedReqIds = new Set<string>();
+      const dedupedResultList = resultList.filter((item: any) => {
+        if (item.event !== 'APPROVED' || !item._reqId) return true;
+        if (seenApprovedReqIds.has(item._reqId)) return false;
+        seenApprovedReqIds.add(item._reqId);
+        return true;
+      });
+
+      const cleanedResultList = dedupedResultList.map(
+        ({ _reqId, ...rest }: any) => rest,
+      );
 
       res.status(200).json({
         message: 'Workflow history fetched successfully!',
         code: 200,
-        data: resultList,
+        data: cleanedResultList,
       });
     } catch (error) {
       next(error);

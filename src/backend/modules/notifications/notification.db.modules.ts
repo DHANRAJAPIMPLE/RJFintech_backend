@@ -588,6 +588,37 @@ export class NotificationService {
     return NotificationService.unique(accesses.map((access) => access.userId));
   }
 
+  static async getReportingManagerUserIds(
+    companyId: string,
+    userId?: string | null,
+  ) {
+    if (!userId) return [];
+
+    const mapping = await prisma.userMapping.findFirst({
+      where: {
+        companyId,
+        userId,
+        status: 'ACTIVE',
+      },
+      select: { reportingManager: true },
+    });
+
+    if (!mapping?.reportingManager) return [];
+
+    const managerMappings = await prisma.userMapping.findMany({
+      where: {
+        companyId,
+        userId: mapping.reportingManager,
+        status: 'ACTIVE',
+      },
+      select: { userId: true },
+    });
+
+    return NotificationService.unique(
+      managerMappings.map((managerMapping) => managerMapping.userId),
+    );
+  }
+
   private static getHistoryConfig(reqTable: string) {
     switch (reqTable) {
       case 'user_onboarding':
@@ -631,6 +662,22 @@ export class NotificationService {
     });
 
     return request?.initiatorId || null;
+  }
+
+  static async getRequestInitiatorReportingManagerIds(
+    companyId: string,
+    reqId: string,
+    reqTable: string,
+  ) {
+    const initiatorId = await NotificationService.getRequestInitiatorId(
+      reqId,
+      reqTable,
+    );
+
+    return NotificationService.getReportingManagerUserIds(
+      companyId,
+      initiatorId,
+    );
   }
 
   static async getRequestApproverIds(reqId: string, reqTable: string) {

@@ -20,8 +20,6 @@ export type AdminActiveCompanyDetails = {
   brand: string | null;
   ieCode: string;
   registration: string;
-  address: string;
-  signatories: AdminCompanySignatory[];
 };
 
 export type AdminPendingCompanyDetails = {
@@ -42,7 +40,6 @@ export type AdminPendingCompanyDetails = {
 export type AdminCompanyGroup = {
   groupDetails: AdminGroupDetails | null;
   companyDetails: AdminActiveCompanyDetails[];
-  signatories?: AdminCompanySignatory[];
 };
 
 export type AdminPendingCompanyGroup = {
@@ -68,6 +65,23 @@ export type FetchAdminGroupsResponse = {
   inactiveCount: number;
   pendingCount: number;
   pageInfo: AdminListPageInfo;
+};
+
+export type FetchCompanyDetailsResponse = {
+  message: 'Company details fetched successfully!';
+  data: {
+    groupDetails: AdminGroupDetails | null;
+    companyDetails: Array<{
+      companyCode: string;
+      name: string;
+      gst: string | null;
+      brand: string | null;
+      ieCode: string;
+      registration: string;
+      address: string;
+      signatories: AdminCompanySignatory[];
+    }>;
+  };
 };
 
 export type InitiateCompanyOnboardingResponse = {
@@ -133,6 +147,20 @@ export type AdminBackendCompany = {
   }>;
 };
 
+export type AdminBackendCompanyDetails = {
+  groupDetails: AdminGroupDetails | null;
+  companyDetails: Array<{
+    companyCode: string;
+    name: string;
+    gst: string | null;
+    brand: string | null;
+    ieCode: string;
+    registration: string;
+    address: string;
+    signatories: AdminCompanySignatory[];
+  }>;
+};
+
 export type AdminBackendCompanyMapping = {
   company: AdminBackendCompany;
 };
@@ -193,4 +221,8 @@ export type ActionCompanyOnboardingInternalResponse =
 export type FetchCompanyHistoryInternalResponse =
   | FetchCompanyHistoryInternalSuccess
   | AdminCompanyHistoryItem[]
+  | AdminApiErrorResponse;
+
+export type FetchCompanyDetailsInternalResponse =
+  | AdminBackendCompanyDetails
   | AdminApiErrorResponse;

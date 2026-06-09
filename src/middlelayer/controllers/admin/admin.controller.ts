@@ -18,6 +18,7 @@ import {
   companyOnboardingSchema,
   companyActionSchema,
   companyHistory,
+  companyCodeOnly,
   companyListSchema,
 } from '../../validations/company.validation';
 import type {
@@ -33,6 +34,8 @@ import type {
   FetchAdminGroupsInternalResponse,
   FetchAdminGroupsInternalSuccess,
   FetchAdminGroupsResponse,
+  FetchCompanyDetailsInternalResponse,
+  FetchCompanyDetailsResponse,
   FetchCompanyHistoryInternalResponse,
   FetchCompanyHistoryInternalSuccess,
   FetchCompanyHistoryResponse,
@@ -84,8 +87,6 @@ export class AdminController {
                       brand: company.brandName,
                       ieCode: company.ieCode || '',
                       registration: company.registrationDate,
-                      address: company.address || '',
-                      signatories: company.signatories || [],
                     },
                   ],
                 };
@@ -433,6 +434,41 @@ export class AdminController {
         message: historyMessage,
         code: historyCode,
         data: historyData,
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async fetchCompanyDetails(
+    req: Request,
+    res: Response<FetchCompanyDetailsResponse>,
+    next: NextFunction,
+  ) {
+    try {
+      const { companyCode } = zodParse(companyCodeOnly, req.body);
+
+      const { data, ok, status } =
+        await internalPost<FetchCompanyDetailsInternalResponse>(
+          `${config.backendCompanyUrl}/details`,
+          { companyCode, userId: (req as any).user?.id },
+        );
+
+      if (!ok) {
+        const errorData = data as AdminApiErrorResponse;
+        throw new AppError(
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch company details',
+          status,
+        );
+      }
+
+      const response: FetchCompanyDetailsResponse = {
+        message: 'Company details fetched successfully!',
+        data: data as FetchCompanyDetailsResponse['data'],
       };
 
       res.status(200).json(response);

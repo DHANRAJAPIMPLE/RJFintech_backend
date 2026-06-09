@@ -332,6 +332,122 @@ export class CompanyDbController {
   }
 
   /**
+   * Fetches complete company details for one company code.
+   * Used by the details screen so the list API can stay lightweight.
+   */
+  static async getCompanyDetailsByCode(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { companyCode } = req.body;
+      if (!companyCode) {
+        throw new AppError('companyCode is required', 400);
+      }
+
+      const company = await prisma.company.findUnique({
+        where: { companyCode },
+        include: {
+          companyMappings: {
+            take: 1,
+            include: {
+              group: { select: { groupCode: true, name: true } },
+            },
+          },
+          userAccesses: {
+            where: { isGlobalAccess: true },
+            include: {
+              user: { include: { userMappings: true } },
+            },
+          },
+        },
+      });
+
+      if (company) {
+        const signatories = company.userAccesses.map((userAccess: any) => {
+          const mapping = userAccess.user.userMappings.find(
+            (userMapping: any) => userMapping.companyId === company.id,
+          );
+          return {
+            name: userAccess.user.name,
+            email: userAccess.user.email,
+            phone: userAccess.user.phone,
+            designation: mapping?.designation || null,
+            employeeId: mapping?.employeeId || null,
+          };
+        });
+        const group = company.companyMappings?.[0]?.group;
+
+        return res.status(200).json({
+          groupDetails: group
+            ? {
+                groupCode: group.groupCode,
+                groupName: group.name,
+              }
+            : null,
+          companyDetails: [
+            {
+              companyCode: company.companyCode,
+              name: company.legalName,
+              gst: company.gstNumber,
+              brand: company.brandName,
+              ieCode: company.ieCode || '',
+              registration: company.registrationDate,
+              address: company.address || '',
+              signatories,
+            },
+          ],
+        });
+      }
+
+      const onboarding = await prisma.companyOnboarding.findUnique({
+        where: { companyCode },
+      });
+
+      if (!onboarding) {
+        throw new AppError('Company not found', 404);
+      }
+
+      const onboardingData = (onboarding.data as any) || {};
+      const group = onboardingData.group || {};
+      const pendingCompany = onboardingData.company || {};
+      const signatories = Array.isArray(onboardingData.signatories)
+        ? onboardingData.signatories.map((signatory: any) => ({
+            name: signatory.name || '',
+            email: signatory.email || '',
+            phone: signatory.phone || '',
+            designation: signatory.designation || null,
+            employeeId: signatory.employeeId || null,
+          }))
+        : [];
+
+      return res.status(200).json({
+        groupDetails: onboarding.groupCode
+          ? {
+              groupCode: onboarding.groupCode,
+              groupName: group.name || 'Pending Group',
+            }
+          : null,
+        companyDetails: [
+          {
+            companyCode: onboarding.companyCode,
+            name: pendingCompany.name || '',
+            gst: pendingCompany.gst || '',
+            brand: pendingCompany.brand || '',
+            ieCode: pendingCompany.ieCode || '',
+            registration: pendingCompany.registeredAt || '',
+            address: pendingCompany.address || '',
+            signatories,
+          },
+        ],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * Fetches basic company information by its unique ID.
    */
   static async getCompanyById(req: Request, res: Response, next: NextFunction) {

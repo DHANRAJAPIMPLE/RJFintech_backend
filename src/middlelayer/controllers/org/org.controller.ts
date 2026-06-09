@@ -81,21 +81,22 @@ export class OrgController {
           ? { approvalSummary: item.approvalSummary }
           : {}),
         ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
-        ...(item.approvalFlow ? { approvalFlow: item.approvalFlow } : {}),
       };
     }
 
     return {
       ...common,
       event: item.event,
-      level: item.level,
       createdAt: item.createdAt,
       remarks: item.remarks,
       user: {
         name: item.user.name,
         email: item.user.email,
       },
-      ...(item.approvalSummary ? { approvalSummary: item.approvalSummary } : {}),
+      ...(item.level !== undefined ? { level: item.level } : {}),
+      ...(item.approvalSummary !== undefined
+        ? { approvalSummary: item.approvalSummary }
+        : {}),
       ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
     };
   }

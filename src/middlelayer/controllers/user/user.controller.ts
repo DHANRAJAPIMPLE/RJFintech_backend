@@ -101,6 +101,7 @@ export class UserController {
         email: user.basicDetails.email,
         phone: user.basicDetails.phone,
         designation: user.basicDetails.designation,
+        nodeType: user.basicDetails.nodeType ?? primary[0]?.nodeType ?? null,
         ...(!detail
           ? {
               nodeName:
@@ -154,6 +155,7 @@ export class UserController {
         email: user.basicDetails.email,
         phone: user.basicDetails.phone,
         designation: user.basicDetails.designation,
+        nodeType: user.basicDetails.nodeType ?? primary[0]?.nodeType ?? null,
         ...(!detail
           ? {
               nodeName:

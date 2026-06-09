@@ -5,6 +5,7 @@ import {
   getCapturedResponseSize,
 } from '../../shared/utils/monitoring/captureResponseBody';
 import { extractClientIp } from '../../shared/utils/monitoring/extractClientIp';
+import { hasDefinedExpressRoute } from '../../shared/utils/monitoring/hasDefinedExpressRoute';
 import {
   asNonEmptyString,
   asUuid,
@@ -91,6 +92,10 @@ export const apiMonitoringMiddleware = (
   res.on('finish', () => {
     if (res.locals.backendMonitoringLogged) return;
     res.locals.backendMonitoringLogged = true;
+
+    if (!hasDefinedExpressRoute(req)) {
+      return;
+    }
 
     void MonitoringService.createApiSpan({
       trackingId,

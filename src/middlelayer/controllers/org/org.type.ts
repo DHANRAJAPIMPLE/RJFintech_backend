@@ -191,9 +191,11 @@ export type OrgHistoryAuditUser = {
 };
 
 export type OrgHistoryApprovalSummary = {
-  currentStatus: string;
+  currentStatus: string | null;
   totalLevels: number;
   completedLevels: number;
+  rejectedAtLevel?: number | null;
+  currentPendingLevel?: number | null;
 };
 
 export type OrgHistoryApprovedByGroup = {
@@ -215,8 +217,11 @@ export type OrgHistoryEvent =
   | 'INITIATE'
   | 'APPROVED'
   | 'REJECTED'
+  | 'APPROVAL_PROGRESS'
   | 'MODIFY'
+  | 'ACTIVE'
   | 'INACTIVE'
+  | 'ARCHIVE'
   | 'AUTO_GENERATE'
   | 'AUTO_DELETE';
 
@@ -233,7 +238,7 @@ export type OrgHistoryBaseItem = {
 
 export type OrgHistoryActionItem = OrgHistoryBaseItem & {
   event: OrgHistoryEvent;
-  level: number | null;
+  level?: number | null;
   createdAt: string;
   remarks: string | null;
   user: OrgHistoryAuditUser;
@@ -247,7 +252,6 @@ export type OrgHistoryPendingApprovalItem = OrgHistoryBaseItem & {
   eligibleapprovers: OrgHistoryAuditUser[];
   approvalSummary?: OrgHistoryApprovalSummary | null;
   approvedBy?: OrgHistoryApprovedByGroup[];
-  approvalFlow?: OrgHistoryApprovalFlowItem[];
 };
 
 export type OrgHistoryItem =

@@ -5,6 +5,7 @@ import {
   getCapturedResponseSize,
 } from '../../shared/utils/monitoring/captureResponseBody';
 import { extractClientIp } from '../../shared/utils/monitoring/extractClientIp';
+import { hasDefinedExpressRoute } from '../../shared/utils/monitoring/hasDefinedExpressRoute';
 import { asUuid } from '../../shared/utils/monitoring/monitoringIds';
 import { sanitizeMonitoringPayload } from '../../shared/utils/monitoring/sanitizeMonitoringPayload';
 import { shouldSkipMonitoring } from '../../shared/utils/monitoring/shouldSkipMonitoring';
@@ -89,6 +90,10 @@ export const traceMonitoringMiddleware = (
   res.on('finish', () => {
     if (res.locals.monitoringLogged) return;
     res.locals.monitoringLogged = true;
+
+    if (!hasDefinedExpressRoute(req)) {
+      return;
+    }
 
     const endedAt = new Date();
 

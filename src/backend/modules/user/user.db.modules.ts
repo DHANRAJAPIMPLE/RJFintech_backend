@@ -2379,6 +2379,9 @@ export class UserDbController {
   ) {
     const mapping = u.userMappings[0];
     const detail = options.detail === true;
+    const summaryPrimaryAccess = u.userAccesses.find(
+      (a: any) => a.accessType === 'PRIMARY' || a.isGlobalAccess,
+    );
     const primary = u.userAccesses
       .filter((a: any) => a.accessType === 'PRIMARY' || a.isGlobalAccess)
       .map((access: any) => UserDbController.formatUserAccess(access, detail));
@@ -2395,10 +2398,17 @@ export class UserDbController {
         email: u.email,
         phone: u.phone,
         designation: mapping?.designation || null,
+        nodeType: summaryPrimaryAccess?.orgStructure?.nodeType || null,
         ...(!detail
           ? {
-              nodeName: primary[0]?.nodeName || null,
-              nodePath: primary[0]?.nodePath || null,
+              nodeName:
+                primary[0]?.nodeName ??
+                summaryPrimaryAccess?.orgStructure?.nodeName ??
+                null,
+              nodePath:
+                primary[0]?.nodePath ??
+                summaryPrimaryAccess?.orgStructure?.nodePath ??
+                null,
             }
           : {}),
         ...(detail
@@ -2849,9 +2859,19 @@ export class UserDbController {
               status: 'ACTIVE',
               nodePath: { in: incomingNodePaths },
             },
-            select: { nodePath: true },
+            select: {
+              nodeName: true,
+              nodePath: true,
+              nodeType: true,
+            },
           })
         : [];
+    const activeIncomingNodeMap = new Map(
+      activeIncomingNodes.map((node) => [
+        String(node.nodePath || '').toLowerCase(),
+        node,
+      ]),
+    );
     const activeIncomingNodePaths = new Set(
       activeIncomingNodes.map((node) => node.nodePath),
     );
@@ -2977,6 +2997,24 @@ export class UserDbController {
               : existingPermissions.filter(
                   (permission: any) => permission.nodeStatus === 'ACTIVE',
                 );
+        const normalizedEffectivePermissions = effectivePermissions.map(
+          (permission: any) => {
+            const nodePathKey =
+              typeof permission?.nodePath === 'string'
+                ? permission.nodePath.toLowerCase()
+                : '';
+            const nodeFromDb = nodePathKey
+              ? activeIncomingNodeMap.get(nodePathKey)
+              : null;
+
+            return {
+              ...permission,
+              nodeName: nodeFromDb?.nodeName || permission?.nodeName || '',
+              nodePath: nodeFromDb?.nodePath || permission?.nodePath || '',
+              nodeType: nodeFromDb?.nodeType || permission?.nodeType || null,
+            };
+          },
+        );
         const responseOldData =
           detail && !isInitiate
             ? await HistoryUserUtil.enrichUserHistoryOldData(resolvedOldData)
@@ -2992,7 +3030,7 @@ export class UserDbController {
               })
             : null;
 
-        effectivePermissions.forEach((p: any) => {
+        normalizedEffectivePermissions.forEach((p: any) => {
           const access = {
             roleCategory: p.roleCategory,
             roleSubCategory: p.roleSubCategory,
@@ -3012,6 +3050,12 @@ export class UserDbController {
             secondary.push(access);
           }
         });
+        const summaryPrimaryAccess = normalizedEffectivePermissions.find(
+          (permission: any) =>
+            permission.isGlobal === true ||
+            permission.isGlobalAccess === true ||
+            permission.accessType === 'PRIMARY',
+        );
 
         return {
           id: onb.id,
@@ -3033,7 +3077,19 @@ export class UserDbController {
               basic.designation !== undefined
                 ? basic.designation
                 : (existingMapping?.designation ?? null),
-            ...(!detail ? { nodeName: primary[0]?.nodeName || null } : {}),
+            nodeType: summaryPrimaryAccess?.nodeType || null,
+            ...(!detail
+              ? {
+                  nodeName:
+                    primary[0]?.nodeName ??
+                    summaryPrimaryAccess?.nodeName ??
+                    null,
+                  nodePath:
+                    primary[0]?.nodePath ??
+                    summaryPrimaryAccess?.nodePath ??
+                    null,
+                }
+              : {}),
             ...(detail
               ? {
                   createdAt: onb.createdAt,
@@ -4504,6 +4560,11 @@ export class UserDbController {
       );
     const corpAdminUserIds =
       await NotificationService.getCorpAdminUserIds(companyId);
+    const initiatorReportingManagerUserIds =
+      await NotificationService.getReportingManagerUserIds(
+        companyId,
+        initiatorId,
+      );
     await NotificationService.createRequestNotification({
       companyId,
       type: UserDbController.getUserNotificationType(type, 'PENDING'),
@@ -4515,6 +4576,7 @@ export class UserDbController {
       createdBy: initiatorId,
       recipientUserIds: NotificationService.mergeRecipientUserIds(
         notificationRecipients,
+        initiatorReportingManagerUserIds,
         corpAdminUserIds,
       ),
       includeCreatedBy: true,
@@ -5000,6 +5062,11 @@ export class UserDbController {
         }
         return onb;
       });
+      const initiatorReportingManagerUserIds =
+        await NotificationService.getReportingManagerUserIds(
+          resolvedCompanyId,
+          initiatorId,
+        );
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
         type: 'INITIATE',
@@ -5009,6 +5076,7 @@ export class UserDbController {
         createdBy: initiatorId,
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipients,
+          initiatorReportingManagerUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
         includeCreatedBy: true,
@@ -5633,10 +5701,17 @@ export class UserDbController {
 
       const requestInitiatorId =
         await NotificationService.getRequestInitiatorId(id, 'user_onboarding');
+      const requestInitiatorReportingManagerUserIds =
+        await NotificationService.getRequestInitiatorReportingManagerIds(
+          onboarding.companyId,
+          id,
+          'user_onboarding',
+        );
       const notificationRecipientUserIds =
         NotificationService.mergeRecipientUserIds(
           notificationRecipients,
           requestInitiatorId,
+          requestInitiatorReportingManagerUserIds,
         );
       const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
         onboarding.companyId,
