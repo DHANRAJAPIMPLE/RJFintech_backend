@@ -141,7 +141,6 @@ export class UserController {
     const primary = user.primary || [];
     return {
       id: user.id,
-      isPending: user.isPending ?? true,
       type: user.type,
       impact: user.impact ?? null,
       ...(detail

@@ -3059,7 +3059,6 @@ export class UserDbController {
 
         return {
           id: onb.id,
-          isPending: true,
           type,
           impact: onb.impact || null,
           ...(detail
