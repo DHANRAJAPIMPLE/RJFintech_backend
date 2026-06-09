@@ -110,7 +110,7 @@ export class AdminController {
                   initiatorName: onboarding.initiator?.name || null,
                   initiatorEmail: onboarding.initiator?.email || null,
                   initiator: onboarding.initiator || null,
-                  initiatedDate: onboarding.createdAt,
+                  initiatedDate: onboarding.initiatedDate || onboarding.createdAt,
                   signatories: signatories.map((signatory) => ({
                     name: signatory.name || '',
                     email: signatory.email || '',
@@ -477,6 +477,7 @@ export class AdminController {
           ).map((company) => ({
             ...company,
             initiator: company.initiator || null,
+            initiatedDate: company.initiatedDate || undefined,
           })),
         },
       };

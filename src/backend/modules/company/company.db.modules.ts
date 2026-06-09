@@ -34,7 +34,7 @@ export class CompanyDbController {
     return mapping?.companyId || null;
   }
 
-  private static async getPendingInitiatorByCompanyCodes(
+  private static async getPendingInitiationMetaByCompanyCodes(
     companyCodes: string[],
     viewerUserId?: string | null,
   ) {
@@ -47,7 +47,7 @@ export class CompanyDbController {
       ),
     );
     if (uniqueCompanyCodes.length === 0) {
-      return new Map<string, unknown>();
+      return new Map<string, { initiator: unknown; initiatedDate: Date }>();
     }
 
     const histories = await prisma.companyHistory.findMany({
@@ -64,23 +64,29 @@ export class CompanyDbController {
       viewerUserId,
       ...histories.map((history) => history.eventUserId),
     ]);
-    const initiatorByCompanyCode = new Map<string, unknown>();
+    const initiationMetaByCompanyCode = new Map<
+      string,
+      { initiator: unknown; initiatedDate: Date }
+    >();
 
     histories.forEach((history) => {
-      if (!initiatorByCompanyCode.has(history.companyCode)) {
-        initiatorByCompanyCode.set(
+      if (!initiationMetaByCompanyCode.has(history.companyCode)) {
+        initiationMetaByCompanyCode.set(
           history.companyCode,
-          HistoryUserUtil.formatAuditUser(
-            history.user,
-            history.eventUserId,
-            saasAdminUserIds,
-            viewerUserId,
-          ),
+          {
+            initiator: HistoryUserUtil.formatAuditUser(
+              history.user,
+              history.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            initiatedDate: history.createdAt,
+          },
         );
       }
     });
 
-    return initiatorByCompanyCode;
+    return initiationMetaByCompanyCode;
   }
 
   /**
@@ -316,15 +322,20 @@ export class CompanyDbController {
       const pendingCodes = pageData.pageRows.map(
         (onboarding: any) => onboarding.companyCode,
       );
-      const initiatorByCompanyCode =
-        await CompanyDbController.getPendingInitiatorByCompanyCodes(
+      const initiationMetaByCompanyCode =
+        await CompanyDbController.getPendingInitiationMetaByCompanyCodes(
           pendingCodes,
           viewerUserId,
         );
-      const pending = pageData.pageRows.map((onboarding: any) => ({
-        ...onboarding,
-        initiator: initiatorByCompanyCode.get(onboarding.companyCode) || null,
-      }));
+      const pending = pageData.pageRows.map((onboarding: any) => {
+        const initiationMeta =
+          initiationMetaByCompanyCode.get(onboarding.companyCode) || null;
+        return {
+          ...onboarding,
+          initiator: initiationMeta?.initiator || null,
+          initiatedDate: initiationMeta?.initiatedDate || onboarding.createdAt,
+        };
+      });
 
       return res.status(200).json({
         data: pending,
@@ -438,11 +449,13 @@ export class CompanyDbController {
       const onboardingData = (onboarding.data as any) || {};
       const group = onboardingData.group || {};
       const pendingCompany = onboardingData.company || {};
-      const initiatorByCompanyCode =
-        await CompanyDbController.getPendingInitiatorByCompanyCodes(
+      const initiationMetaByCompanyCode =
+        await CompanyDbController.getPendingInitiationMetaByCompanyCodes(
           [onboarding.companyCode],
           viewerUserId,
         );
+      const initiationMeta =
+        initiationMetaByCompanyCode.get(onboarding.companyCode) || null;
       const signatories = Array.isArray(onboardingData.signatories)
         ? onboardingData.signatories.map((signatory: any) => ({
             name: signatory.name || '',
@@ -469,8 +482,9 @@ export class CompanyDbController {
             ieCode: pendingCompany.ieCode || '',
             registration: pendingCompany.registeredAt || '',
             address: pendingCompany.address || '',
-            initiator:
-              initiatorByCompanyCode.get(onboarding.companyCode) || null,
+            initiator: initiationMeta?.initiator || null,
+            initiatedDate:
+              initiationMeta?.initiatedDate || onboarding.createdAt,
             signatories,
           },
         ],

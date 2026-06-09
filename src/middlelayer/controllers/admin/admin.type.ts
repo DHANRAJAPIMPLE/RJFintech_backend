@@ -81,6 +81,7 @@ export type FetchCompanyDetailsResponse = {
       registration: string;
       address: string;
       initiator?: AdminAuditUser | null;
+      initiatedDate?: string;
       signatories: AdminCompanySignatory[];
     }>;
   };
@@ -160,6 +161,7 @@ export type AdminBackendCompanyDetails = {
     registration: string;
     address: string;
     initiator?: AdminAuditUser | null;
+    initiatedDate?: string;
     signatories: AdminCompanySignatory[];
   }>;
 };
@@ -198,6 +200,7 @@ export type AdminBackendPendingOnboarding = {
   data?: AdminPendingOnboardingData | null;
   createdAt: string;
   initiator?: AdminAuditUser | null;
+  initiatedDate?: string;
 };
 
 export type FetchAdminGroupsInternalSuccess = {
