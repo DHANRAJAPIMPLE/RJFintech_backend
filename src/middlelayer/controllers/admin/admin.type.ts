@@ -30,12 +30,12 @@ export type AdminPendingCompanyDetails = {
   brand: string;
   iecode: string;
   registration: string;
-  address: string;
-  initiatorName: string | null;
-  initiatorEmail: string | null;
+  address?: string;
+  initiatorName?: string | null;
+  initiatorEmail?: string | null;
   initiator?: AdminAuditUser | null;
-  initiatedDate: string;
-  signatories: AdminCompanySignatory[];
+  initiatedDate?: string;
+  signatories?: AdminCompanySignatory[];
 };
 
 export type AdminCompanyGroup = {

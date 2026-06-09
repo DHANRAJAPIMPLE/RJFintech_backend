@@ -97,7 +97,6 @@ export class AdminController {
                 const onboardingData = onboarding.data || {};
                 const group = onboardingData.group || {};
                 const company = onboardingData.company || {};
-                const signatories = onboardingData.signatories || [];
                 const companyDetails: AdminPendingCompanyDetails = {
                   companyId: onboarding.id,
                   companyCode: onboarding.companyCode,
@@ -106,18 +105,6 @@ export class AdminController {
                   brand: company.brand || '',
                   iecode: company.ieCode || '',
                   registration: company.registeredAt || '',
-                  address: company.address || '',
-                  initiatorName: onboarding.initiator?.name || null,
-                  initiatorEmail: onboarding.initiator?.email || null,
-                  initiator: onboarding.initiator || null,
-                  initiatedDate: onboarding.initiatedDate || onboarding.createdAt,
-                  signatories: signatories.map((signatory) => ({
-                    name: signatory.name || '',
-                    email: signatory.email || '',
-                    phone: signatory.phone || '',
-                    designation: signatory.designation || null,
-                    employeeId: signatory.employeeId || null,
-                  })),
                 };
 
                 return {
