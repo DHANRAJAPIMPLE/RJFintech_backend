@@ -245,6 +245,45 @@ export class UserDbController {
     return manager?.id ? [manager.id] : [];
   }
 
+  private static async getCompanyMappedUserNotificationRecipientIds(
+    companyId: string,
+    options: {
+      userId?: string | null;
+      email?: string | null;
+    } = {},
+  ) {
+    const normalizedUserId =
+      typeof options.userId === 'string' ? options.userId.trim() : '';
+    if (normalizedUserId) {
+      const mapping = await prisma.userMapping.findFirst({
+        where: {
+          companyId,
+          userId: normalizedUserId,
+        },
+        select: { userId: true },
+      });
+      return mapping?.userId ? [mapping.userId] : [];
+    }
+
+    const normalizedEmail =
+      typeof options.email === 'string' ? options.email.trim() : '';
+    if (!normalizedEmail) return [];
+
+    const user = await prisma.user.findFirst({
+      where: {
+        email: normalizedEmail,
+        userMappings: {
+          some: {
+            companyId,
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    return user?.id ? [user.id] : [];
+  }
+
   private static buildNotificationHandledError(
     message: string,
     statusCode = 400,
@@ -4564,6 +4603,11 @@ export class UserDbController {
         companyId,
         initiatorId,
       );
+    const targetNotificationUserIds =
+      await UserDbController.getCompanyMappedUserNotificationRecipientIds(
+        companyId,
+        { userId: target.id },
+      );
     await NotificationService.createRequestNotification({
       companyId,
       type: UserDbController.getUserNotificationType(type, 'PENDING'),
@@ -4575,6 +4619,7 @@ export class UserDbController {
       createdBy: initiatorId,
       recipientUserIds: NotificationService.mergeRecipientUserIds(
         notificationRecipients,
+        targetNotificationUserIds,
         initiatorReportingManagerUserIds,
         corpAdminUserIds,
       ),
@@ -5184,14 +5229,21 @@ export class UserDbController {
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const rawRequestData = (onboarding.data as any) || {};
+      const targetNotificationLookupEmail =
+        rawRequestData?.targetUserEmail ||
+        rawRequestData?.basicDetails?.email ||
+        null;
+      const targetNotificationUserIds =
+        onboarding.type && onboarding.type !== 'INITIATE'
+          ? await UserDbController.getCompanyMappedUserNotificationRecipientIds(
+              onboarding.companyId,
+              { email: targetNotificationLookupEmail },
+            )
+          : [];
       if (onboarding.type && onboarding.type !== 'INITIATE') {
-        const targetUserEmail =
-          rawRequestData?.targetUserEmail ||
-          rawRequestData?.basicDetails?.email ||
-          null;
-        const targetUser = targetUserEmail
+        const targetUser = targetNotificationLookupEmail
           ? await prisma.user.findUnique({
-              where: { email: targetUserEmail },
+              where: { email: targetNotificationLookupEmail },
               select: { id: true, name: true, email: true },
             })
           : null;
@@ -5736,6 +5788,13 @@ export class UserDbController {
               notificationReferenceName,
             )
           : null;
+      const onboardedUserRecipientIds =
+        requestType === 'INITIATE' && result?.status === 'APPROVED'
+          ? await UserDbController.getCompanyMappedUserNotificationRecipientIds(
+              onboarding.companyId,
+              { email: notificationLookupEmail },
+            )
+          : [];
 
       await NotificationService.createRequestNotification({
         companyId: onboarding.companyId,
@@ -5750,6 +5809,8 @@ export class UserDbController {
         createdBy: approverId,
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipientUserIds,
+          targetNotificationUserIds,
+          onboardedUserRecipientIds,
           corpAdminUserIds,
         ),
         requiredRecipientUserIds:
