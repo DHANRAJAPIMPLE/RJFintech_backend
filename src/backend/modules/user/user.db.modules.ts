@@ -1687,7 +1687,16 @@ export class UserDbController {
             )
             .filter((v) => v === 'PRIMARY' || v === 'SECONDARY');
           if (normalizedValues.length > 0) {
-            nodeAccess[key] = normalizedValues;
+            // Compact the key the same way nodeValues are compacted so that
+            // the lookup filters.nodeAccess[filterNodeValue] works correctly.
+            const compactedKey = UserDbController.compactFilterValue(key);
+            if (compactedKey) {
+              // Merge with any existing entry for the same compacted key
+              const existing = nodeAccess[compactedKey] || [];
+              nodeAccess[compactedKey] = Array.from(
+                new Set([...existing, ...normalizedValues]),
+              );
+            }
           }
         }
       }
