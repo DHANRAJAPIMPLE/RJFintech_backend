@@ -119,6 +119,7 @@ type NormalizedUserListAppliedFilters = {
   reportingManager: string[];
   status: string[];
   role: string[];
+  currentStatus: 'INITIATE' | 'MODIFY' | null;
   isPending: boolean | null;
   onboardingDate: {
     from: Date | null;
@@ -1684,6 +1685,15 @@ export class UserDbController {
       ),
       status: UserDbController.normalizeAppliedFilterValues(source.status),
       role: UserDbController.normalizeAppliedFilterValues(source.role),
+      currentStatus:
+        UserDbController.normalizeFilterText(source.currentStatus)?.toLowerCase() ===
+        'initiate'
+          ? 'INITIATE'
+          : UserDbController.normalizeFilterText(
+                source.currentStatus,
+              )?.toLowerCase() === 'modify'
+            ? 'MODIFY'
+            : null,
       isPending:
         UserDbController.normalizeFilterText(source.isPending)?.toLowerCase() ===
         'yes'
@@ -1704,6 +1714,7 @@ export class UserDbController {
       normalized.reportingManager.length > 0 ||
       normalized.status.length > 0 ||
       normalized.role.length > 0 ||
+      normalized.currentStatus !== null ||
       normalized.isPending !== null ||
       normalized.onboardingDate !== null;
 
@@ -1756,10 +1767,104 @@ export class UserDbController {
     return true;
   }
 
+  private static normalizeCurrentPendingStatus(requestType: unknown) {
+    const normalizedType = UserDbController.normalizeFilterText(requestType);
+    if (!normalizedType) return null;
+
+    return normalizedType.toUpperCase() === 'INITIATE' ? 'INITIATE' : 'MODIFY';
+  }
+
+  private static resolvePendingApprovalSubModules(
+    filters: NormalizedUserListAppliedFilters | null,
+  ) {
+    const selected = new Set(filters?.subCategory || []);
+    const hasExplicitSelection = selected.size > 0;
+    const modules = new Set<'USER_ACC' | 'ORG_STR' | 'WORK_FLOW'>();
+
+    if (!hasExplicitSelection || selected.has('useracc')) {
+      modules.add('USER_ACC');
+    }
+    if (!hasExplicitSelection || selected.has('orgstr')) {
+      modules.add('ORG_STR');
+    }
+    if (!hasExplicitSelection || selected.has('workflow')) {
+      modules.add('WORK_FLOW');
+    }
+
+    return Array.from(modules);
+  }
+
+  private static async getPendingApprovalEligibleUserIds(
+    companyId: string,
+    filters: NormalizedUserListAppliedFilters | null,
+  ) {
+    const pendingModules =
+      UserDbController.resolvePendingApprovalSubModules(filters);
+    if (pendingModules.length === 0) {
+      return new Set<string>();
+    }
+
+    const includeUserAcc = pendingModules.includes('USER_ACC');
+    const includeOrgStr = pendingModules.includes('ORG_STR');
+    const workflowSubModules = pendingModules;
+
+    const [userRequests, orgRequests, workflowRequests] = await Promise.all([
+      includeUserAcc
+        ? prisma.userOnboarding.findMany({
+            where: {
+              companyId,
+              status: 'PENDING',
+            },
+            select: { eligibleApprovers: true },
+          })
+        : Promise.resolve([]),
+      includeOrgStr
+        ? prisma.orgStructureReq.findMany({
+            where: {
+              companyId,
+              status: 'PENDING',
+            },
+            select: { eligibleApprovers: true },
+          })
+        : Promise.resolve([]),
+      workflowSubModules.length > 0
+        ? prisma.workflowReq.findMany({
+            where: {
+              companyId,
+              status: 'PENDING',
+              subModule: { in: workflowSubModules },
+            },
+            select: { eligibleApprovers: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const eligibleUserIds = new Set<string>();
+    [...userRequests, ...orgRequests, ...workflowRequests].forEach(
+      (request: any) => {
+        const approvers = Array.isArray(request?.eligibleApprovers)
+          ? request.eligibleApprovers
+          : [];
+        approvers.forEach((approverId: unknown) => {
+          if (typeof approverId === 'string' && approverId.trim()) {
+            eligibleUserIds.add(approverId);
+          }
+        });
+      },
+    );
+
+    return eligibleUserIds;
+  }
+
   private static matchesAppliedUserFilters(
     user: any,
     filters: NormalizedUserListAppliedFilters | null,
-    options: { defaultStatus: string; isPendingRecord?: boolean },
+    options: {
+      defaultStatus: string;
+      isPendingRecord?: boolean;
+      pendingRequestType?: unknown;
+      pendingStateOverride?: boolean | null;
+    },
   ) {
     if (!filters) return true;
 
@@ -1774,7 +1879,13 @@ export class UserDbController {
           ? secondary
           : allAccesses;
     const isPending =
-      options.isPendingRecord === true || user?.isPending === true;
+      options.pendingStateOverride !== undefined &&
+      options.pendingStateOverride !== null
+        ? options.pendingStateOverride
+        : options.isPendingRecord === true || user?.isPending === true;
+    const currentPendingStatus = isPending
+      ? UserDbController.normalizeCurrentPendingStatus(options.pendingRequestType)
+      : null;
     const statusCandidates = [
       options.defaultStatus,
       basicDetails.status,
@@ -1874,6 +1985,13 @@ export class UserDbController {
       !allAccesses.some((access: any) =>
         UserDbController.matchesRoleFilter(access?.roleName, filters.role),
       )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.currentStatus !== null &&
+      currentPendingStatus !== filters.currentStatus
     ) {
       return false;
     }
@@ -4099,6 +4217,13 @@ export class UserDbController {
             },
           },
         };
+        const pendingApprovalEligibleUserIds =
+          appliedFilters.isPending !== null
+            ? await UserDbController.getPendingApprovalEligibleUserIds(
+                resolvedCompanyId,
+                appliedFilters,
+              )
+            : null;
 
         const [
           allActiveRows,
@@ -4171,7 +4296,14 @@ export class UserDbController {
             UserDbController.matchesAppliedUserFilters(
               item.detail,
               appliedFilters,
-              { defaultStatus: 'ACTIVE' },
+              {
+                defaultStatus: 'ACTIVE',
+                pendingRequestType: pendingByEmail.get(
+                  UserDbController.normalizeEmail(item.raw.email) || '',
+                )?.type,
+                pendingStateOverride:
+                  pendingApprovalEligibleUserIds?.has(item.raw.id) ?? null,
+              },
             ),
           );
         const filteredInactiveUsersDetailed = allInactiveRows
@@ -4189,7 +4321,14 @@ export class UserDbController {
             UserDbController.matchesAppliedUserFilters(
               item.detail,
               appliedFilters,
-              { defaultStatus: 'INACTIVE' },
+              {
+                defaultStatus: 'INACTIVE',
+                pendingRequestType: pendingByEmail.get(
+                  UserDbController.normalizeEmail(item.raw.email) || '',
+                )?.type,
+                pendingStateOverride:
+                  pendingApprovalEligibleUserIds?.has(item.raw.id) ?? null,
+              },
             ),
           );
         const filteredArchiveUsersDetailed = allArchiveRows
@@ -4207,7 +4346,14 @@ export class UserDbController {
             UserDbController.matchesAppliedUserFilters(
               item.detail,
               appliedFilters,
-              { defaultStatus: 'ARCHIVE' },
+              {
+                defaultStatus: 'ARCHIVE',
+                pendingRequestType: pendingByEmail.get(
+                  UserDbController.normalizeEmail(item.raw.email) || '',
+                )?.type,
+                pendingStateOverride:
+                  pendingApprovalEligibleUserIds?.has(item.raw.id) ?? null,
+              },
             ),
           );
 
@@ -4232,6 +4378,7 @@ export class UserDbController {
                 {
                   defaultStatus: 'PENDING',
                   isPendingRecord: true,
+                  pendingRequestType: item.raw?.type,
                 },
               ),
           );

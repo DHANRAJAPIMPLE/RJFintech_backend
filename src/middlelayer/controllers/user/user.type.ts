@@ -143,6 +143,7 @@ export type FetchAllUsersAppliedFilters = {
   } | null;
   status?: string[] | null;
   role?: string[] | null;
+  currentStatus?: 'initiate' | 'modify' | null;
   isPending?: 'yes' | 'no' | null;
 };
 

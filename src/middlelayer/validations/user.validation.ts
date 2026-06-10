@@ -113,6 +113,13 @@ const fetchAllUserAppliedSchema = z
       .optional(),
     status: optionalStringArraySchema,
     role: optionalStringArraySchema,
+    currentStatus: z
+      .preprocess(
+        (value) =>
+          typeof value === 'string' ? value.trim().toLowerCase() : value,
+        z.enum(['initiate', 'modify']).nullable().optional(),
+      )
+      .optional(),
     isPending: z
       .preprocess(
         (value) =>
