@@ -124,6 +124,48 @@ export type UserFilterManagerInternalOption = UserFilterManagerOption & {
   id: string | null;
 };
 
+export type FetchAllUsersNodeAccess = 'primary' | 'secondary';
+
+export type FetchAllUsersAppliedFilters = {
+  designation?: string[] | null;
+  nodeName?: {
+    values?: string[] | null;
+    nodeAccess?: FetchAllUsersNodeAccess | null;
+  } | null;
+  nodeType?: string[] | null;
+  category?: string[] | null;
+  subCategory?: string[] | null;
+  reportingManager?: string[] | null;
+  onboardingDate?: {
+    dateRange?: '7DAYS' | '15DAYS' | '1MONTH' | null;
+    fromDate?: string | null;
+    toDate?: string | null;
+  } | null;
+  status?: string[] | null;
+  role?: string[] | null;
+  isPending?: 'yes' | 'no' | null;
+};
+
+export type FetchAllUsersPaginationRequest = {
+  statusType: 'active' | 'pending' | 'inactive' | 'archive';
+  query?: string;
+  page?: number;
+  direction?: 'next' | 'prev';
+  cursor?: string | null;
+  prevCursor?: string | null;
+  nextCursor?: string | null;
+  cursorId?: string | null;
+  topCursor?: string | null;
+  offset?: number;
+  limit?: number;
+};
+
+export type FetchAllUsersRequest = {
+  filter: boolean;
+  applied: FetchAllUsersAppliedFilters | null;
+  pagination: FetchAllUsersPaginationRequest;
+};
+
 export type FetchUserFilterOptionsResponse = {
   message: 'User filter options fetched successfully!';
   code: 200;

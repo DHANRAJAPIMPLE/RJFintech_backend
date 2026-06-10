@@ -24,7 +24,6 @@ import {
   userFetchByNodePathCountSchema,
   userFilterOptionsSchema,
   userDetailsSchema,
-  userListSchema,
   fetchAllUserSchema,
   userModificationSchema,
 } from '../../validations/user.validation';
@@ -39,6 +38,7 @@ import type {
   UserCompanyNode,
   UserCompanyNodeInternal,
   FetchAllUsersResponse,
+  FetchAllUsersRequest,
   FetchAndProcessUsersResult,
   FetchUserDetailsInternalResponse,
   FetchUserDetailsResponse,
@@ -63,6 +63,29 @@ import type {
 } from './user.type';
 
 export class UserController {
+  private static normalizeFetchAllUsersRequest(body: unknown): FetchAllUsersRequest {
+    const parsed: any = zodParse(fetchAllUserSchema, body ?? {});
+    const pagination: any = parsed.pagination ?? {};
+
+    return {
+      filter: parsed.filter === true,
+      applied: parsed.filter === true ? (parsed.applied ?? null) : null,
+      pagination: {
+        statusType: pagination.statusType ?? parsed.statusType!,
+        query: pagination.query ?? parsed.query,
+        page: pagination.page ?? parsed.page,
+        direction: pagination.direction ?? parsed.direction,
+        cursor: pagination.cursor ?? parsed.cursor ?? null,
+        prevCursor: pagination.prevCursor ?? parsed.prevCursor ?? null,
+        nextCursor: pagination.nextCursor ?? parsed.nextCursor ?? null,
+        cursorId: pagination.cursorId ?? parsed.cursorId ?? null,
+        topCursor: pagination.topCursor ?? parsed.topCursor ?? null,
+        offset: pagination.offset ?? parsed.offset,
+        limit: pagination.limit ?? parsed.limit,
+      },
+    };
+  }
+
   private static formatListAccess(access: UserListAccess): UserListAccess {
     return {
       roleCategory: access.roleCategory,
@@ -277,6 +300,7 @@ export class UserController {
 
   private static async fetchAndProcessUsers(
     req: Request & { user?: { id: string; companyId: string } },
+    requestBody: FetchAllUsersRequest,
     statusType?: 'active' | 'pending' | 'inactive' | 'archive',
   ): Promise<FetchAndProcessUsersResult> {
     const {
@@ -286,11 +310,11 @@ export class UserController {
       nextCursor,
       cursorId,
       topCursor,
-      offset,
-      limit,
+      offset = 0,
+      limit = 10,
       page,
       query,
-    } = zodParse(userListSchema, req.body ?? {});
+    } = requestBody.pagination;
     const companyId = req.user?.companyId;
     const userId = req.user?.id;
     if (!companyId || !userId) {
@@ -315,6 +339,8 @@ export class UserController {
         limit,
         page,
         query,
+        filter: requestBody.filter,
+        applied: requestBody.applied,
       },
     );
     if (!ok) {
@@ -362,7 +388,10 @@ export class UserController {
     next: NextFunction,
   ) {
     try {
-      const { statusType } = zodParse(fetchAllUserSchema, req.body ?? {});
+      const requestBody = UserController.normalizeFetchAllUsersRequest(
+        req.body,
+      );
+      const { statusType } = requestBody.pagination;
       const {
         activeUsers,
         archiveUsers,
@@ -373,7 +402,11 @@ export class UserController {
         inactiveCount,
         pendingCount,
         pageInfo,
-      } = await UserController.fetchAndProcessUsers(req, statusType);
+      } = await UserController.fetchAndProcessUsers(
+        req,
+        requestBody,
+        statusType,
+      );
 
       const response: FetchAllUsersResponse = {
         data:

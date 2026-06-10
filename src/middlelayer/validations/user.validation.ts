@@ -51,6 +51,117 @@ const optionalUserSearchQuerySchema = z.preprocess((value) => {
   return query || undefined;
 }, z.string().max(150, 'Query is too long').optional());
 
+const optionalStringArraySchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null) return undefined;
+    return value;
+  },
+  z.array(z.string().trim().min(1)).nullable().optional(),
+);
+
+const optionalDateStringSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+    return value;
+  },
+  z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format')
+    .optional(),
+);
+
+const fetchAllUserAppliedSchema = z
+  .object({
+    designation: optionalStringArraySchema,
+    nodeName: z
+      .object({
+        values: optionalStringArraySchema,
+        nodeAccess: z
+          .preprocess(
+            (value) =>
+              typeof value === 'string' ? value.trim().toLowerCase() : value,
+            z.enum(['primary', 'secondary']).nullable().optional(),
+          )
+          .optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    nodeType: optionalStringArraySchema,
+    category: optionalStringArraySchema,
+    subCategory: optionalStringArraySchema,
+    reportingManager: optionalStringArraySchema,
+    onboardingDate: z
+      .object({
+        dateRange: z
+          .preprocess(
+            (value) =>
+              typeof value === 'string' ? value.trim().toUpperCase() : value,
+            z.enum(['7DAYS', '15DAYS', '1MONTH']).nullable().optional(),
+          )
+          .optional(),
+        fromDate: optionalDateStringSchema.nullable().optional(),
+        toDate: optionalDateStringSchema.nullable().optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    status: optionalStringArraySchema,
+    role: optionalStringArraySchema,
+    isPending: z
+      .preprocess(
+        (value) =>
+          typeof value === 'string' ? value.trim().toLowerCase() : value,
+        z.enum(['yes', 'no']).nullable().optional(),
+      )
+      .optional(),
+  })
+  .strict();
+
+const fetchAllUserPaginationSchema = z
+  .object({
+    statusType: requiredUserListTypeSchema,
+    query: optionalUserSearchQuerySchema,
+    page: z.preprocess(
+      (value) =>
+        value === undefined || value === null || value === ''
+          ? undefined
+          : value,
+      z.coerce
+        .number()
+        .int('Page must be an integer')
+        .min(1, 'Page must be greater than or equal to 1')
+        .optional(),
+    ),
+    direction: z.preprocess(
+      (value) => {
+        if (value === undefined || value === null || value === '') {
+          return undefined;
+        }
+
+        return typeof value === 'string' ? value.trim().toLowerCase() : value;
+      },
+      z
+        .enum(['next', 'prev', 'previous'])
+        .optional()
+        .default('next')
+        .transform((value) => (value === 'previous' ? 'prev' : value)),
+    ),
+    cursor: optionalCursorTokenSchema('Cursor').nullable().optional(),
+    prevCursor: optionalCursorTokenSchema('Previous cursor')
+      .nullable()
+      .optional(),
+    nextCursor: optionalCursorTokenSchema('Next cursor')
+      .nullable()
+      .optional(),
+    cursorId: optionalCursorTokenSchema('Cursor').nullable().optional(),
+    topCursor: optionalCursorTokenSchema('Top cursor').nullable().optional(),
+    ...paginationSchema,
+  })
+  .strict();
+
 export const userOnboardingSchema = z
   .object({
     type: z
@@ -209,9 +320,24 @@ export const userListSchema = z
   })
   .strict();
 
-export const fetchAllUserSchema = userListSchema.extend({
-  statusType: requiredUserListTypeSchema,
-});
+export const fetchAllUserSchema = userListSchema
+  .extend({
+    statusType: requiredUserListTypeSchema.optional(),
+    filter: z.boolean().optional(),
+    pagination: fetchAllUserPaginationSchema.optional(),
+    applied: fetchAllUserAppliedSchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const statusType = value.pagination?.statusType ?? value.statusType;
+    if (!statusType) {
+      context.addIssue({
+        code: 'custom',
+        message: 'statusType is required',
+        path: ['statusType'],
+      });
+    }
+  });
 
 export const userDetailsSchema = z
   .object({

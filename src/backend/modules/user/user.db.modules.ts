@@ -109,6 +109,23 @@ type HistoryChangeCount = {
   remove: number;
 };
 
+type NormalizedUserListAppliedFilters = {
+  designation: string[];
+  nodeValues: string[];
+  nodeAccess: 'PRIMARY' | 'SECONDARY' | null;
+  nodeType: string[];
+  category: string[];
+  subCategory: string[];
+  reportingManager: string[];
+  status: string[];
+  role: string[];
+  isPending: boolean | null;
+  onboardingDate: {
+    from: Date | null;
+    to: Date | null;
+  } | null;
+};
+
 /**
  * Controller for managing user accounts, mappings to companies, and onboarding workflows.
  * Handles production user data and pending user requests.
@@ -1530,6 +1547,349 @@ export class UserDbController {
 
     const normalized = value.trim();
     return normalized || null;
+  }
+
+  private static compactFilterValue(value: unknown) {
+    const normalized = UserDbController.normalizeFilterText(value);
+    if (!normalized) return null;
+
+    const compact = normalized.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    return compact || null;
+  }
+
+  private static normalizeAppliedFilterValues(values: unknown) {
+    if (!Array.isArray(values)) return [];
+
+    return Array.from(
+      new Set(
+        values
+          .map((value) => UserDbController.compactFilterValue(value))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+  }
+
+  private static parseUserFilterDateRange(applied: any) {
+    const onboardingDate =
+      applied && typeof applied === 'object' ? applied.onboardingDate : null;
+    if (!onboardingDate || typeof onboardingDate !== 'object') {
+      return null;
+    }
+
+    const parseBoundary = (
+      value: unknown,
+      boundary: 'start' | 'end',
+    ): Date | null => {
+      const normalized = UserDbController.normalizeFilterText(value);
+      if (!normalized) return null;
+
+      const suffix =
+        boundary === 'start' ? 'T00:00:00.000Z' : 'T23:59:59.999Z';
+      const parsed = new Date(`${normalized}${suffix}`);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    const startOfDay = (date: Date) =>
+      new Date(
+        Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+      );
+    const endOfDay = (date: Date) =>
+      new Date(
+        Date.UTC(
+          date.getUTCFullYear(),
+          date.getUTCMonth(),
+          date.getUTCDate(),
+          23,
+          59,
+          59,
+          999,
+        ),
+      );
+
+    const explicitFrom = parseBoundary(onboardingDate.fromDate, 'start');
+    const explicitTo = parseBoundary(onboardingDate.toDate, 'end');
+    if (explicitFrom || explicitTo) {
+      return {
+        from: explicitFrom,
+        to: explicitTo,
+      };
+    }
+
+    const range = UserDbController.normalizeFilterText(
+      onboardingDate.dateRange,
+    )?.toUpperCase();
+    if (!range) return null;
+
+    const now = new Date();
+    const todayStart = startOfDay(now);
+    const todayEnd = endOfDay(now);
+    const from = new Date(todayStart);
+
+    if (range === '7DAYS') {
+      from.setUTCDate(from.getUTCDate() - 6);
+    } else if (range === '15DAYS') {
+      from.setUTCDate(from.getUTCDate() - 14);
+    } else if (range === '1MONTH') {
+      from.setUTCMonth(from.getUTCMonth() - 1);
+    } else {
+      return null;
+    }
+
+    return {
+      from,
+      to: todayEnd,
+    };
+  }
+
+  private static normalizeUserListAppliedFilters(
+    applied: unknown,
+  ): NormalizedUserListAppliedFilters | null {
+    const source =
+      applied && typeof applied === 'object'
+        ? (applied as Record<string, unknown>)
+        : null;
+    if (!source) return null;
+
+    const nodeName =
+      source.nodeName && typeof source.nodeName === 'object'
+        ? (source.nodeName as Record<string, unknown>)
+        : null;
+    const nodeAccessRaw = UserDbController.normalizeFilterText(
+      nodeName?.nodeAccess,
+    )?.toLowerCase();
+    const nodeAccess =
+      nodeAccessRaw === 'primary'
+        ? 'PRIMARY'
+        : nodeAccessRaw === 'secondary'
+          ? 'SECONDARY'
+          : null;
+
+    const normalized: NormalizedUserListAppliedFilters = {
+      designation: UserDbController.normalizeAppliedFilterValues(
+        source.designation,
+      ),
+      nodeValues: UserDbController.normalizeAppliedFilterValues(
+        nodeName?.values,
+      ),
+      nodeAccess,
+      nodeType: UserDbController.normalizeAppliedFilterValues(source.nodeType),
+      category: UserDbController.normalizeAppliedFilterValues(source.category),
+      subCategory: UserDbController.normalizeAppliedFilterValues(
+        source.subCategory,
+      ),
+      reportingManager: UserDbController.normalizeAppliedFilterValues(
+        source.reportingManager,
+      ),
+      status: UserDbController.normalizeAppliedFilterValues(source.status),
+      role: UserDbController.normalizeAppliedFilterValues(source.role),
+      isPending:
+        UserDbController.normalizeFilterText(source.isPending)?.toLowerCase() ===
+        'yes'
+          ? true
+          : UserDbController.normalizeFilterText(source.isPending)?.toLowerCase() ===
+              'no'
+            ? false
+            : null,
+      onboardingDate: UserDbController.parseUserFilterDateRange(source),
+    };
+
+    const hasFilters =
+      normalized.designation.length > 0 ||
+      normalized.nodeValues.length > 0 ||
+      normalized.nodeType.length > 0 ||
+      normalized.category.length > 0 ||
+      normalized.subCategory.length > 0 ||
+      normalized.reportingManager.length > 0 ||
+      normalized.status.length > 0 ||
+      normalized.role.length > 0 ||
+      normalized.isPending !== null ||
+      normalized.onboardingDate !== null;
+
+    return hasFilters ? normalized : null;
+  }
+
+  private static matchesNormalizedFilterValue(
+    value: unknown,
+    acceptedValues: string[],
+  ) {
+    if (acceptedValues.length === 0) return true;
+
+    const normalized = UserDbController.compactFilterValue(value);
+    return Boolean(normalized && acceptedValues.includes(normalized));
+  }
+
+  private static matchesRoleFilter(roleName: unknown, acceptedValues: string[]) {
+    if (acceptedValues.length === 0) return true;
+
+    const normalizedRoleName = UserDbController.compactFilterValue(roleName);
+    if (!normalizedRoleName) return false;
+
+    return acceptedValues.some((accepted) => {
+      if (accepted === 'maker' || accepted === 'user') {
+        return normalizedRoleName.includes('user');
+      }
+      if (accepted === 'checker' || accepted === 'manager') {
+        return normalizedRoleName.includes('manager');
+      }
+      if (accepted === 'viewer') {
+        return normalizedRoleName.includes('viewer');
+      }
+
+      return (
+        normalizedRoleName === accepted || normalizedRoleName.includes(accepted)
+      );
+    });
+  }
+
+  private static matchesCreatedAtRange(
+    value: unknown,
+    range: NormalizedUserListAppliedFilters['onboardingDate'],
+  ) {
+    if (!range) return true;
+
+    const date = value instanceof Date ? value : new Date(String(value || ''));
+    if (Number.isNaN(date.getTime())) return false;
+    if (range.from && date < range.from) return false;
+    if (range.to && date > range.to) return false;
+    return true;
+  }
+
+  private static matchesAppliedUserFilters(
+    user: any,
+    filters: NormalizedUserListAppliedFilters | null,
+    options: { defaultStatus: string; isPendingRecord?: boolean },
+  ) {
+    if (!filters) return true;
+
+    const basicDetails = user?.basicDetails || {};
+    const primary = Array.isArray(user?.primary) ? user.primary : [];
+    const secondary = Array.isArray(user?.secondary) ? user.secondary : [];
+    const allAccesses = [...primary, ...secondary];
+    const scopedAccesses =
+      filters.nodeAccess === 'PRIMARY'
+        ? primary
+        : filters.nodeAccess === 'SECONDARY'
+          ? secondary
+          : allAccesses;
+    const isPending =
+      options.isPendingRecord === true || user?.isPending === true;
+    const statusCandidates = [
+      options.defaultStatus,
+      basicDetails.status,
+      isPending ? 'PENDING' : null,
+    ]
+      .map((value) => UserDbController.compactFilterValue(value))
+      .filter((value): value is string => Boolean(value));
+
+    if (
+      filters.designation.length > 0 &&
+      !UserDbController.matchesNormalizedFilterValue(
+        basicDetails.designation,
+        filters.designation,
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.nodeValues.length > 0 &&
+      !scopedAccesses.some(
+        (access: any) =>
+          UserDbController.matchesNormalizedFilterValue(
+            access?.nodeName,
+            filters.nodeValues,
+          ) ||
+          UserDbController.matchesNormalizedFilterValue(
+            access?.nodePath,
+            filters.nodeValues,
+          ),
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.nodeType.length > 0 &&
+      !scopedAccesses.some((access: any) =>
+        UserDbController.matchesNormalizedFilterValue(
+          access?.nodeType,
+          filters.nodeType,
+        ),
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.category.length > 0 &&
+      !allAccesses.some((access: any) =>
+        UserDbController.matchesNormalizedFilterValue(
+          access?.roleCategory,
+          filters.category,
+        ),
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.subCategory.length > 0 &&
+      !allAccesses.some((access: any) =>
+        UserDbController.matchesNormalizedFilterValue(
+          access?.roleSubCategory,
+          filters.subCategory,
+        ),
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.reportingManager.length > 0 &&
+      !(
+        UserDbController.matchesNormalizedFilterValue(
+          basicDetails.reportingManagerName,
+          filters.reportingManager,
+        ) ||
+        UserDbController.matchesNormalizedFilterValue(
+          basicDetails.reportingManagerEmail,
+          filters.reportingManager,
+        )
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.status.length > 0 &&
+      !statusCandidates.some((status) => filters.status.includes(status))
+    ) {
+      return false;
+    }
+
+    if (
+      filters.role.length > 0 &&
+      !allAccesses.some((access: any) =>
+        UserDbController.matchesRoleFilter(access?.roleName, filters.role),
+      )
+    ) {
+      return false;
+    }
+
+    if (filters.isPending !== null && isPending !== filters.isPending) {
+      return false;
+    }
+
+    if (
+      !UserDbController.matchesCreatedAtRange(
+        basicDetails.createdAt,
+        filters.onboardingDate,
+      )
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   private static addTextFilterOption(
@@ -3492,8 +3852,14 @@ export class UserDbController {
   static async fetchAllUsers(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId, userId } = req.body;
+      const paginationInput =
+        req.body?.pagination &&
+        typeof req.body.pagination === 'object' &&
+        !Array.isArray(req.body.pagination)
+          ? req.body.pagination
+          : req.body;
       const requestedListType = UserDbController.normalizeFilterText(
-        req.body?.statusType,
+        paginationInput?.statusType ?? req.body?.statusType,
       )?.toLowerCase();
       if (
         requestedListType &&
@@ -3508,26 +3874,26 @@ export class UserDbController {
         ['active', 'pending', 'inactive', 'archive'].includes(requestedListType)
           ? (requestedListType as 'active' | 'pending' | 'inactive' | 'archive')
           : undefined;
-      const query = UserDbController.normalizeFilterText(req.body?.query);
-      const pagination = getPagination(req.body);
-      const rawPage = Number(req.body?.page);
+      const query = UserDbController.normalizeFilterText(paginationInput?.query);
+      const pagination = getPagination(paginationInput);
+      const rawPage = Number(paginationInput?.page);
       const requestedPage =
-        req.body?.page !== null &&
-        req.body?.page !== undefined &&
+        paginationInput?.page !== null &&
+        paginationInput?.page !== undefined &&
         Number.isFinite(rawPage) &&
         rawPage > 0
           ? Math.floor(rawPage)
           : null;
       const limit = pagination.limit;
       const pageDirection = UserDbController.normalizePageDirection(
-        req.body?.direction,
+        paginationInput?.direction,
       );
       const rawCursor =
-        req.body?.cursor ??
+        paginationInput?.cursor ??
         (pageDirection === 'prev'
-          ? req.body?.prevCursor
-          : req.body?.nextCursor) ??
-        req.body?.cursorId ??
+          ? paginationInput?.prevCursor
+          : paginationInput?.nextCursor) ??
+        paginationInput?.cursorId ??
         null;
       const hasCursor = UserDbController.decodeCursor(rawCursor) !== null;
       const isPagePagination = requestedPage !== null && !hasCursor;
@@ -3538,7 +3904,7 @@ export class UserDbController {
       const requestedCursor = isPagePagination ? null : rawCursor;
       const requestedTopCursor = isPagePagination
         ? null
-        : req.body?.topCursor || null;
+        : paginationInput?.topCursor || null;
       const cursor = isPagePagination
         ? null
         : UserDbController.decodeCursor(requestedCursor);
@@ -3546,6 +3912,10 @@ export class UserDbController {
         ? null
         : UserDbController.decodeCursor(requestedTopCursor);
       const effectiveDirection = cursor ? pageDirection : 'next';
+      const filterEnabled = req.body?.filter === true;
+      const appliedFilters = filterEnabled
+        ? UserDbController.normalizeUserListAppliedFilters(req.body?.applied)
+        : null;
       let resolvedCompanyId = companyId;
 
       // Resolve companyId for filtering production users
@@ -3707,6 +4077,279 @@ export class UserDbController {
           },
         },
       };
+
+      if (filterEnabled && appliedFilters) {
+        const fullUserInclude = {
+          userMappings: {
+            where: { companyId: resolvedCompanyId },
+            include: {
+              company: true,
+              manager: true,
+            },
+          },
+          userAccesses: {
+            where: {
+              companyId: resolvedCompanyId,
+            },
+            include: {
+              role: true,
+              orgStructure: true,
+            },
+          },
+        };
+
+        const [
+          allActiveRows,
+          allInactiveRows,
+          allArchiveRows,
+          allPendingRaw,
+          queryMatchedPendingRaw,
+        ] = await Promise.all([
+          prisma.user.findMany({
+            where: buildUserWhere('ACTIVE'),
+            include: fullUserInclude,
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            }),
+            prisma.user.findMany({
+              where: buildUserWhere('INACTIVE'),
+              include: fullUserInclude,
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            }),
+            prisma.user.findMany({
+              where: buildUserWhere('ARCHIVE'),
+              include: fullUserInclude,
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            }),
+            UserDbController.fetchPendingUserOnboardings({
+              resolvedCompanyId,
+              isGlobal,
+              visibleNodePaths: allVisibleNodePaths,
+              offset: 0,
+              limit: Math.max(limit, 1),
+              applyPagination: false,
+              page: 1,
+              query: null,
+              viewerUserId: userId,
+            }),
+            UserDbController.fetchPendingUserOnboardings({
+              resolvedCompanyId,
+              isGlobal,
+              visibleNodePaths: allVisibleNodePaths,
+              offset: 0,
+              limit: Math.max(limit, 1),
+              applyPagination: false,
+              page: 1,
+              query,
+              viewerUserId: userId,
+            }),
+          ]);
+
+        const pendingByEmail = new Map<string, any>();
+        (allPendingRaw.pendingOnboardings || []).forEach((request: any) => {
+          const email = UserDbController.normalizeEmail(
+            UserDbController.extractUserTargetEmail(request.data),
+          );
+          if (email && !pendingByEmail.has(email)) {
+            pendingByEmail.set(email, request);
+          }
+        });
+
+        const filteredActiveUsersDetailed = allActiveRows
+          .map((user: any) => ({
+            raw: user,
+            detail: UserDbController.formatProductionUser(
+              user,
+              pendingByEmail.get(
+                UserDbController.normalizeEmail(user.email) || '',
+              ),
+              { detail: true },
+            ),
+          }))
+          .filter((item) =>
+            UserDbController.matchesAppliedUserFilters(
+              item.detail,
+              appliedFilters,
+              { defaultStatus: 'ACTIVE' },
+            ),
+          );
+        const filteredInactiveUsersDetailed = allInactiveRows
+          .map((user: any) => ({
+            raw: user,
+            detail: UserDbController.formatProductionUser(
+              user,
+              pendingByEmail.get(
+                UserDbController.normalizeEmail(user.email) || '',
+              ),
+              { detail: true },
+            ),
+          }))
+          .filter((item) =>
+            UserDbController.matchesAppliedUserFilters(
+              item.detail,
+              appliedFilters,
+              { defaultStatus: 'INACTIVE' },
+            ),
+          );
+        const filteredArchiveUsersDetailed = allArchiveRows
+          .map((user: any) => ({
+            raw: user,
+            detail: UserDbController.formatProductionUser(
+              user,
+              pendingByEmail.get(
+                UserDbController.normalizeEmail(user.email) || '',
+              ),
+              { detail: true },
+            ),
+          }))
+          .filter((item) =>
+            UserDbController.matchesAppliedUserFilters(
+              item.detail,
+              appliedFilters,
+              { defaultStatus: 'ARCHIVE' },
+            ),
+          );
+
+        const allPendingFormatted = await UserDbController.formatPendingUsers(
+          queryMatchedPendingRaw.pendingOnboardings || [],
+          resolvedCompanyId,
+          { detail: true },
+        );
+        const filteredPendingUsers = allPendingFormatted.filter((user: any) =>
+          UserDbController.matchesAppliedUserFilters(
+            user,
+            appliedFilters,
+            {
+              defaultStatus: 'PENDING',
+              isPendingRecord: true,
+            },
+          ),
+        );
+
+        const activeCount = filteredActiveUsersDetailed.length;
+        const inactiveCount = filteredInactiveUsersDetailed.length;
+        const archiveCount = filteredArchiveUsersDetailed.length;
+        const pendingCount = filteredPendingUsers.length;
+        const isProductionStatusType =
+          listType === 'active' ||
+          listType === 'inactive' ||
+          listType === 'archive';
+        const selectedRowsSource = isProductionStatusType
+          ? listType === 'inactive'
+            ? filteredInactiveUsersDetailed
+            : listType === 'archive'
+              ? filteredArchiveUsersDetailed
+              : filteredActiveUsersDetailed
+          : filteredPendingUsers;
+        const cursorFilteredRows = selectedRowsSource.filter((row: any) =>
+          cursor
+            ? UserDbController.isRowInCursorDirection(
+                isProductionStatusType ? row.raw : row,
+                cursor,
+                effectiveDirection === 'prev' ? 'newer' : 'older',
+              )
+            : true,
+        );
+        const selectedNewCount = topCursor
+          ? selectedRowsSource.filter((row: any) =>
+              UserDbController.isRowInCursorDirection(
+                isProductionStatusType ? row.raw : row,
+                topCursor,
+                'newer',
+              ),
+            ).length
+          : 0;
+        const pagedSelection = cursorFilteredRows.slice(
+          cursor ? 0 : offset,
+          (cursor ? 0 : offset) + limit + 1,
+        );
+        const selectedPage = UserDbController.buildPageInfo(
+          pagedSelection.map((row: any) => (isProductionStatusType ? row.raw : row)),
+          limit,
+          requestedTopCursor,
+          selectedNewCount,
+          effectiveDirection,
+          cursor,
+          page,
+          isPagePagination,
+        );
+
+        const firstSelectedPageRow = selectedPage.pageRows[0];
+        if (!isPagePagination && cursor && firstSelectedPageRow) {
+          const newerCount = selectedRowsSource.filter((row: any) =>
+            UserDbController.isRowInCursorDirection(
+              isProductionStatusType ? row.raw : row,
+              firstSelectedPageRow,
+              'newer',
+            ),
+          ).length;
+          selectedPage.pageInfo.page = Math.floor(newerCount / limit) + 1;
+        }
+
+        const pageIdSet = new Set(
+          selectedPage.pageRows.map((row: any) => row.id),
+        );
+        const activeUsers =
+          listType === 'inactive' || listType === 'archive'
+            ? []
+            : filteredActiveUsersDetailed
+                .filter((item) => pageIdSet.has(item.raw.id))
+                .map((item) =>
+                  UserDbController.formatProductionUser(
+                    item.raw,
+                    pendingByEmail.get(
+                      UserDbController.normalizeEmail(item.raw.email) || '',
+                    ),
+                  ),
+                );
+        const inactiveUsers =
+          listType === 'inactive'
+            ? filteredInactiveUsersDetailed
+                .filter((item) => pageIdSet.has(item.raw.id))
+                .map((item) =>
+                  UserDbController.formatProductionUser(
+                    item.raw,
+                    pendingByEmail.get(
+                      UserDbController.normalizeEmail(item.raw.email) || '',
+                    ),
+                  ),
+                )
+            : [];
+        const archiveUsers =
+          listType === 'archive'
+            ? filteredArchiveUsersDetailed
+                .filter((item) => pageIdSet.has(item.raw.id))
+                .map((item) =>
+                  UserDbController.formatProductionUser(
+                    item.raw,
+                    pendingByEmail.get(
+                      UserDbController.normalizeEmail(item.raw.email) || '',
+                    ),
+                  ),
+                )
+            : [];
+        const pendingUsers =
+          listType === 'pending'
+            ? filteredPendingUsers.filter((item: any) => pageIdSet.has(item.id))
+            : [];
+
+        return res.status(200).json({
+          message: 'Users fetched successfully!',
+          code: 200,
+          data: {
+            activeUsers,
+            pendingUsers,
+            inactiveUsers,
+            archiveUsers,
+          },
+          activeCount,
+          inactiveCount,
+          archiveCount,
+          pendingCount,
+          limit,
+          offset,
+          pageInfo: selectedPage.pageInfo,
+        });
+      }
 
       const [activeCount, inactiveCount, archiveCount] =
         await prisma.$transaction([
