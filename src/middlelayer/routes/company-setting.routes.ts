@@ -172,7 +172,6 @@ router.post(
 ); //done
 router.post(
   '/user/fetch-company-nodes',
-  authorize('initiate'),
   UserController.fetchCompanyNodes,
 ); //done
 router.post(

@@ -29,6 +29,30 @@ type ManagerFilterOption = {
   email: string;
 };
 
+type CompanyNodeFilterDesignationOption = {
+  value: string;
+  count: number;
+};
+
+type CompanyNodeFilterNodeOption = {
+  value: string;
+  path: string;
+};
+
+type UserAccessVisibilityNode = {
+  id: string;
+  nodeName: string;
+  nodePath: string;
+  nodeType: string;
+};
+
+type UserAccessVisibilityScope = {
+  isGlobal: boolean;
+  visibleNodeIds: string[];
+  visibleNodePaths: string[];
+  visibleNodes: UserAccessVisibilityNode[];
+};
+
 type CompanyNodeWorkflowOption = {
   id?: string;
   levelsHash: string;
@@ -913,16 +937,7 @@ export class UserDbController {
     if (isGlobal) return true;
     if (visibleRequestIds.has(onboarding.id)) return true;
     if (viewerUserId && onboarding.initiatorId === viewerUserId) return true;
-
-    const requestNodePaths = UserDbController.extractPendingUserRequestNodePaths(
-      onboarding.data,
-    );
-    if (requestNodePaths.length === 0 || visibleNodePaths.length === 0) {
-      return false;
-    }
-
-    const visibleNodePathSet = new Set(visibleNodePaths);
-    return requestNodePaths.some((nodePath) => visibleNodePathSet.has(nodePath));
+    return false;
   }
 
   private static extractUserSnapshot(data: any): UserDataSnapshot | null {
@@ -1621,6 +1636,18 @@ export class UserDbController {
     }
   }
 
+  private static humanizeFilterLabel(value: unknown) {
+    const normalized = UserDbController.normalizeFilterText(value);
+    if (!normalized) return null;
+
+    return normalized
+      .toLowerCase()
+      .split(/[_\s]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
   private static sortFilterOptions<T extends { label: string }>(
     optionMap: Map<string, T>,
   ) {
@@ -1972,6 +1999,327 @@ export class UserDbController {
       });
 
     return pendingKeys;
+  }
+
+  private static async getUserAccessVisibilityScope(
+    userId: string,
+    companyId: string,
+    pendingOrgNodePaths: Set<string>,
+  ): Promise<UserAccessVisibilityScope> {
+    const globalAccess = await prisma.userAccess.findFirst({
+      where: {
+        userId,
+        companyId,
+        isGlobalAccess: true,
+      },
+      select: { id: true },
+    });
+
+    if (globalAccess) {
+      const visibleNodes = await prisma.orgStructure.findMany({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+          nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+        },
+        select: {
+          id: true,
+          nodeName: true,
+          nodePath: true,
+          nodeType: true,
+        },
+        orderBy: [{ nodePath: 'asc' }],
+      });
+
+      return {
+        isGlobal: true,
+        visibleNodeIds: visibleNodes.map((node) => node.id),
+        visibleNodePaths: visibleNodes.map((node) => node.nodePath),
+        visibleNodes: visibleNodes.map((node) => ({
+          ...node,
+          nodeType: String(node.nodeType),
+        })),
+      };
+    }
+
+    const requesterAccesses = await prisma.userAccess.findMany({
+      where: {
+        userId,
+        companyId,
+        role: {
+          subCategory: 'USER_ACC',
+          view: true,
+        },
+        orgStructure: {
+          status: 'ACTIVE',
+          nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+        },
+      },
+      include: {
+        orgStructure: {
+          select: {
+            nodePath: true,
+          },
+        },
+      },
+    });
+
+    if (requesterAccesses.length === 0) {
+      return {
+        isGlobal: false,
+        visibleNodeIds: [],
+        visibleNodePaths: [],
+        visibleNodes: [],
+      };
+    }
+
+    const nodePaths = requesterAccesses
+      .filter((access) => access.accessCategory === 'NODE')
+      .map((access) => access.orgStructure.nodePath);
+    const immediateChildPaths = requesterAccesses
+      .filter((access) => access.accessCategory === 'IMMEDIATE_CHILD')
+      .map((access) => access.orgStructure.nodePath);
+    const allChildPaths = requesterAccesses
+      .filter((access) => access.accessCategory === 'ALL_CHILD')
+      .map((access) => access.orgStructure.nodePath);
+
+    const visibleNodes = await prisma.orgStructure.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+        OR: [
+          {
+            nodePath: {
+              in: [...nodePaths, ...immediateChildPaths, ...allChildPaths],
+            },
+          },
+          ...allChildPaths.map((path) => ({
+            nodePath: { startsWith: `${path}.` },
+          })),
+          ...immediateChildPaths.map((path) => ({
+            parent: { nodePath: path },
+          })),
+        ],
+      },
+      select: {
+        id: true,
+        nodeName: true,
+        nodePath: true,
+        nodeType: true,
+      },
+      orderBy: [{ nodePath: 'asc' }],
+    });
+
+    return {
+      isGlobal: false,
+      visibleNodeIds: visibleNodes.map((node) => node.id),
+      visibleNodePaths: visibleNodes.map((node) => node.nodePath),
+      visibleNodes: visibleNodes.map((node) => ({
+        ...node,
+        nodeType: String(node.nodeType),
+      })),
+    };
+  }
+
+  private static async buildUserAccFilterDropdowns(
+    userId: string,
+    companyId: string,
+  ) {
+    const pendingOrgNodePaths =
+      await UserDbController.getPendingOrgNodePathsForFetch(companyId);
+    const visibility = await UserDbController.getUserAccessVisibilityScope(
+      userId,
+      companyId,
+      pendingOrgNodePaths,
+    );
+    const visibleNodePathSet = new Set(visibility.visibleNodePaths);
+
+    const users = await prisma.user.findMany({
+      where: {
+        userMappings: {
+          some: {
+            companyId,
+            status: 'ACTIVE',
+          },
+        },
+        ...(visibility.isGlobal
+          ? {}
+          : visibility.visibleNodeIds.length > 0
+            ? {
+                userAccesses: {
+                  some: {
+                    companyId,
+                    nodeId: { in: visibility.visibleNodeIds },
+                  },
+                },
+              }
+            : {
+                id: '__no_visible_user__',
+              }),
+      },
+      select: {
+        userMappings: {
+          where: {
+            companyId,
+            status: 'ACTIVE',
+          },
+          select: {
+            designation: true,
+            manager: {
+              select: {
+                name: true,
+                email: true,
+              },
+            },
+          },
+        },
+        userAccesses: {
+          where: {
+            companyId,
+            role: {
+              isActive: true,
+            },
+            orgStructure: {
+              status: 'ACTIVE',
+              nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+            },
+          },
+          select: {
+            role: {
+              select: {
+                roleName: true,
+                category: true,
+                subCategory: true,
+              },
+            },
+            orgStructure: {
+              select: {
+                nodePath: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const designationCounts = new Map<
+      string,
+      CompanyNodeFilterDesignationOption
+    >();
+    const categoryMap = new Map<string, string>();
+    const subCategoryMap = new Map<string, Set<string>>();
+    const reportingManagerMap = new Map<string, string>();
+    const roleMap = new Map<string, string>();
+
+    for (const user of users) {
+      const mapping = user.userMappings[0];
+      const designation = UserDbController.normalizeFilterText(
+        mapping?.designation,
+      );
+      if (designation) {
+        const key = designation.toLowerCase();
+        const current = designationCounts.get(key);
+        designationCounts.set(key, {
+          value: designation,
+          count: (current?.count || 0) + 1,
+        });
+      }
+
+      const managerName =
+        UserDbController.normalizeFilterText(mapping?.manager?.name) ||
+        UserDbController.normalizeFilterText(mapping?.manager?.email);
+      if (managerName) {
+        reportingManagerMap.set(managerName.toLowerCase(), managerName);
+      }
+
+      const visibleAccesses = visibility.isGlobal
+        ? user.userAccesses
+        : user.userAccesses.filter((access) =>
+            visibleNodePathSet.has(access.orgStructure.nodePath),
+          );
+
+      for (const access of visibleAccesses) {
+        const categoryLabel = UserDbController.humanizeFilterLabel(
+          access.role?.category,
+        );
+        const subCategoryLabel = UserDbController.humanizeFilterLabel(
+          access.role?.subCategory,
+        );
+        const roleName = UserDbController.normalizeFilterText(
+          access.role?.roleName,
+        );
+
+        if (categoryLabel) {
+          categoryMap.set(categoryLabel.toLowerCase(), categoryLabel);
+        }
+
+        if (categoryLabel && subCategoryLabel) {
+          const categoryKey = categoryLabel.toLowerCase();
+          const current = subCategoryMap.get(categoryKey) || new Set<string>();
+          current.add(subCategoryLabel);
+          subCategoryMap.set(categoryKey, current);
+        }
+
+        if (roleName) {
+          roleMap.set(roleName.toLowerCase(), roleName);
+        }
+      }
+    }
+
+    const nodeName: CompanyNodeFilterNodeOption[] = visibility.visibleNodes.map(
+      (node) => ({
+        value: node.nodeName,
+        path: node.nodePath,
+      }),
+    );
+    nodeName.sort((a, b) => a.value.localeCompare(b.value));
+
+    const nodeType = Array.from(
+      new Map(
+        visibility.visibleNodes
+          .map((node) => {
+            const label = UserDbController.humanizeFilterLabel(node.nodeType);
+            return label ? [label.toLowerCase(), label] : null;
+          })
+          .filter(
+            (
+              entry,
+            ): entry is [string, string] => Array.isArray(entry) && entry.length === 2,
+          ),
+      ).values(),
+    ).sort((a, b) => a.localeCompare(b));
+
+    const category = Array.from(categoryMap.values()).sort((a, b) =>
+      a.localeCompare(b),
+    );
+    const reportingManager = Array.from(reportingManagerMap.values()).sort(
+      (a, b) => a.localeCompare(b),
+    );
+    const role = Array.from(roleMap.values()).sort((a, b) =>
+      a.localeCompare(b),
+    );
+    const subCategoryEntries: Array<[string, string[]]> = Array.from(
+      subCategoryMap.entries(),
+    ).map(([categoryKey, values]) => [
+      categoryMap.get(categoryKey) || categoryKey,
+      Array.from(values).sort((a, b) => a.localeCompare(b)),
+    ]);
+    subCategoryEntries.sort((left, right) =>
+      left[0].localeCompare(right[0]),
+    );
+    const subCategory = Object.fromEntries(subCategoryEntries);
+
+    return {
+      designation: Array.from(designationCounts.values()).sort((a, b) =>
+        a.value.localeCompare(b.value),
+      ),
+      nodeName,
+      nodeType,
+      category,
+      subCategory,
+      reportingManager
+    };
   }
 
   private static normalizePageDirection(value: unknown): 'next' | 'prev' {
@@ -2655,15 +3003,6 @@ export class UserDbController {
                 where: { companyId: resolvedCompanyId },
                 select: { designation: true },
               },
-              userAccesses: {
-                where: { companyId: resolvedCompanyId },
-                select: {
-                  isGlobalAccess: true,
-                  orgStructure: {
-                    select: { nodePath: true },
-                  },
-                },
-              },
             },
           })
         : [];
@@ -2673,21 +3012,6 @@ export class UserDbController {
         user,
       ]),
     );
-    const visibleExistingUserEmails = new Set(
-      pendingExistingUsers
-        .filter((user) => {
-          if (visibleNodePaths.length === 0) return false;
-          const hasGlobalAccess = user.userAccesses.some(
-            (access) => access.isGlobalAccess,
-          );
-          if (hasGlobalAccess) return false;
-          return user.userAccesses.some((access) =>
-            visibleNodePaths.includes(access.orgStructure?.nodePath || ''),
-          );
-        })
-        .map((user) => UserDbController.normalizeEmail(user.email)),
-    );
-
     const visiblePendingOnboardings = allPendingOnboardings.filter(
       (onb) => {
         const targetEmail = UserDbController.normalizeEmail(
@@ -2695,14 +3019,13 @@ export class UserDbController {
         );
         const existingUser = pendingExistingUserMap.get(targetEmail);
         return (
-          (UserDbController.isPendingUserRequestVisible({
-          onboarding: onb,
-          isGlobal,
-          visibleNodePaths,
-          viewerUserId,
-          visibleRequestIds,
-        }) ||
-            visibleExistingUserEmails.has(targetEmail)) &&
+          UserDbController.isPendingUserRequestVisible({
+            onboarding: onb,
+            isGlobal,
+            visibleNodePaths,
+            viewerUserId,
+            visibleRequestIds,
+          }) &&
           UserDbController.matchesPendingUserSearch(
             onb,
             query,
@@ -3647,6 +3970,7 @@ export class UserDbController {
 
       let isGlobal = true;
       let visibleNodeIds: string[] = [];
+      let visibleNodePaths: string[] = [];
 
       if (userId) {
         const globalAccess = await prisma.userAccess.findFirst({
@@ -3703,24 +4027,17 @@ export class UserDbController {
                   })),
                 ],
               },
-              select: { id: true },
+              select: { id: true, nodePath: true },
             });
             visibleNodeIds = visibleNodes.map((node) => node.id);
+            visibleNodePaths = visibleNodes
+              .map((node) => node.nodePath)
+              .filter((nodePath): nodePath is string => Boolean(nodePath));
           }
         }
       }
 
       if (id) {
-        const approverRequestIds =
-          await UserDbController.getCurrentApproverRequestIds(
-            'user_onboarding',
-            userId,
-            resolvedCompanyId,
-          );
-        if (!approverRequestIds.includes(id)) {
-          throw new AppError('User request not found', 404);
-        }
-
         const pendingOnboarding = await prisma.userOnboarding.findFirst({
           where: {
             id,
@@ -3730,6 +4047,29 @@ export class UserDbController {
         });
         if (!pendingOnboarding) {
           throw new AppError('User request not found', 404);
+        }
+
+        if (!isGlobal) {
+          const visibleRequestIds = new Set(
+            await UserDbController.getCurrentApproverRequestIds(
+              'user_onboarding',
+              userId,
+              resolvedCompanyId,
+            ),
+          );
+
+          let canViewPendingRequest =
+            UserDbController.isPendingUserRequestVisible({
+              onboarding: pendingOnboarding,
+              isGlobal,
+              visibleNodePaths,
+              viewerUserId: userId,
+              visibleRequestIds,
+            });
+
+          if (!canViewPendingRequest) {
+            throw new AppError('User request not found', 404);
+          }
         }
 
         const [detail] = await UserDbController.formatPendingUsers(
@@ -3830,8 +4170,23 @@ export class UserDbController {
           'user_onboarding',
           pendingCandidates.map((request: any) => request.id),
         );
-      const pendingRequest = pendingCandidates.find((request: any) =>
-        effectivePendingIds.has(request.id),
+      const visiblePendingRequestIds = new Set(
+        await UserDbController.getCurrentApproverRequestIds(
+          'user_onboarding',
+          userId,
+          resolvedCompanyId,
+        ),
+      );
+      const pendingRequest = pendingCandidates.find(
+        (request: any) =>
+          effectivePendingIds.has(request.id) &&
+          UserDbController.isPendingUserRequestVisible({
+            onboarding: request,
+            isGlobal,
+            visibleNodePaths,
+            viewerUserId: userId,
+            visibleRequestIds: visiblePendingRequestIds,
+          }),
       );
 
       res.status(200).json({
@@ -5815,6 +6170,7 @@ export class UserDbController {
         ),
         requiredRecipientUserIds:
           NotificationService.mergeRecipientUserIds(requestInitiatorId),
+        includeCreatedBy: true,
         isPending: result?.status === 'PARTIAL_APPROVED',
       });
 
@@ -5846,7 +6202,7 @@ export class UserDbController {
         resolvedCompanyId = company.id;
       }
 
-      const history = await prisma.userHistory.findMany({
+      const rawHistory = await prisma.userHistory.findMany({
         where: {
           email,
           companyId: resolvedCompanyId,
@@ -5869,7 +6225,7 @@ export class UserDbController {
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
       const reqIds = Array.from(
-        new Set(history.map((h) => h.reqId).filter(Boolean)),
+        new Set(rawHistory.map((h) => h.reqId).filter(Boolean)),
       ) as string[];
 
       const [workflowApprovers, requestSnapshots] = await Promise.all([
@@ -5932,6 +6288,44 @@ export class UserDbController {
         if (targetUserId) {
           targetUserIdByReqId.set(request.id, targetUserId);
         }
+      });
+
+      const isGlobalViewer =
+        !viewerUserId ||
+        Boolean(
+          await prisma.userAccess.findFirst({
+            where: {
+              userId: viewerUserId,
+              companyId: resolvedCompanyId,
+              isGlobalAccess: true,
+            },
+            select: { id: true },
+          }),
+        );
+      const visiblePendingRequestIds = new Set(
+        isGlobalViewer
+          ? []
+          : await UserDbController.getCurrentApproverRequestIds(
+              'user_onboarding',
+              viewerUserId,
+              resolvedCompanyId,
+            ),
+      );
+      const history = rawHistory.filter((entry) => {
+        if (!entry.reqId) return true;
+        const requestSnapshot = requestSnapshotMap.get(entry.reqId);
+        if (!requestSnapshot) return true;
+        if (String(requestSnapshot.status || '').toUpperCase() !== 'PENDING') {
+          return true;
+        }
+
+        return UserDbController.isPendingUserRequestVisible({
+          onboarding: requestSnapshot,
+          isGlobal: isGlobalViewer,
+          visibleNodePaths: [],
+          viewerUserId,
+          visibleRequestIds: visiblePendingRequestIds,
+        });
       });
 
       // Group workflow levels by reqId
@@ -6621,6 +7015,44 @@ export class UserDbController {
             },
           })
         : null;
+      if (
+        onboarding &&
+        String(onboarding.status || '').toUpperCase() === 'PENDING'
+      ) {
+        const isGlobalViewer =
+          !viewerUserId ||
+          Boolean(
+            await prisma.userAccess.findFirst({
+              where: {
+                userId: viewerUserId,
+                companyId: resolvedCompanyId,
+                isGlobalAccess: true,
+              },
+              select: { id: true },
+            }),
+          );
+        const visiblePendingRequestIds = new Set(
+          isGlobalViewer
+            ? []
+            : await UserDbController.getCurrentApproverRequestIds(
+                'user_onboarding',
+                viewerUserId,
+                resolvedCompanyId,
+              ),
+        );
+
+        if (
+          !UserDbController.isPendingUserRequestVisible({
+            onboarding,
+            isGlobal: isGlobalViewer,
+            visibleNodePaths: [],
+            viewerUserId,
+            visibleRequestIds: visiblePendingRequestIds,
+          })
+        ) {
+          throw new AppError('User history not found', 404);
+        }
+      }
       const requestData = (onboarding?.data as any) || null;
       const requestType = String(onboarding?.type || 'INITIATE').toUpperCase();
 
@@ -6806,9 +7238,24 @@ export class UserDbController {
     next: NextFunction,
   ) {
     try {
-      const { userId, companyId, subCategory } = req.body;
+      const { userId, companyId, subCategory, filter } = req.body;
       const workflowSubCategory =
         UserDbController.normalizeFilterText(subCategory);
+
+      if (filter === true && workflowSubCategory === 'USER_ACC') {
+        const dropdowns = await UserDbController.buildUserAccFilterDropdowns(
+          userId,
+          companyId,
+        );
+
+        return res.status(200).json({
+          success: true,
+          filter: true,
+          subCategory: 'USER_ACC',
+          dropdowns,
+        });
+      }
+
       const [pendingOrgNodePaths, pendingWorkflowKeys] = await Promise.all([
         UserDbController.getPendingOrgNodePathsForFetch(companyId),
         UserDbController.getPendingWorkflowKeysForFetch(companyId),

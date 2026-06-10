@@ -31,19 +31,51 @@ export type UserCompanyNodeInternal = Omit<UserCompanyNode, 'roleName'> & {
   roleCode?: string;
 };
 
+export type UserCompanyNodeFilterDesignationOption = {
+  value: string;
+  count: number;
+};
+
+export type UserCompanyNodeFilterNodeOption = {
+  value: string;
+  path: string;
+};
+
+export type UserCompanyNodeFilterDropdowns = {
+  designation: UserCompanyNodeFilterDesignationOption[];
+  nodeName: UserCompanyNodeFilterNodeOption[];
+  nodeType: string[];
+  category: string[];
+  subCategory: Record<string, string[]>;
+  reportingManager: string[];
+
+};
+
+export type FetchCompanyNodeFilterResponse = {
+  success: true;
+  filter: true;
+  subCategory: 'USER_ACC';
+  dropdowns: UserCompanyNodeFilterDropdowns;
+};
+
 export type FetchCompanyNodesInternalResponse =
   | {
       nodes?: UserCompanyNodeInternal[];
       message?: string;
       error?: string;
     }
-  | UserCompanyNodeInternal[];
+  | UserCompanyNodeInternal[]
+  | FetchCompanyNodeFilterResponse;
 
 export type FetchCompanyNodesResponse = {
   message: 'User nodes fetched successfully!' | 'User nodes not found';
   code: 200;
   data: UserCompanyNode[];
 };
+
+export type FetchCompanyNodesControllerResponse =
+  | FetchCompanyNodesResponse
+  | FetchCompanyNodeFilterResponse;
 
 export type UserNodePathCountPermissionLevel = 'MANAGER' | 'USER' | 'VIEWER';
 

@@ -32,9 +32,12 @@ import type {
   ActionUserOnboardingInternalResponse,
   ActionUserOnboardingResponse,
   CreateUserOnboardingInternalResponse,
+  FetchCompanyNodeFilterResponse,
   FetchCompanyNodesInternalResponse,
+  FetchCompanyNodesControllerResponse,
   FetchCompanyNodesResponse,
   UserCompanyNode,
+  UserCompanyNodeInternal,
   FetchAllUsersResponse,
   FetchAndProcessUsersResult,
   FetchUserDetailsInternalResponse,
@@ -948,11 +951,11 @@ export class UserController {
   }
   static async fetchCompanyNodes(
     req: Request & { user?: { id: string; companyId: string } },
-    res: Response,
+    res: Response<FetchCompanyNodesControllerResponse>,
     next: NextFunction,
   ) {
     try {
-      const { subCategory } = zodParse(userCompanyNodesSchema, req.body);
+      const { subCategory, filter } = zodParse(userCompanyNodesSchema, req.body);
       const userId = req.user?.id;
       const companyId = req.user?.companyId;
 
@@ -967,11 +970,22 @@ export class UserController {
             userId,
             companyId,
             subCategory,
+            filter: filter === true,
           },
         );
+      const isFilterResponse = (
+        payload: FetchCompanyNodesInternalResponse,
+      ): payload is FetchCompanyNodeFilterResponse =>
+        !Array.isArray(payload) &&
+        payload !== null &&
+        typeof payload === 'object' &&
+        'filter' in payload &&
+        payload.filter === true;
       const errorMessage = Array.isArray(data)
         ? undefined
-        : data?.message || data?.error;
+        : isFilterResponse(data)
+          ? undefined
+          : data?.message || data?.error;
 
       if (!ok) {
         throw new AppError(
@@ -980,7 +994,13 @@ export class UserController {
         );
       }
 
-      const rawNodes = Array.isArray(data) ? data : data?.nodes || [];
+      if (isFilterResponse(data)) {
+        return res.status(200).json(data);
+      }
+
+      const rawNodes: UserCompanyNodeInternal[] = Array.isArray(data)
+        ? data
+        : data?.nodes || [];
       const nodes: UserCompanyNode[] = rawNodes.map((node) => ({
         nodeName: node.nodeName,
         nodePath: node.nodePath,

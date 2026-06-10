@@ -260,6 +260,7 @@ export const userCompanyNodesSchema = z.object({
     .enum(['USER_ACC', 'WORK_FLOW', 'ORG_STR'])
     .nullable()
     .optional(),
+  filter: z.boolean().optional(),
 });
 
 export const userFetchByNodePathCountSchema = z.object({
