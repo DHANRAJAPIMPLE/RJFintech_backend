@@ -1631,6 +1631,8 @@ export class UserDbController {
       from.setUTCDate(from.getUTCDate() - 14);
     } else if (range === '1MONTH') {
       from.setUTCMonth(from.getUTCMonth() - 1);
+    } else if (range === '1YEAR') {
+      from.setUTCFullYear(from.getUTCFullYear() - 1);
     } else {
       return null;
     }

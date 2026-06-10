@@ -99,7 +99,10 @@ const fetchAllUserAppliedSchema = z
           .preprocess(
             (value) =>
               typeof value === 'string' ? value.trim().toUpperCase() : value,
-            z.enum(['7DAYS', '15DAYS', '1MONTH']).nullable().optional(),
+            z
+              .enum(['7DAYS', '15DAYS', '1MONTH', '1YEAR'])
+              .nullable()
+              .optional(),
           )
           .optional(),
         fromDate: optionalDateStringSchema.nullable().optional(),

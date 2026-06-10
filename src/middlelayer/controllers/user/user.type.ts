@@ -137,7 +137,7 @@ export type FetchAllUsersAppliedFilters = {
   subCategory?: string[] | null;
   reportingManager?: string[] | null;
   onboardingDate?: {
-    dateRange?: '7DAYS' | '15DAYS' | '1MONTH' | null;
+    dateRange?: '7DAYS' | '15DAYS' | '1MONTH' | '1YEAR' | null;
     fromDate?: string | null;
     toDate?: string | null;
   } | null;
