@@ -4209,26 +4209,35 @@ export class UserDbController {
             ),
           );
 
+        const queryMatchedPendingRows =
+          queryMatchedPendingRaw.pendingOnboardings || [];
         const allPendingFormatted = await UserDbController.formatPendingUsers(
-          queryMatchedPendingRaw.pendingOnboardings || [],
+          queryMatchedPendingRows,
           resolvedCompanyId,
           { detail: true },
         );
-        const filteredPendingUsers = allPendingFormatted.filter((user: any) =>
-          UserDbController.matchesAppliedUserFilters(
-            user,
-            appliedFilters,
-            {
-              defaultStatus: 'PENDING',
-              isPendingRecord: true,
-            },
-          ),
-        );
+        const filteredPendingUsersDetailed = queryMatchedPendingRows
+          .map((row: any, index: number) => ({
+            raw: row,
+            detail: allPendingFormatted[index],
+          }))
+          .filter(
+            (item: any) =>
+              item.detail &&
+              UserDbController.matchesAppliedUserFilters(
+                item.detail,
+                appliedFilters,
+                {
+                  defaultStatus: 'PENDING',
+                  isPendingRecord: true,
+                },
+              ),
+          );
 
         const activeCount = filteredActiveUsersDetailed.length;
         const inactiveCount = filteredInactiveUsersDetailed.length;
         const archiveCount = filteredArchiveUsersDetailed.length;
-        const pendingCount = filteredPendingUsers.length;
+        const pendingCount = filteredPendingUsersDetailed.length;
         const isProductionStatusType =
           listType === 'active' ||
           listType === 'inactive' ||
@@ -4239,7 +4248,7 @@ export class UserDbController {
             : listType === 'archive'
               ? filteredArchiveUsersDetailed
               : filteredActiveUsersDetailed
-          : filteredPendingUsers;
+          : filteredPendingUsersDetailed;
         const cursorFilteredRows = selectedRowsSource.filter((row: any) =>
           cursor
             ? UserDbController.isRowInCursorDirection(
@@ -4263,7 +4272,7 @@ export class UserDbController {
           (cursor ? 0 : offset) + limit + 1,
         );
         const selectedPage = UserDbController.buildPageInfo(
-          pagedSelection.map((row: any) => (isProductionStatusType ? row.raw : row)),
+          pagedSelection.map((row: any) => row.raw),
           limit,
           requestedTopCursor,
           selectedNewCount,
@@ -4329,7 +4338,9 @@ export class UserDbController {
             : [];
         const pendingUsers =
           listType === 'pending'
-            ? filteredPendingUsers.filter((item: any) => pageIdSet.has(item.id))
+            ? filteredPendingUsersDetailed
+                .filter((item: any) => pageIdSet.has(item.raw.id))
+                .map((item: any) => item.detail)
             : [];
 
         return res.status(200).json({
