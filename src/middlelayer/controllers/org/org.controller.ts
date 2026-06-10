@@ -52,8 +52,7 @@ export class OrgController {
       nodePath: node.nodePath,
       isPending: node.isPending ?? false,
       status: node.status ?? 'ACTIVE',
-      affectedUserAccessCount: node.affectedUserAccessCount ?? 0,
-      affectedWorkflowCount: node.affectedWorkflowCount ?? 0,
+      impactSummary: node.impactSummary ?? { userAccess: [], workflow: [] },
     };
   }
 
@@ -481,8 +480,7 @@ export class OrgController {
             initiatedDate: req.createdAt,
             workflowName: req.workflowName,
             alias: req.alias,
-            affectedUserAccessCount: req.affectedUserAccessCount ?? 0,
-            affectedWorkflowCount: req.affectedWorkflowCount ?? 0,
+            impactSummary: req.impactSummary ?? { userAccess: [], workflow: [] },
           };
         },
       );

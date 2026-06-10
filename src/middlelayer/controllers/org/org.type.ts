@@ -8,6 +8,11 @@ export type OrgNodeType =
 
 export type OrgNodeStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVE';
 
+export type OrgImpactSummary = {
+  userAccess: string[];
+  workflow: string[];
+};
+
 export type OrgActiveNode = {
   nodeName: string;
   nodeType: OrgNodeType | null;
@@ -15,8 +20,7 @@ export type OrgActiveNode = {
   isPending: boolean;
   status?: OrgNodeStatus;
   isAutoDeleted?: boolean;
-  affectedUserAccessCount?: number;
-  affectedWorkflowCount?: number;
+  impactSummary?: OrgImpactSummary;
   linkedOrgStructure?: OrgActiveNode[];
 };
 
@@ -55,8 +59,7 @@ export type OrgPendingInternalItem = {
   initiator?: OrgPendingInitiator | null;
   workflowName: string;
   alias: string;
-  affectedUserAccessCount?: number;
-  affectedWorkflowCount?: number;
+  impactSummary?: OrgImpactSummary;
 };
 
 export type OrgPendingItem = {
@@ -74,8 +77,7 @@ export type OrgPendingItem = {
   initiatedDate: string;
   workflowName: string;
   alias: string;
-  affectedUserAccessCount?: number;
-  affectedWorkflowCount?: number;
+  impactSummary?: OrgImpactSummary;
 };
 
 export type OrgPendingRequestSnapshot = {

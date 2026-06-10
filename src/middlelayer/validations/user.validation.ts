@@ -80,9 +80,36 @@ const fetchAllUserAppliedSchema = z
         values: optionalStringArraySchema,
         nodeAccess: z
           .preprocess(
-            (value) =>
-              typeof value === 'string' ? value.trim().toLowerCase() : value,
-            z.enum(['primary', 'secondary']).nullable().optional(),
+            (value) => {
+              if (value === undefined || value === null) return undefined;
+              if (typeof value === 'string') {
+                // Backward compat: treat a bare string as legacy format
+                const trimmed = value.trim().toLowerCase();
+                if (trimmed === 'primary' || trimmed === 'secondary') {
+                  return trimmed;
+                }
+                return value;
+              }
+              return value;
+            },
+            z
+              .union([
+                // Legacy: single "primary" | "secondary" string
+                z.enum(['primary', 'secondary']),
+                // New: per-node access map, e.g. { "NEXORA": ["Primary","Secondary"] }
+                z.record(
+                  z.string(),
+                  z.array(
+                    z.preprocess(
+                      (v) =>
+                        typeof v === 'string' ? v.trim() : v,
+                      z.string().min(1),
+                    ),
+                  ),
+                ),
+              ])
+              .nullable()
+              .optional(),
           )
           .optional(),
       })

@@ -112,7 +112,7 @@ type HistoryChangeCount = {
 type NormalizedUserListAppliedFilters = {
   designation: string[];
   nodeValues: string[];
-  nodeAccess: 'PRIMARY' | 'SECONDARY' | null;
+  nodeAccess: Record<string, string[]>;
   nodeType: string[];
   category: string[];
   subCategory: string[];
@@ -1657,15 +1657,41 @@ export class UserDbController {
       source.nodeName && typeof source.nodeName === 'object'
         ? (source.nodeName as Record<string, unknown>)
         : null;
-    const nodeAccessRaw = UserDbController.normalizeFilterText(
-      nodeName?.nodeAccess,
-    )?.toLowerCase();
-    const nodeAccess =
-      nodeAccessRaw === 'primary'
-        ? 'PRIMARY'
-        : nodeAccessRaw === 'secondary'
-          ? 'SECONDARY'
-          : null;
+
+    // Parse nodeAccess: supports both legacy string format and new per-node object format
+    let nodeAccess: Record<string, string[]> = {};
+    const rawNodeAccess = nodeName?.nodeAccess;
+    if (typeof rawNodeAccess === 'string') {
+      // Legacy format: single "primary" / "secondary" string → apply to ALL node values
+      const normalizedAccessStr = rawNodeAccess.trim().toUpperCase();
+      if (normalizedAccessStr === 'PRIMARY' || normalizedAccessStr === 'SECONDARY') {
+        const nodeValues = UserDbController.normalizeAppliedFilterValues(
+          nodeName?.values,
+        );
+        for (const nodeVal of nodeValues) {
+          nodeAccess[nodeVal] = [normalizedAccessStr];
+        }
+      }
+    } else if (
+      rawNodeAccess &&
+      typeof rawNodeAccess === 'object' &&
+      !Array.isArray(rawNodeAccess)
+    ) {
+      // New format: per-node access map, e.g. { "NEXORA": ["Primary", "Secondary"], "Surat": ["Primary"] }
+      const accessMap = rawNodeAccess as Record<string, unknown>;
+      for (const [key, value] of Object.entries(accessMap)) {
+        if (Array.isArray(value)) {
+          const normalizedValues = value
+            .map((v) =>
+              typeof v === 'string' ? v.trim().toUpperCase() : '',
+            )
+            .filter((v) => v === 'PRIMARY' || v === 'SECONDARY');
+          if (normalizedValues.length > 0) {
+            nodeAccess[key] = normalizedValues;
+          }
+        }
+      }
+    }
 
     const normalized: NormalizedUserListAppliedFilters = {
       designation: UserDbController.normalizeAppliedFilterValues(
@@ -1705,9 +1731,12 @@ export class UserDbController {
       onboardingDate: UserDbController.parseUserFilterDateRange(source),
     };
 
+    const hasNodeAccess = Object.keys(normalized.nodeAccess).length > 0;
+
     const hasFilters =
       normalized.designation.length > 0 ||
       normalized.nodeValues.length > 0 ||
+      hasNodeAccess ||
       normalized.nodeType.length > 0 ||
       normalized.category.length > 0 ||
       normalized.subCategory.length > 0 ||
@@ -1872,12 +1901,7 @@ export class UserDbController {
     const primary = Array.isArray(user?.primary) ? user.primary : [];
     const secondary = Array.isArray(user?.secondary) ? user.secondary : [];
     const allAccesses = [...primary, ...secondary];
-    const scopedAccesses =
-      filters.nodeAccess === 'PRIMARY'
-        ? primary
-        : filters.nodeAccess === 'SECONDARY'
-          ? secondary
-          : allAccesses;
+    const hasNodeAccessMap = Object.keys(filters.nodeAccess).length > 0;
     const isPending =
       options.pendingStateOverride !== undefined &&
       options.pendingStateOverride !== null
@@ -1904,26 +1928,90 @@ export class UserDbController {
       return false;
     }
 
-    if (
-      filters.nodeValues.length > 0 &&
-      !scopedAccesses.some(
-        (access: any) =>
-          UserDbController.matchesNormalizedFilterValue(
-            access?.nodeName,
-            filters.nodeValues,
-          ) ||
-          UserDbController.matchesNormalizedFilterValue(
-            access?.nodePath,
-            filters.nodeValues,
-          ),
-      )
-    ) {
-      return false;
+    // Per-node access filtering:
+    // When nodeAccess map has entries, for each requested node value, check if the user
+    // has an access record matching the required access types for that node.
+    // Nodes in nodeValues but NOT in nodeAccess are matched from allAccesses (any access type).
+    // Nodes in nodeValues AND in nodeAccess are matched only if the user has access
+    // with one of the specified access types (Primary/Secondary) for that node.
+    if (filters.nodeValues.length > 0) {
+      const matchesNodeFilter = filters.nodeValues.some((filterNodeValue) => {
+        const requiredAccessTypes = filters.nodeAccess[filterNodeValue];
+
+        if (!requiredAccessTypes || requiredAccessTypes.length === 0) {
+          // No specific access type required for this node — match across all accesses
+          return allAccesses.some(
+            (access: any) =>
+              UserDbController.matchesNormalizedFilterValue(
+                access?.nodeName,
+                [filterNodeValue],
+              ) ||
+              UserDbController.matchesNormalizedFilterValue(
+                access?.nodePath,
+                [filterNodeValue],
+              ),
+          );
+        }
+
+        // Specific access types required — check per access type
+        return requiredAccessTypes.some((accessType) => {
+          const scopedAccesses =
+            accessType === 'PRIMARY'
+              ? primary
+              : accessType === 'SECONDARY'
+                ? secondary
+                : allAccesses;
+          return scopedAccesses.some(
+            (access: any) =>
+              UserDbController.matchesNormalizedFilterValue(
+                access?.nodeName,
+                [filterNodeValue],
+              ) ||
+              UserDbController.matchesNormalizedFilterValue(
+                access?.nodePath,
+                [filterNodeValue],
+              ),
+          );
+        });
+      });
+
+      if (!matchesNodeFilter) {
+        return false;
+      }
+    } else if (hasNodeAccessMap) {
+      // nodeValues is empty but nodeAccess has entries — filter by access type only
+      const matchesAccessFilter = Object.entries(filters.nodeAccess).some(
+        ([nodeKey, accessTypes]) => {
+          return accessTypes.some((accessType) => {
+            const scopedAccesses =
+              accessType === 'PRIMARY'
+                ? primary
+                : accessType === 'SECONDARY'
+                  ? secondary
+                  : allAccesses;
+            return scopedAccesses.some(
+              (access: any) =>
+                UserDbController.matchesNormalizedFilterValue(
+                  access?.nodeName,
+                  [nodeKey],
+                ) ||
+                UserDbController.matchesNormalizedFilterValue(
+                  access?.nodePath,
+                  [nodeKey],
+                ),
+            );
+          });
+        },
+      );
+
+      if (!matchesAccessFilter) {
+        return false;
+      }
     }
 
     if (
       filters.nodeType.length > 0 &&
-      !scopedAccesses.some((access: any) =>
+      !allAccesses.some((access: any) =>
         UserDbController.matchesNormalizedFilterValue(
           access?.nodeType,
           filters.nodeType,
