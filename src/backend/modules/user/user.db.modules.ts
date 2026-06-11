@@ -1000,6 +1000,65 @@ export class UserDbController {
     return typeof value === 'string' ? value.trim().toLowerCase() : '';
   }
 
+  private static getPendingRequestTargetEmail(request: any): string {
+    return UserDbController.normalizeEmail(
+      UserDbController.extractUserTargetEmail(request?.data),
+    );
+  }
+
+  private static async getEffectivePendingUserRequestsByEmail(
+    companyId: string,
+    emails: Array<string | null | undefined>,
+  ) {
+    const normalizedEmails = Array.from(
+      new Set(
+        emails
+          .map((email) => UserDbController.normalizeEmail(email))
+          .filter(Boolean),
+      ),
+    );
+    const pendingByEmail = new Map<string, any>();
+    if (normalizedEmails.length === 0) return pendingByEmail;
+
+    const pendingCandidates = await prisma.userOnboarding.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        OR: normalizedEmails.flatMap((email) => [
+          {
+            data: {
+              path: ['targetUserEmail'],
+              equals: email,
+            } as any,
+          },
+          {
+            data: {
+              path: ['basicDetails', 'email'],
+              equals: email,
+            } as any,
+          },
+        ]),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    const effectivePendingIds =
+      await UserDbController.filterEffectivelyPendingRequestIds(
+        'user_onboarding',
+        pendingCandidates.map((request: any) => request.id),
+      );
+
+    pendingCandidates.forEach((request: any) => {
+      if (!effectivePendingIds.has(request.id)) return;
+
+      const email = UserDbController.getPendingRequestTargetEmail(request);
+      if (email && !pendingByEmail.has(email)) {
+        pendingByEmail.set(email, request);
+      }
+    });
+
+    return pendingByEmail;
+  }
+
   private static isPendingUserRequestVisible(params: {
     onboarding: any;
     isGlobal: boolean;
@@ -4871,13 +4930,22 @@ export class UserDbController {
             pendingByEmail.set(email, request);
           }
         });
+        const productionPendingByEmail =
+          await UserDbController.getEffectivePendingUserRequestsByEmail(
+            resolvedCompanyId,
+            [
+              ...allActiveRows.map((user: any) => user.email),
+              ...allInactiveRows.map((user: any) => user.email),
+              ...allArchiveRows.map((user: any) => user.email),
+            ],
+          );
 
         const filteredActiveUsersDetailed = allActiveRows
           .map((user: any) => ({
             raw: user,
             detail: UserDbController.formatProductionUser(
               user,
-              pendingByEmail.get(
+              productionPendingByEmail.get(
                 UserDbController.normalizeEmail(user.email) || '',
               ),
               { detail: true },
@@ -4890,6 +4958,8 @@ export class UserDbController {
               {
                 defaultStatus: 'ACTIVE',
                 pendingRequestType: pendingByEmail.get(
+                  UserDbController.normalizeEmail(item.raw.email) || '',
+                )?.type ?? productionPendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
                 hasPendingOverride:
@@ -4907,7 +4977,7 @@ export class UserDbController {
             raw: user,
             detail: UserDbController.formatProductionUser(
               user,
-              pendingByEmail.get(
+              productionPendingByEmail.get(
                 UserDbController.normalizeEmail(user.email) || '',
               ),
               { detail: true },
@@ -4920,6 +4990,8 @@ export class UserDbController {
               {
                 defaultStatus: 'INACTIVE',
                 pendingRequestType: pendingByEmail.get(
+                  UserDbController.normalizeEmail(item.raw.email) || '',
+                )?.type ?? productionPendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
                 hasPendingOverride:
@@ -4937,7 +5009,7 @@ export class UserDbController {
             raw: user,
             detail: UserDbController.formatProductionUser(
               user,
-              pendingByEmail.get(
+              productionPendingByEmail.get(
                 UserDbController.normalizeEmail(user.email) || '',
               ),
               { detail: true },
@@ -4950,6 +5022,8 @@ export class UserDbController {
               {
                 defaultStatus: 'ARCHIVE',
                 pendingRequestType: pendingByEmail.get(
+                  UserDbController.normalizeEmail(item.raw.email) || '',
+                )?.type ?? productionPendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
                 hasPendingOverride:
@@ -5064,7 +5138,7 @@ export class UserDbController {
                 .map((item) =>
                   UserDbController.formatProductionUser(
                     item.raw,
-                    pendingByEmail.get(
+                    productionPendingByEmail.get(
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
                     {
@@ -5082,7 +5156,7 @@ export class UserDbController {
                 .map((item) =>
                   UserDbController.formatProductionUser(
                     item.raw,
-                    pendingByEmail.get(
+                    productionPendingByEmail.get(
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
                     {
@@ -5101,7 +5175,7 @@ export class UserDbController {
                 .map((item) =>
                   UserDbController.formatProductionUser(
                     item.raw,
-                    pendingByEmail.get(
+                    productionPendingByEmail.get(
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
                     {
@@ -5303,18 +5377,14 @@ export class UserDbController {
             visibleRequestIds: activeVisiblePendingRequestIds,
           }),
       );
-      const activePendingByEmail = new Map<string, any>();
-      activePendingRequests.forEach((request: any) => {
-        const requestData = request.data as any;
-        const email = (
-          requestData?.targetUserEmail ||
-          requestData?.basicDetails?.email ||
-          ''
-        ).toLowerCase();
-        if (email && !activePendingByEmail.has(email)) {
-          activePendingByEmail.set(email, request);
-        }
-      });
+      const productionPendingByEmail =
+        await UserDbController.getEffectivePendingUserRequestsByEmail(
+          resolvedCompanyId,
+          [
+            ...selectedPage.pageRows.map((user: any) => user.email),
+            ...inactiveRows.map((user: any) => user.email),
+          ],
+        );
       const includePendingApprovalCount = false;
       const pendingApprovalEligibleUsers = includePendingApprovalCount
         ? await UserDbController.getPendingApprovalEligibleUserCounts(
@@ -5325,7 +5395,7 @@ export class UserDbController {
       const selectedUsers = selectedPage.pageRows.map((user: any) =>
         UserDbController.formatProductionUser(
           user,
-          activePendingByEmail.get((user.email || '').toLowerCase()),
+          productionPendingByEmail.get((user.email || '').toLowerCase()),
           {
             includePendingApprovalCount,
             pendingApprovalCount:
@@ -5339,11 +5409,17 @@ export class UserDbController {
         listType === 'inactive'
             ? selectedUsers
             : inactiveRows.map((user: any) =>
-                UserDbController.formatProductionUser(user, undefined, {
-                  includePendingApprovalCount,
-                  pendingApprovalCount:
-                    pendingApprovalEligibleUsers.get(user.id)?.count || 0,
-                }),
+                UserDbController.formatProductionUser(
+                  user,
+                  productionPendingByEmail.get(
+                    (user.email || '').toLowerCase(),
+                  ),
+                  {
+                    includePendingApprovalCount,
+                    pendingApprovalCount:
+                      pendingApprovalEligibleUsers.get(user.id)?.count || 0,
+                  },
+                ),
               );
       const archiveUsers = listType === 'archive' ? selectedUsers : [];
       const pendingUsers = await UserDbController.formatPendingUsers(
