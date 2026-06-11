@@ -1933,7 +1933,7 @@ export class UserDbController {
               companyId,
               status: 'PENDING',
             },
-            select: { eligibleApprovers: true },
+            select: { id: true, initiatorId: true, eligibleApprovers: true },
           })
         : Promise.resolve([]),
       includeOrgStr
@@ -1942,7 +1942,7 @@ export class UserDbController {
               companyId,
               status: 'PENDING',
             },
-            select: { eligibleApprovers: true },
+            select: { id: true, initiatorId: true, eligibleApprovers: true },
           })
         : Promise.resolve([]),
       workflowSubModules.length > 0
@@ -1952,7 +1952,12 @@ export class UserDbController {
               status: 'PENDING',
               subModule: { in: workflowSubModules },
             },
-            select: { eligibleApprovers: true },
+            select: {
+              id: true,
+              initiatorId: true,
+              subModule: true,
+              eligibleApprovers: true,
+            },
           })
         : Promise.resolve([]),
     ]);
@@ -1961,50 +1966,156 @@ export class UserDbController {
       string,
       PendingApprovalEligibleUserSummary
     >();
-    const addEligibleApprovers = (
+
+    const addSummary = (
+      userId: string,
+      subCategory: 'USER_ACC' | 'ORG_STR' | 'WORK_FLOW',
+    ) => {
+      const current = eligibleUserSummaries.get(userId) || {
+        count: 0,
+        subCategories: new Set<'USER_ACC' | 'ORG_STR' | 'WORK_FLOW'>(),
+      };
+      current.count += 1;
+      current.subCategories.add(subCategory);
+      eligibleUserSummaries.set(userId, current);
+    };
+
+    const addRequestTableApprovers = async (
+      reqTable: 'user_onboarding' | 'org_structure_req' | 'workflow_req',
       requests: any[],
       resolveSubCategory: (
         request: any,
       ) => 'USER_ACC' | 'ORG_STR' | 'WORK_FLOW' | null,
     ) => {
-      requests.forEach((request: any) => {
+      const requestIds = requests.map((request) => request.id).filter(Boolean);
+      if (requestIds.length === 0) return;
+
+      const effectiveRequestIds =
+        await UserDbController.filterEffectivelyPendingRequestIds(
+          reqTable,
+          requestIds,
+        );
+      const requestMeta = new Map<
+        string,
+        {
+          subCategory: 'USER_ACC' | 'ORG_STR' | 'WORK_FLOW';
+          initiatorId: string | null;
+          legacyEligibleApprovers: string[];
+        }
+      >();
+
+      requests.forEach((request) => {
+        if (!effectiveRequestIds.has(request.id)) return;
+
         const subCategory = resolveSubCategory(request);
         if (!subCategory) return;
 
-        const approvers = Array.isArray(request?.eligibleApprovers)
-          ? request.eligibleApprovers
-          : [];
-        approvers.forEach((approverId: unknown) => {
-          if (typeof approverId !== 'string' || !approverId.trim()) return;
+        requestMeta.set(request.id, {
+          subCategory,
+          initiatorId:
+            typeof request.initiatorId === 'string'
+              ? request.initiatorId
+              : null,
+          legacyEligibleApprovers: Array.isArray(request.eligibleApprovers)
+            ? request.eligibleApprovers.filter(
+                (approverId: unknown): approverId is string =>
+                  typeof approverId === 'string' && Boolean(approverId.trim()),
+              )
+            : [],
+        });
+      });
 
-          const userId = approverId.trim();
-          const current = eligibleUserSummaries.get(userId) || {
-            count: 0,
-            subCategories: new Set<'USER_ACC' | 'ORG_STR' | 'WORK_FLOW'>(),
-          };
-          current.count += 1;
-          current.subCategories.add(subCategory);
-          eligibleUserSummaries.set(userId, current);
+      const effectiveIds = Array.from(requestMeta.keys());
+      if (effectiveIds.length === 0) return;
+
+      const [approverRows, approvedHistoryRows] = await Promise.all([
+        prisma.workflowApprover.findMany({
+          where: {
+            reqTable,
+            reqId: { in: effectiveIds },
+            status: 'PENDING',
+          },
+          select: { reqId: true, approversList: true },
+        }),
+        reqTable === 'workflow_req'
+          ? prisma.workflowReqHistory.findMany({
+              where: { workflowReqId: { in: effectiveIds }, event: 'APPROVED' },
+              select: { workflowReqId: true, eventUserId: true },
+            })
+          : reqTable === 'org_structure_req'
+            ? prisma.orgHistory.findMany({
+                where: { orgReqId: { in: effectiveIds }, event: 'APPROVED' },
+                select: { orgReqId: true, eventUserId: true },
+              })
+            : prisma.userHistory.findMany({
+                where: { reqId: { in: effectiveIds }, event: 'APPROVED' },
+                select: { reqId: true, eventUserId: true },
+              }),
+      ]);
+
+      const approvedByRequest = new Map<string, Set<string>>();
+      approvedHistoryRows.forEach((row: any) => {
+        const reqId = row.workflowReqId || row.orgReqId || row.reqId;
+        const eventUserId =
+          typeof row.eventUserId === 'string' ? row.eventUserId : null;
+        if (!reqId || !eventUserId) return;
+
+        const approved = approvedByRequest.get(reqId) || new Set<string>();
+        approved.add(eventUserId);
+        approvedByRequest.set(reqId, approved);
+      });
+
+      const approversByRequest = new Map<string, Set<string>>();
+      approverRows.forEach((row: any) => {
+        const requestApprovers =
+          approversByRequest.get(row.reqId) || new Set<string>();
+        if (Array.isArray(row.approversList)) {
+          row.approversList.forEach((approverId: unknown) => {
+            if (typeof approverId === 'string' && approverId.trim()) {
+              requestApprovers.add(approverId.trim());
+            }
+          });
+        }
+        approversByRequest.set(row.reqId, requestApprovers);
+      });
+
+      requestMeta.forEach((meta, requestId) => {
+        const pendingApprovers = approversByRequest.get(requestId);
+        const rawApprovers =
+          pendingApprovers && pendingApprovers.size > 0
+            ? pendingApprovers
+            : new Set(meta.legacyEligibleApprovers);
+        const excluded = approvedByRequest.get(requestId) || new Set<string>();
+        if (meta.initiatorId) excluded.add(meta.initiatorId);
+
+        rawApprovers.forEach((approverId) => {
+          if (!excluded.has(approverId)) {
+            addSummary(approverId, meta.subCategory);
+          }
         });
       });
     };
 
-    addEligibleApprovers(userRequests, () => 'USER_ACC');
-    addEligibleApprovers(orgRequests, () => 'ORG_STR');
-    addEligibleApprovers(workflowRequests, (request) => {
-      const normalizedSubCategory =
-        UserDbController.normalizeFilterText(request?.subModule)?.toUpperCase();
+    await Promise.all([
+      addRequestTableApprovers('user_onboarding', userRequests, () => 'USER_ACC'),
+      addRequestTableApprovers('org_structure_req', orgRequests, () => 'ORG_STR'),
+      addRequestTableApprovers('workflow_req', workflowRequests, (request) => {
+        const normalizedSubCategory =
+          UserDbController.normalizeFilterText(
+            request?.subModule,
+          )?.toUpperCase();
 
-      if (
-        normalizedSubCategory === 'USER_ACC' ||
-        normalizedSubCategory === 'ORG_STR' ||
-        normalizedSubCategory === 'WORK_FLOW'
-      ) {
-        return normalizedSubCategory;
-      }
+        if (
+          normalizedSubCategory === 'USER_ACC' ||
+          normalizedSubCategory === 'ORG_STR' ||
+          normalizedSubCategory === 'WORK_FLOW'
+        ) {
+          return normalizedSubCategory;
+        }
 
-      return null;
-    });
+        return null;
+      }),
+    ]);
 
     return eligibleUserSummaries;
   }
@@ -7621,10 +7732,12 @@ export class UserDbController {
         const requestSnapshot = requestSnapshotMap.get(entry.reqId);
         if (!requestSnapshot) return true;
 
-        const isModification = requestSnapshot.type && String(requestSnapshot.type).toUpperCase() !== 'INITIATE';
-        const isPending = String(requestSnapshot.status || '').toUpperCase() === 'PENDING';
+        const isPending =
+          String(requestSnapshot.status || '').toUpperCase() === 'PENDING';
 
-        if (!isPending && !isModification) {
+        // Only the current pending request snapshot is permission-gated.
+        // Completed modification events must remain visible in the timeline.
+        if (!isPending) {
           return true;
         }
 
