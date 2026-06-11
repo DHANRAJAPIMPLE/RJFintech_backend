@@ -122,6 +122,9 @@ export class UserController {
     const primary = user.primary || [];
     return {
       isPending: user.isPending ?? false,
+      ...(typeof user.pendingApprovalCount === 'number'
+        ? { pendingApprovalCount: user.pendingApprovalCount }
+        : {}),
       basicDetails: {
         name: user.basicDetails.name,
         email: user.basicDetails.email,
@@ -169,6 +172,9 @@ export class UserController {
       id: user.id,
       type: user.type,
       impact: user.impact ?? null,
+      ...(user.eligibleapprovers && user.eligibleapprovers.length > 0
+        ? { eligibleapprovers: user.eligibleapprovers }
+        : {}),
       ...(detail
         ? {
             oldData: isInitiate ? null : (user.oldData ?? null),

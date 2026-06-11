@@ -64,6 +64,19 @@ type UserAccessVisibilityScope = {
   visibleNodes: UserAccessVisibilityNode[];
 };
 
+type FetchUserViewerScope = {
+  isSaasAdmin: boolean;
+  isCorpAdmin: boolean;
+  isGlobal: boolean;
+  visibleNodeIds: string[];
+  visibleNodePaths: string[];
+};
+
+type PendingApprovalEligibleUserSummary = {
+  count: number;
+  subCategories: Set<'USER_ACC' | 'ORG_STR' | 'WORK_FLOW'>;
+};
+
 type CompanyNodeWorkflowOption = {
   id?: string;
   levelsHash: string;
@@ -1852,14 +1865,14 @@ export class UserDbController {
     return Array.from(modules);
   }
 
-  private static async getPendingApprovalEligibleUserIds(
+  private static async getPendingApprovalEligibleUserCounts(
     companyId: string,
     filters: NormalizedUserListAppliedFilters | null,
-  ) {
+  ): Promise<Map<string, PendingApprovalEligibleUserSummary>> {
     const pendingModules =
       UserDbController.resolvePendingApprovalSubModules(filters);
     if (pendingModules.length === 0) {
-      return new Set<string>();
+      return new Map<string, PendingApprovalEligibleUserSummary>();
     }
 
     const includeUserAcc = pendingModules.includes('USER_ACC');
@@ -1897,21 +1910,56 @@ export class UserDbController {
         : Promise.resolve([]),
     ]);
 
-    const eligibleUserIds = new Set<string>();
-    [...userRequests, ...orgRequests, ...workflowRequests].forEach(
-      (request: any) => {
+    const eligibleUserSummaries = new Map<
+      string,
+      PendingApprovalEligibleUserSummary
+    >();
+    const addEligibleApprovers = (
+      requests: any[],
+      resolveSubCategory: (
+        request: any,
+      ) => 'USER_ACC' | 'ORG_STR' | 'WORK_FLOW' | null,
+    ) => {
+      requests.forEach((request: any) => {
+        const subCategory = resolveSubCategory(request);
+        if (!subCategory) return;
+
         const approvers = Array.isArray(request?.eligibleApprovers)
           ? request.eligibleApprovers
           : [];
         approvers.forEach((approverId: unknown) => {
-          if (typeof approverId === 'string' && approverId.trim()) {
-            eligibleUserIds.add(approverId);
-          }
-        });
-      },
-    );
+          if (typeof approverId !== 'string' || !approverId.trim()) return;
 
-    return eligibleUserIds;
+          const userId = approverId.trim();
+          const current = eligibleUserSummaries.get(userId) || {
+            count: 0,
+            subCategories: new Set<'USER_ACC' | 'ORG_STR' | 'WORK_FLOW'>(),
+          };
+          current.count += 1;
+          current.subCategories.add(subCategory);
+          eligibleUserSummaries.set(userId, current);
+        });
+      });
+    };
+
+    addEligibleApprovers(userRequests, () => 'USER_ACC');
+    addEligibleApprovers(orgRequests, () => 'ORG_STR');
+    addEligibleApprovers(workflowRequests, (request) => {
+      const normalizedSubCategory =
+        UserDbController.normalizeFilterText(request?.subModule)?.toUpperCase();
+
+      if (
+        normalizedSubCategory === 'USER_ACC' ||
+        normalizedSubCategory === 'ORG_STR' ||
+        normalizedSubCategory === 'WORK_FLOW'
+      ) {
+        return normalizedSubCategory;
+      }
+
+      return null;
+    });
+
+    return eligibleUserSummaries;
   }
 
   private static matchesAppliedUserFilters(
@@ -1922,6 +1970,7 @@ export class UserDbController {
       isPendingRecord?: boolean;
       pendingRequestType?: unknown;
       hasPendingOverride?: boolean | null;
+      pendingApprovalSubCategories?: string[];
     },
   ) {
     if (!filters) return true;
@@ -1938,6 +1987,11 @@ export class UserDbController {
       options.hasPendingOverride !== null
         ? options.hasPendingOverride
         : false;
+    const pendingApprovalSubCategories = new Set(
+      (options.pendingApprovalSubCategories || [])
+        .map((subCategory) => UserDbController.compactFilterValue(subCategory))
+        .filter((subCategory): subCategory is string => Boolean(subCategory)),
+    );
     const currentPendingStatus = isPendingRecord
       ? UserDbController.normalizeCurrentPendingStatus(options.pendingRequestType)
       : null;
@@ -2064,14 +2118,24 @@ export class UserDbController {
       return false;
     }
 
-    if (
-      filters.subCategory.length > 0 &&
-      !allAccesses.some((access: any) =>
+    const matchesAccessSubCategory =
+      filters.subCategory.length === 0 ||
+      allAccesses.some((access: any) =>
         UserDbController.matchesNormalizedFilterValue(
           access?.roleSubCategory,
           filters.subCategory,
         ),
-      )
+      );
+    const matchesPendingApprovalSubCategory =
+      hasPending &&
+      filters.subCategory.some((subCategory) =>
+        pendingApprovalSubCategories.has(subCategory),
+      );
+
+    if (
+      filters.subCategory.length > 0 &&
+      !matchesAccessSubCategory &&
+      !matchesPendingApprovalSubCategory
     ) {
       return false;
     }
@@ -2718,6 +2782,118 @@ export class UserDbController {
         ...node,
         nodeType: String(node.nodeType),
       })),
+    };
+  }
+
+  private static async getFetchUserViewerScope(
+    userId: string | null | undefined,
+    companyId: string,
+  ): Promise<FetchUserViewerScope> {
+    if (!userId) {
+      return {
+        isSaasAdmin: false,
+        isCorpAdmin: false,
+        isGlobal: true,
+        visibleNodeIds: [],
+        visibleNodePaths: [],
+      };
+    }
+
+    const adminAccesses = await prisma.userAccess.findMany({
+      where: {
+        userId,
+        companyId,
+        OR: [
+          { roleCode: 'SAAS_ADMIN' },
+          { roleCode: 'CORP_ADMIN' },
+          { isGlobalAccess: true },
+        ],
+      },
+      select: {
+        roleCode: true,
+        isGlobalAccess: true,
+      },
+    });
+
+    const isSaasAdmin = adminAccesses.some(
+      (access) => access.roleCode === 'SAAS_ADMIN',
+    );
+    const isCorpAdmin = adminAccesses.some(
+      (access) => access.roleCode === 'CORP_ADMIN',
+    );
+
+    if (
+      isSaasAdmin ||
+      isCorpAdmin ||
+      adminAccesses.some((access) => access.isGlobalAccess)
+    ) {
+      return {
+        isSaasAdmin,
+        isCorpAdmin,
+        isGlobal: true,
+        visibleNodeIds: [],
+        visibleNodePaths: [],
+      };
+    }
+
+    const requesterAccesses = await prisma.userAccess.findMany({
+      where: {
+        userId,
+        companyId,
+        role: {
+          subCategory: 'USER_ACC',
+          view: true,
+        },
+      },
+      include: { orgStructure: { select: { nodePath: true } } },
+    });
+
+    if (requesterAccesses.length === 0) {
+      return {
+        isSaasAdmin: false,
+        isCorpAdmin: false,
+        isGlobal: false,
+        visibleNodeIds: [],
+        visibleNodePaths: [],
+      };
+    }
+
+    const nodePaths = requesterAccesses
+      .filter((access) => access.accessCategory === 'NODE')
+      .map((access) => access.orgStructure.nodePath);
+    const immediateChildPaths = requesterAccesses
+      .filter((access) => access.accessCategory === 'IMMEDIATE_CHILD')
+      .map((access) => access.orgStructure.nodePath);
+    const allChildPaths = requesterAccesses
+      .filter((access) => access.accessCategory === 'ALL_CHILD')
+      .map((access) => access.orgStructure.nodePath);
+
+    const visibleNodes = await prisma.orgStructure.findMany({
+      where: {
+        companyId,
+        OR: [
+          {
+            nodePath: {
+              in: [...nodePaths, ...immediateChildPaths, ...allChildPaths],
+            },
+          },
+          ...allChildPaths.map((path) => ({
+            nodePath: { startsWith: `${path}.` },
+          })),
+          ...immediateChildPaths.map((path) => ({
+            parent: { nodePath: path },
+          })),
+        ],
+      },
+      select: { id: true, nodePath: true },
+    });
+
+    return {
+      isSaasAdmin: false,
+      isCorpAdmin: false,
+      isGlobal: false,
+      visibleNodeIds: visibleNodes.map((node) => node.id),
+      visibleNodePaths: visibleNodes.map((node) => node.nodePath),
     };
   }
 
@@ -3454,10 +3630,11 @@ export class UserDbController {
   private static formatProductionUser(
     u: any,
     pendingRequest?: any,
-    options: { detail?: boolean } = {},
+    options: { detail?: boolean; pendingApprovalCount?: number } = {},
   ) {
     const mapping = u.userMappings[0];
     const detail = options.detail === true;
+    const pendingApprovalCount = Number(options.pendingApprovalCount) || 0;
     const summaryPrimaryAccess = u.userAccesses.find(
       (a: any) => a.accessType === 'PRIMARY' || a.isGlobalAccess,
     );
@@ -3472,6 +3649,7 @@ export class UserDbController {
 
     return {
       isPending: Boolean(pendingRequest),
+      pendingApprovalCount,
       basicDetails: {
         name: u.name,
         email: u.email,
@@ -3845,6 +4023,64 @@ export class UserDbController {
           })
         : [];
     const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
+    const pendingRequestIds = pendingOnboardings
+      .map((onb: any) => onb.id)
+      .filter((id: any): id is string => typeof id === 'string' && Boolean(id));
+    const workflowApproverRows =
+      pendingRequestIds.length > 0
+        ? await prisma.workflowApprover.findMany({
+            where: {
+              reqId: { in: pendingRequestIds },
+              reqTable: 'user_onboarding',
+              status: 'PENDING',
+            },
+            orderBy: [{ reqId: 'asc' }, { level: 'asc' }],
+            select: {
+              reqId: true,
+              level: true,
+              approversList: true,
+              status: true,
+            },
+          })
+        : [];
+    const workflowApproverMap = new Map<string, any[]>();
+    workflowApproverRows.forEach((row: any) => {
+      const existing = workflowApproverMap.get(row.reqId) || [];
+      existing.push(row);
+      workflowApproverMap.set(row.reqId, existing);
+    });
+    const allEligibleApproverIds = new Set<string>();
+    pendingOnboardings.forEach((onb: any) => {
+      const levels = workflowApproverMap.get(onb.id) || [];
+      const pendingLevel = levels.find((level: any) => level.status === 'PENDING');
+      const approverIds =
+        pendingLevel && Array.isArray(pendingLevel.approversList)
+          ? (pendingLevel.approversList as string[])
+          : Array.isArray(onb.eligibleApprovers)
+            ? (onb.eligibleApprovers as string[])
+            : [];
+      approverIds.forEach((id: unknown) => {
+        if (typeof id === 'string' && id.trim()) {
+          allEligibleApproverIds.add(id.trim());
+        }
+      });
+    });
+    const eligibleApproverUsers =
+      allEligibleApproverIds.size > 0
+        ? await prisma.user.findMany({
+            where: { id: { in: Array.from(allEligibleApproverIds) } },
+            select: { id: true, name: true, email: true },
+          })
+        : [];
+    const eligibleApproverMap = new Map(
+      eligibleApproverUsers.map((user) => [
+        user.id,
+        {
+          name: user.name || 'System',
+          email: user.email || 'system@internal',
+        },
+      ]),
+    );
 
     const existingUsers =
       pendingEmails.length > 0
@@ -3976,6 +4212,17 @@ export class UserDbController {
         const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
         const type = onb.type || 'INITIATE';
         const isInitiate = type === 'INITIATE';
+        const levels = workflowApproverMap.get(onb.id) || [];
+        const pendingLevel = levels.find((level: any) => level.status === 'PENDING');
+        const eligibleApproverIds =
+          pendingLevel && Array.isArray(pendingLevel.approversList)
+            ? (pendingLevel.approversList as string[])
+            : Array.isArray(onb.eligibleApprovers)
+              ? (onb.eligibleApprovers as string[])
+              : [];
+        const eligibleapprovers = eligibleApproverIds
+          .map((id: string) => eligibleApproverMap.get(id))
+          .filter(Boolean);
 
         const primary: any[] = [];
         const secondary: any[] = [];
@@ -4116,6 +4363,7 @@ export class UserDbController {
           id: onb.id,
           type,
           impact: onb.impact || null,
+          ...(eligibleapprovers.length > 0 ? { eligibleapprovers } : {}),
           ...(detail
             ? {
                 oldData: responseOldData,
@@ -4263,82 +4511,15 @@ export class UserDbController {
         resolvedCompanyId = company.id;
       }
 
-      // Check if requester is a global access user
-      let isGlobal = true;
-      let allVisibleNodeIds: string[] = [];
-      let allVisibleNodePaths: string[] = [];
-
-      if (userId) {
-        const globalAccess = await prisma.userAccess.findFirst({
-          where: {
-            userId,
-            companyId: resolvedCompanyId,
-            isGlobalAccess: true,
-          },
-        });
-
-        if (!globalAccess) {
-          isGlobal = false;
-          // Get all view-capable USER_ACC assignments to determine visibility scope.
-          // A secondary assignment grants the same scoped view permission as a primary one.
-          const requesterAccesses = await prisma.userAccess.findMany({
-            where: {
-              userId,
-              companyId: resolvedCompanyId,
-              role: {
-                subCategory: 'USER_ACC',
-                view: true,
-              },
-            },
-            include: { orgStructure: { select: { nodePath: true } } },
-          });
-
-          if (requesterAccesses.length > 0) {
-            const nodePaths = requesterAccesses
-              .filter((a) => a.accessCategory === 'NODE')
-              .map((a) => a.orgStructure.nodePath);
-
-            const immediateChildPaths = requesterAccesses
-              .filter((a) => a.accessCategory === 'IMMEDIATE_CHILD')
-              .map((a) => a.orgStructure.nodePath);
-
-            const allChildPaths = requesterAccesses
-              .filter((a) => a.accessCategory === 'ALL_CHILD')
-              .map((a) => a.orgStructure.nodePath);
-
-            // Fetch all nodes that fall within the requester's visibility categories
-            const visibleNodes = await prisma.orgStructure.findMany({
-              where: {
-                companyId: resolvedCompanyId,
-                OR: [
-                  // 1. Direct nodes (for NODE, IMMEDIATE_CHILD, ALL_CHILD)
-                  {
-                    nodePath: {
-                      in: [
-                        ...nodePaths,
-                        ...immediateChildPaths,
-                        ...allChildPaths,
-                      ],
-                    },
-                  },
-                  // 2. All descendants (for ALL_CHILD)
-                  ...allChildPaths.map((path) => ({
-                    nodePath: { startsWith: `${path}.` },
-                  })),
-                  // 3. Immediate children only (for IMMEDIATE_CHILD)
-                  ...immediateChildPaths.map((path) => ({
-                    parent: { nodePath: path },
-                  })),
-                ],
-              },
-              select: { id: true, nodePath: true },
-            });
-
-            allVisibleNodeIds = visibleNodes.map((n) => n.id);
-            allVisibleNodePaths = visibleNodes.map((n) => n.nodePath);
-          }
-        }
-      }
+      const viewerScope = await UserDbController.getFetchUserViewerScope(
+        userId,
+        resolvedCompanyId,
+      );
+      const isGlobal = viewerScope.isGlobal;
+      const allVisibleNodeIds = viewerScope.visibleNodeIds;
+      const allVisibleNodePaths = viewerScope.visibleNodePaths;
+      const excludeSaasAdminsForViewer =
+        viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
 
       const buildUserWhere = (status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE') => ({
         userMappings: {
@@ -4368,7 +4549,16 @@ export class UserDbController {
             }
           : {}),
         ...(isGlobal
-          ? {}
+          ? excludeSaasAdminsForViewer
+            ? {
+                userAccesses: {
+                  none: {
+                    companyId: resolvedCompanyId,
+                    roleCode: 'SAAS_ADMIN',
+                  },
+                },
+              }
+            : {}
           : {
               AND: [
                 {
@@ -4387,6 +4577,18 @@ export class UserDbController {
                     },
                   },
                 },
+                ...(excludeSaasAdminsForViewer
+                  ? [
+                      {
+                        userAccesses: {
+                          none: {
+                            companyId: resolvedCompanyId,
+                            roleCode: 'SAAS_ADMIN',
+                          },
+                        },
+                      },
+                    ]
+                  : []),
               ],
             }),
       });
@@ -4430,8 +4632,8 @@ export class UserDbController {
             },
           },
         };
-        const pendingApprovalEligibleUserIds =
-          await UserDbController.getPendingApprovalEligibleUserIds(
+        const pendingApprovalEligibleUsers =
+          await UserDbController.getPendingApprovalEligibleUserCounts(
             resolvedCompanyId,
             appliedFilters,
           );
@@ -4512,8 +4714,12 @@ export class UserDbController {
                 pendingRequestType: pendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
-                hasPendingOverride: pendingApprovalEligibleUserIds.has(
-                  item.raw.id,
+                hasPendingOverride:
+                  (pendingApprovalEligibleUsers.get(item.raw.id)?.count || 0) >
+                  0,
+                pendingApprovalSubCategories: Array.from(
+                  pendingApprovalEligibleUsers.get(item.raw.id)
+                    ?.subCategories || [],
                 ),
               },
             ),
@@ -4538,8 +4744,12 @@ export class UserDbController {
                 pendingRequestType: pendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
-                hasPendingOverride: pendingApprovalEligibleUserIds.has(
-                  item.raw.id,
+                hasPendingOverride:
+                  (pendingApprovalEligibleUsers.get(item.raw.id)?.count || 0) >
+                  0,
+                pendingApprovalSubCategories: Array.from(
+                  pendingApprovalEligibleUsers.get(item.raw.id)
+                    ?.subCategories || [],
                 ),
               },
             ),
@@ -4564,8 +4774,12 @@ export class UserDbController {
                 pendingRequestType: pendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
-                hasPendingOverride: pendingApprovalEligibleUserIds.has(
-                  item.raw.id,
+                hasPendingOverride:
+                  (pendingApprovalEligibleUsers.get(item.raw.id)?.count || 0) >
+                  0,
+                pendingApprovalSubCategories: Array.from(
+                  pendingApprovalEligibleUsers.get(item.raw.id)
+                    ?.subCategories || [],
                 ),
               },
             ),
@@ -4675,6 +4889,11 @@ export class UserDbController {
                     pendingByEmail.get(
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
+                    {
+                      pendingApprovalCount:
+                        pendingApprovalEligibleUsers.get(item.raw.id)?.count ||
+                        0,
+                    },
                   ),
                 );
         const inactiveUsers =
@@ -4687,6 +4906,11 @@ export class UserDbController {
                     pendingByEmail.get(
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
+                    {
+                      pendingApprovalCount:
+                        pendingApprovalEligibleUsers.get(item.raw.id)?.count ||
+                        0,
+                    },
                   ),
                 )
             : [];
@@ -4700,6 +4924,11 @@ export class UserDbController {
                     pendingByEmail.get(
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
+                    {
+                      pendingApprovalCount:
+                        pendingApprovalEligibleUsers.get(item.raw.id)?.count ||
+                        0,
+                    },
                   ),
                 )
             : [];
@@ -4905,20 +5134,32 @@ export class UserDbController {
           activePendingByEmail.set(email, request);
         }
       });
+      const pendingApprovalEligibleUsers =
+        await UserDbController.getPendingApprovalEligibleUserCounts(
+          resolvedCompanyId,
+          null,
+        );
       const selectedUsers = selectedPage.pageRows.map((user: any) =>
         UserDbController.formatProductionUser(
           user,
           activePendingByEmail.get((user.email || '').toLowerCase()),
+          {
+            pendingApprovalCount:
+              pendingApprovalEligibleUsers.get(user.id)?.count || 0,
+          },
         ),
       );
       const activeUsers =
         listType === 'inactive' || listType === 'archive' ? [] : selectedUsers;
       const inactiveUsers =
         listType === 'inactive'
-          ? selectedUsers
-          : inactiveRows.map((user: any) =>
-              UserDbController.formatProductionUser(user),
-            );
+            ? selectedUsers
+            : inactiveRows.map((user: any) =>
+                UserDbController.formatProductionUser(user, undefined, {
+                  pendingApprovalCount:
+                    pendingApprovalEligibleUsers.get(user.id)?.count || 0,
+                }),
+              );
       const archiveUsers = listType === 'archive' ? selectedUsers : [];
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
@@ -4997,74 +5238,15 @@ export class UserDbController {
         resolvedCompanyId = company.id;
       }
 
-      let isGlobal = true;
-      let visibleNodeIds: string[] = [];
-      let visibleNodePaths: string[] = [];
-
-      if (userId) {
-        const globalAccess = await prisma.userAccess.findFirst({
-          where: {
-            userId,
-            companyId: resolvedCompanyId,
-            isGlobalAccess: true,
-          },
-          select: { id: true },
-        });
-
-        if (!globalAccess) {
-          isGlobal = false;
-          const requesterAccesses = await prisma.userAccess.findMany({
-            where: {
-              userId,
-              companyId: resolvedCompanyId,
-              role: {
-                subCategory: 'USER_ACC',
-                view: true,
-              },
-            },
-            include: { orgStructure: { select: { nodePath: true } } },
-          });
-
-          if (requesterAccesses.length > 0) {
-            const nodePaths = requesterAccesses
-              .filter((access) => access.accessCategory === 'NODE')
-              .map((access) => access.orgStructure.nodePath);
-            const immediateChildPaths = requesterAccesses
-              .filter((access) => access.accessCategory === 'IMMEDIATE_CHILD')
-              .map((access) => access.orgStructure.nodePath);
-            const allChildPaths = requesterAccesses
-              .filter((access) => access.accessCategory === 'ALL_CHILD')
-              .map((access) => access.orgStructure.nodePath);
-            const visibleNodes = await prisma.orgStructure.findMany({
-              where: {
-                companyId: resolvedCompanyId,
-                OR: [
-                  {
-                    nodePath: {
-                      in: [
-                        ...nodePaths,
-                        ...immediateChildPaths,
-                        ...allChildPaths,
-                      ],
-                    },
-                  },
-                  ...allChildPaths.map((path) => ({
-                    nodePath: { startsWith: `${path}.` },
-                  })),
-                  ...immediateChildPaths.map((path) => ({
-                    parent: { nodePath: path },
-                  })),
-                ],
-              },
-              select: { id: true, nodePath: true },
-            });
-            visibleNodeIds = visibleNodes.map((node) => node.id);
-            visibleNodePaths = visibleNodes
-              .map((node) => node.nodePath)
-              .filter((nodePath): nodePath is string => Boolean(nodePath));
-          }
-        }
-      }
+      const viewerScope = await UserDbController.getFetchUserViewerScope(
+        userId,
+        resolvedCompanyId,
+      );
+      const isGlobal = viewerScope.isGlobal;
+      const visibleNodeIds = viewerScope.visibleNodeIds;
+      const visibleNodePaths = viewerScope.visibleNodePaths;
+      const excludeSaasAdminsForViewer =
+        viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
 
       if (id) {
         const pendingOnboarding = await prisma.userOnboarding.findFirst({
@@ -5119,7 +5301,16 @@ export class UserDbController {
       }
 
       const visibilityWhere = isGlobal
-        ? {}
+        ? excludeSaasAdminsForViewer
+          ? {
+              userAccesses: {
+                none: {
+                  companyId: resolvedCompanyId,
+                  roleCode: 'SAAS_ADMIN',
+                },
+              },
+            }
+          : {}
         : {
             AND: [
               {
@@ -5138,6 +5329,18 @@ export class UserDbController {
                   },
                 },
               },
+              ...(excludeSaasAdminsForViewer
+                ? [
+                    {
+                      userAccesses: {
+                        none: {
+                          companyId: resolvedCompanyId,
+                          roleCode: 'SAAS_ADMIN',
+                        },
+                      },
+                    },
+                  ]
+                : []),
             ],
           };
 
@@ -5217,12 +5420,19 @@ export class UserDbController {
             visibleRequestIds: visiblePendingRequestIds,
           }),
       );
+      const pendingApprovalEligibleUserCounts =
+        await UserDbController.getPendingApprovalEligibleUserCounts(
+          resolvedCompanyId,
+          null,
+        );
 
       res.status(200).json({
         message: 'User details fetched successfully!',
         code: 200,
         data: UserDbController.formatProductionUser(user, pendingRequest, {
           detail: true,
+          pendingApprovalCount:
+            pendingApprovalEligibleUserCounts.get(user.id)?.count || 0,
         }),
       });
     } catch (error) {
@@ -7453,6 +7663,15 @@ export class UserDbController {
           ),
         ]),
       );
+      const eligibleApproverMap = new Map(
+        approverDetails.map((u) => [
+          u.id,
+          {
+            name: u.name || 'System',
+            email: u.email || 'system@internal',
+          },
+        ]),
+      );
       const historyUserMap = new Map(
         history.map((h) => [
           h.eventUserId,
@@ -7607,7 +7826,7 @@ export class UserDbController {
           : [];
         return approverIds
           .map((id: string) => {
-            const user = approverMap.get(id);
+            const user = eligibleApproverMap.get(id);
             return user ? { name: user.name, email: user.email } : null;
           })
           .filter(Boolean);
