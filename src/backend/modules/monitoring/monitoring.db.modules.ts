@@ -45,6 +45,21 @@ export const monitoringApiSpanSchema = z
   .strict();
 
 type ApiSpanTypeValue = 'MIDDLELAYER' | 'BACKEND' | 'EXTERNAL';
+type ResponseSizeSort = 'asc' | 'desc';
+
+type MonitoringFilters = {
+  query: string | null;
+  dateRange: '7DAYS' | '15DAYS' | '1MONTH' | 'CUSTOM' | null;
+  fromDate: string | null;
+  toDate: string | null;
+  status: number[];
+  responseSizeSort: ResponseSizeSort | null;
+  responseSizeRange: {
+    min?: number;
+    max?: number;
+  } | null;
+  subTrack: number[];
+};
 
 type CreateApiSpanInput = {
   trackingId: string;
@@ -176,11 +191,15 @@ export const createApiSpanSafely = async (
 export const findMiddlelayerMonitoringRows = async (
   where: Record<string, unknown>,
   pagination: ReturnType<typeof resolveCursorPagination>,
+  responseSizeSort?: ResponseSizeSort | null,
 ) => {
   return prisma.apiSpan.findMany({
     where: where as any,
     select: apiSpanMonitoringBasicSelect,
-    orderBy: getPageOrder(pagination.direction) as any,
+    orderBy: getMonitoringPageOrder(
+      pagination.direction,
+      responseSizeSort,
+    ) as any,
     skip: pagination.cursor ? 0 : pagination.offset,
     take: pagination.limit + 1,
   });
@@ -220,6 +239,26 @@ export const countBackendRowsByTrackingIds = async (trackingIds: string[]) => {
       _all: true,
     },
   });
+};
+
+const getMonitoringPageOrder = (
+  direction: 'next' | 'prev',
+  responseSizeSort?: ResponseSizeSort | null,
+) => {
+  if (!responseSizeSort) return getPageOrder(direction);
+
+  const sortDirection =
+    direction === 'prev'
+      ? responseSizeSort === 'asc'
+        ? 'desc'
+        : 'asc'
+      : responseSizeSort;
+
+  return [
+    { responseSize: sortDirection },
+    { createdAt: direction === 'prev' ? 'asc' : 'desc' },
+    { id: direction === 'prev' ? 'asc' : 'desc' },
+  ] as const;
 };
 
 export const findMonitoringRowsByTrackingId = async (trackingId: string) => {
@@ -289,6 +328,243 @@ const formatFetchAllSpan = (row: SpanRow, spanCount: number) => ({
   createdAt: row.createdAt,
 });
 
+const normalizeString = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  return trimmed &&
+    !['null', 'undefined'].includes(trimmed.toLowerCase())
+    ? trimmed
+    : null;
+};
+
+const normalizeNumberArray = (value: unknown): number[] => {
+  const source =
+    typeof value === 'string' && value.includes(',')
+      ? value.split(',')
+      : Array.isArray(value)
+        ? value
+        : value === undefined || value === null || value === ''
+          ? []
+          : [value];
+
+  return Array.from(
+    new Set(
+      source
+        .map((item) => Number(item))
+        .filter((item) => Number.isInteger(item) && item >= 0),
+    ),
+  );
+};
+
+const normalizeDateRange = (
+  value: unknown,
+): MonitoringFilters['dateRange'] => {
+  let normalized = normalizeString(value)
+    ?.toUpperCase()
+    .replace(/[\s-]+/g, '');
+
+  if (normalized === '7DAY') normalized = '7DAYS';
+  if (normalized === '15DAY') normalized = '15DAYS';
+
+  return normalized &&
+    ['7DAYS', '15DAYS', '1MONTH', 'CUSTOM'].includes(normalized)
+    ? (normalized as MonitoringFilters['dateRange'])
+    : null;
+};
+
+const normalizeResponseSizeSort = (value: unknown): ResponseSizeSort | null => {
+  const normalized = normalizeString(value)?.toLowerCase();
+  return normalized === 'asc' || normalized === 'desc' ? normalized : null;
+};
+
+const normalizeResponseSizeRange = (
+  value: unknown,
+): MonitoringFilters['responseSizeRange'] => {
+  if (typeof value === 'string') {
+    const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(value);
+    if (!match) return null;
+
+    const min = Number(match[1]);
+    const max = Number(match[2]);
+    return min <= max ? { min, max } : { min: max, max: min };
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const range = value as Record<string, unknown>;
+  const min = Number(range.min);
+  const max = Number(range.max);
+  const normalizedRange: { min?: number; max?: number } = {};
+
+  if (Number.isInteger(min) && min >= 0) normalizedRange.min = min;
+  if (Number.isInteger(max) && max >= 0) normalizedRange.max = max;
+
+  if (
+    normalizedRange.min !== undefined &&
+    normalizedRange.max !== undefined &&
+    normalizedRange.min > normalizedRange.max
+  ) {
+    return {
+      min: normalizedRange.max,
+      max: normalizedRange.min,
+    };
+  }
+
+  return Object.keys(normalizedRange).length > 0 ? normalizedRange : null;
+};
+
+const getAppliedMonitoringFilterInput = (
+  input: Record<string, unknown>,
+): Record<string, unknown> => {
+  if (input.filter === true) {
+    return input.applied &&
+      typeof input.applied === 'object' &&
+      !Array.isArray(input.applied)
+      ? (input.applied as Record<string, unknown>)
+      : {};
+  }
+
+  return input.filter === false ? {} : input;
+};
+
+const resolveMonitoringFilters = (
+  input: Record<string, unknown>,
+): MonitoringFilters => {
+  const applied = getAppliedMonitoringFilterInput(input);
+  const responseSizeSort = normalizeResponseSizeSort(
+    applied.responseSizeSort ?? applied.responseSize,
+  );
+  const responseSizeRange = normalizeResponseSizeRange(
+    applied.responseSizeRange ??
+      (responseSizeSort ? null : applied.responseSize),
+  );
+
+  return {
+    query: normalizeString(input.query),
+    dateRange: normalizeDateRange(
+      applied.dateRange ?? applied.date ?? applied.data,
+    ),
+    fromDate: normalizeString(applied.fromDate ?? applied.formDate),
+    toDate: normalizeString(applied.toDate),
+    status: normalizeNumberArray(applied.status).filter(
+      (status) => status >= 100 && status <= 599,
+    ),
+    responseSizeSort,
+    responseSizeRange,
+    subTrack: normalizeNumberArray(applied.subTrack ?? applied.subtrack),
+  };
+};
+
+const getDateBoundary = (
+  value: string | null,
+  boundary: 'start' | 'end',
+): Date | null => {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  if (boundary === 'start') {
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
+  }
+
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      23,
+      59,
+      59,
+      999,
+    ),
+  );
+};
+
+const resolveCreatedAtFilter = (filters: MonitoringFilters) => {
+  const explicitFrom = getDateBoundary(filters.fromDate, 'start');
+  const explicitTo = getDateBoundary(filters.toDate, 'end');
+
+  if (filters.dateRange === 'CUSTOM') {
+    return explicitFrom && explicitTo
+      ? { gte: explicitFrom, lte: explicitTo }
+      : null;
+  }
+
+  if (explicitFrom || explicitTo) {
+    return {
+      ...(explicitFrom ? { gte: explicitFrom } : {}),
+      ...(explicitTo ? { lte: explicitTo } : {}),
+    };
+  }
+
+  const now = new Date();
+  const daysByRange: Record<string, number> = {
+    '7DAYS': 7,
+    '15DAYS': 15,
+    '1MONTH': 30,
+  };
+  const days = filters.dateRange ? daysByRange[filters.dateRange] : null;
+
+  if (!days) return null;
+
+  return {
+    gte: new Date(now.getTime() - days * 24 * 60 * 60 * 1000),
+    lte: now,
+  };
+};
+
+const resolveStatusFilter = (statuses: number[]) => {
+  const statusFilters = statuses.map((status) =>
+    status % 100 === 0
+      ? { statusCode: { gte: status, lt: Math.min(status + 100, 600) } }
+      : { statusCode: status },
+  );
+
+  if (statusFilters.length === 0) return {};
+  if (statusFilters.length === 1) return statusFilters[0];
+  return { OR: statusFilters };
+};
+
+const resolveResponseSizeRangeFilter = (
+  range: MonitoringFilters['responseSizeRange'],
+) => {
+  if (!range) return {};
+
+  return {
+    responseSize: {
+      ...(range.min !== undefined ? { gte: range.min } : {}),
+      ...(range.max !== undefined ? { lte: range.max } : {}),
+    },
+  };
+};
+
+const resolveSubTrackTrackingIds = async (
+  subTrack: number[],
+): Promise<string[] | null> => {
+  if (subTrack.length === 0) return null;
+
+  const backendCounts = await prisma.apiSpan.groupBy({
+    by: ['trackingId'],
+    where: {
+      type: 'BACKEND',
+    },
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma aggregate API key.
+    _count: {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma aggregate API key.
+      _all: true,
+    },
+  });
+
+  const allowedCounts = new Set(subTrack);
+  return backendCounts
+    .filter((count) => allowedCounts.has(count._count._all))
+    .map((count) => count.trackingId);
+};
+
 const formatDetailParentSpan = (row: SpanRow) => ({
   trackingId: row.trackingId,
   subCount: row.subCount,
@@ -353,10 +629,8 @@ export class MonitoringService {
   }
 
   static async fetchAllMiddlelayerSpans(input: Record<string, unknown>) {
-    const query =
-      typeof input.query === 'string' && input.query.trim()
-        ? input.query.trim()
-        : null;
+    const filters = resolveMonitoringFilters(input);
+    const query = filters.query;
     const pagination = resolveCursorPagination(input);
 
     const queryFilter: any = query
@@ -396,10 +670,32 @@ export class MonitoringService {
           ],
         }
       : {};
+    const createdAtFilter = resolveCreatedAtFilter(filters);
+    const statusFilter = resolveStatusFilter(filters.status);
+    const responseSizeRangeFilter = resolveResponseSizeRangeFilter(
+      filters.responseSizeRange,
+    );
+    const subTrackTrackingIds = await resolveSubTrackTrackingIds(
+      filters.subTrack,
+    );
+
+    const filterParts = [
+      queryFilter,
+      statusFilter,
+      responseSizeRangeFilter,
+      createdAtFilter ? { createdAt: createdAtFilter } : {},
+      subTrackTrackingIds
+        ? {
+            trackingId: {
+              in: subTrackTrackingIds,
+            },
+          }
+        : {},
+    ].filter((filter) => Object.keys(filter).length > 0);
 
     const where: any = {
       type: 'MIDDLELAYER',
-      ...queryFilter,
+      ...(filterParts.length > 0 ? { AND: filterParts } : {}),
     };
 
     const pageWhere = pagination.cursor
@@ -414,7 +710,11 @@ export class MonitoringService {
       : null;
     const [totalCount, parentRows, newCount] = await Promise.all([
       prisma.apiSpan.count({ where }),
-      findMiddlelayerMonitoringRows(pageWhere, pagination),
+      findMiddlelayerMonitoringRows(
+        pageWhere,
+        pagination,
+        filters.responseSizeSort,
+      ),
       newWhere
         ? prisma.apiSpan.count({ where: newWhere as any })
         : Promise.resolve(0),
