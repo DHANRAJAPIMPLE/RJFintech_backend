@@ -2256,131 +2256,153 @@ export class UserDbController {
       return false;
     }
 
-    // Per-node access filtering:
-    // When nodeAccess map has entries, for each requested node value, check if the user
-    // has an access record matching the required access types for that node.
-    // Nodes in nodeValues but NOT in nodeAccess are matched from allAccesses (any access type).
-    // Nodes in nodeValues AND in nodeAccess are matched only if the user has access
-    // with one of the specified access types (Primary/Secondary) for that node.
-    if (filters.nodeValues.length > 0) {
-      const matchesNodeFilter = filters.nodeValues.some((filterNodeValue) => {
-        const requiredAccessTypes = filters.nodeAccess[filterNodeValue];
+    // --- Combined access-level filter check (intersection semantics) ---
+    // When multiple access-level filters (nodeName, nodeType, category,
+    // subCategory, role) are active, at least one access record must
+    // satisfy ALL of them simultaneously on the same record.
+    const hasNodeNameFilter = filters.nodeValues.length > 0 || hasNodeAccessMap;
+    const hasNodeTypeFilter = filters.nodeType.length > 0;
+    const hasCategoryFilter = filters.category.length > 0;
+    const hasSubCategoryFilter = filters.subCategory.length > 0;
+    const hasRoleFilter = filters.role.length > 0;
+    const hasAnyAccessFilter =
+      hasNodeNameFilter ||
+      hasNodeTypeFilter ||
+      hasCategoryFilter ||
+      hasSubCategoryFilter ||
+      hasRoleFilter;
 
-        if (!requiredAccessTypes || requiredAccessTypes.length === 0) {
-          // No specific access type required for this node — match across all accesses
-          return allAccesses.some(
-            (access: any) =>
-              UserDbController.matchesNormalizedFilterValue(
-                access?.nodeName,
-                [filterNodeValue],
-              ) ||
-              UserDbController.matchesNormalizedFilterValue(
-                access?.nodePath,
-                [filterNodeValue],
-              ),
-          );
-        }
+    if (hasAnyAccessFilter) {
+      // subCategory can also be satisfied by pending approval subcategories
+      // (a user-level flag, not per-access)
+      const matchesPendingApprovalSubCategory =
+        hasPending &&
+        hasSubCategoryFilter &&
+        filters.subCategory.some((subCategory) =>
+          pendingApprovalSubCategories.has(subCategory),
+        );
 
-        // Specific access types required — check per access type
-        return requiredAccessTypes.some((accessType) => {
-          const scopedAccesses =
-            accessType === 'PRIMARY'
-              ? primary
-              : accessType === 'SECONDARY'
-                ? secondary
-                : allAccesses;
-          return scopedAccesses.some(
-            (access: any) =>
-              UserDbController.matchesNormalizedFilterValue(
-                access?.nodeName,
-                [filterNodeValue],
-              ) ||
-              UserDbController.matchesNormalizedFilterValue(
-                access?.nodePath,
-                [filterNodeValue],
-              ),
-          );
+      // If subCategory is the only active access filter and it is already
+      // satisfied by pending approvals, skip the per-access intersection.
+      const skipAccessCheck =
+        matchesPendingApprovalSubCategory &&
+        !hasNodeNameFilter &&
+        !hasNodeTypeFilter &&
+        !hasCategoryFilter &&
+        !hasRoleFilter;
+
+      if (!skipAccessCheck) {
+        const primarySet = new Set(primary);
+
+        const hasMatchingAccess = allAccesses.some((access: any) => {
+          const isPrimary = primarySet.has(access);
+
+          // ── nodeName / nodeAccess filter ──
+          if (hasNodeNameFilter) {
+            if (filters.nodeValues.length > 0) {
+              const nodeMatch = filters.nodeValues.some(
+                (filterNodeValue) => {
+                  const matchesNode =
+                    UserDbController.matchesNormalizedFilterValue(
+                      access?.nodeName,
+                      [filterNodeValue],
+                    ) ||
+                    UserDbController.matchesNormalizedFilterValue(
+                      access?.nodePath,
+                      [filterNodeValue],
+                    );
+                  if (!matchesNode) return false;
+
+                  const requiredAccessTypes =
+                    filters.nodeAccess[filterNodeValue];
+                  if (
+                    !requiredAccessTypes ||
+                    requiredAccessTypes.length === 0
+                  )
+                    return true;
+
+                  return requiredAccessTypes.some((accessType) => {
+                    if (accessType === 'PRIMARY') return isPrimary;
+                    if (accessType === 'SECONDARY') return !isPrimary;
+                    return true;
+                  });
+                },
+              );
+              if (!nodeMatch) return false;
+            } else {
+              // nodeValues empty but nodeAccess has entries
+              const accessTypeMatch = Object.entries(
+                filters.nodeAccess,
+              ).some(([nodeKey, accessTypes]) => {
+                const matchesNode =
+                  UserDbController.matchesNormalizedFilterValue(
+                    access?.nodeName,
+                    [nodeKey],
+                  ) ||
+                  UserDbController.matchesNormalizedFilterValue(
+                    access?.nodePath,
+                    [nodeKey],
+                  );
+                if (!matchesNode) return false;
+                return accessTypes.some((accessType) => {
+                  if (accessType === 'PRIMARY') return isPrimary;
+                  if (accessType === 'SECONDARY') return !isPrimary;
+                  return true;
+                });
+              });
+              if (!accessTypeMatch) return false;
+            }
+          }
+
+          // ── nodeType filter ──
+          if (
+            hasNodeTypeFilter &&
+            !UserDbController.matchesNormalizedFilterValue(
+              access?.nodeType,
+              filters.nodeType,
+            )
+          ) {
+            return false;
+          }
+
+          // ── category filter ──
+          if (
+            hasCategoryFilter &&
+            !UserDbController.matchesNormalizedFilterValue(
+              access?.roleCategory,
+              filters.category,
+            )
+          ) {
+            return false;
+          }
+
+          // ── subCategory filter (skip if satisfied by pending approvals) ──
+          if (
+            hasSubCategoryFilter &&
+            !matchesPendingApprovalSubCategory &&
+            !UserDbController.matchesNormalizedFilterValue(
+              access?.roleSubCategory,
+              filters.subCategory,
+            )
+          ) {
+            return false;
+          }
+
+          // ── role filter ──
+          if (
+            hasRoleFilter &&
+            !UserDbController.matchesRoleFilter(access, filters.role)
+          ) {
+            return false;
+          }
+
+          return true;
         });
-      });
 
-      if (!matchesNodeFilter) {
-        return false;
+        if (!hasMatchingAccess) {
+          return false;
+        }
       }
-    } else if (hasNodeAccessMap) {
-      // nodeValues is empty but nodeAccess has entries — filter by access type only
-      const matchesAccessFilter = Object.entries(filters.nodeAccess).some(
-        ([nodeKey, accessTypes]) => {
-          return accessTypes.some((accessType) => {
-            const scopedAccesses =
-              accessType === 'PRIMARY'
-                ? primary
-                : accessType === 'SECONDARY'
-                  ? secondary
-                  : allAccesses;
-            return scopedAccesses.some(
-              (access: any) =>
-                UserDbController.matchesNormalizedFilterValue(
-                  access?.nodeName,
-                  [nodeKey],
-                ) ||
-                UserDbController.matchesNormalizedFilterValue(
-                  access?.nodePath,
-                  [nodeKey],
-                ),
-            );
-          });
-        },
-      );
-
-      if (!matchesAccessFilter) {
-        return false;
-      }
-    }
-
-    if (
-      filters.nodeType.length > 0 &&
-      !allAccesses.some((access: any) =>
-        UserDbController.matchesNormalizedFilterValue(
-          access?.nodeType,
-          filters.nodeType,
-        ),
-      )
-    ) {
-      return false;
-    }
-
-    if (
-      filters.category.length > 0 &&
-      !allAccesses.some((access: any) =>
-        UserDbController.matchesNormalizedFilterValue(
-          access?.roleCategory,
-          filters.category,
-        ),
-      )
-    ) {
-      return false;
-    }
-
-    const matchesAccessSubCategory =
-      filters.subCategory.length === 0 ||
-      allAccesses.some((access: any) =>
-        UserDbController.matchesNormalizedFilterValue(
-          access?.roleSubCategory,
-          filters.subCategory,
-        ),
-      );
-    const matchesPendingApprovalSubCategory =
-      hasPending &&
-      filters.subCategory.some((subCategory) =>
-        pendingApprovalSubCategories.has(subCategory),
-      );
-
-    if (
-      filters.subCategory.length > 0 &&
-      !matchesAccessSubCategory &&
-      !matchesPendingApprovalSubCategory
-    ) {
-      return false;
     }
 
     if (
@@ -2406,14 +2428,7 @@ export class UserDbController {
       return false;
     }
 
-    if (
-      filters.role.length > 0 &&
-      !allAccesses.some((access: any) =>
-        UserDbController.matchesRoleFilter(access, filters.role),
-      )
-    ) {
-      return false;
-    }
+
 
     if (
       filters.currentStatus !== null &&
