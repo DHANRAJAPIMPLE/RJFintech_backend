@@ -955,6 +955,13 @@ export class UserDbController {
     if (isGlobal) return true;
     if (visibleRequestIds.has(onboarding.id)) return true;
     if (viewerUserId && onboarding.initiatorId === viewerUserId) return true;
+    if (
+      viewerUserId &&
+      Array.isArray(onboarding.eligibleApprovers) &&
+      onboarding.eligibleApprovers.includes(viewerUserId)
+    ) {
+      return true;
+    }
     return false;
   }
 
@@ -3523,7 +3530,8 @@ export class UserDbController {
     if (
       !isGlobal &&
       visibleNodePaths.length === 0 &&
-      visibleRequestIds.size === 0
+      visibleRequestIds.size === 0 &&
+      !viewerUserId
     ) {
       return {
         pendingCount: 0,
@@ -7144,6 +7152,7 @@ export class UserDbController {
                 impact: true,
                 initiatorId: true,
                 status: true,
+                eligibleApprovers: true,
               },
             })
           : Promise.resolve([]),
@@ -7215,7 +7224,11 @@ export class UserDbController {
         if (!entry.reqId) return true;
         const requestSnapshot = requestSnapshotMap.get(entry.reqId);
         if (!requestSnapshot) return true;
-        if (String(requestSnapshot.status || '').toUpperCase() !== 'PENDING') {
+
+        const isModification = requestSnapshot.type && String(requestSnapshot.type).toUpperCase() !== 'INITIATE';
+        const isPending = String(requestSnapshot.status || '').toUpperCase() === 'PENDING';
+
+        if (!isPending && !isModification) {
           return true;
         }
 

@@ -8,9 +8,19 @@ export type OrgNodeType =
 
 export type OrgNodeStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVE';
 
+export type OrgImpactUserAccessItem = {
+  name: string;
+  email: string | null;
+};
+
+export type OrgImpactWorkflowItem = {
+  workflowName: string;
+  alias: string | null;
+};
+
 export type OrgImpactSummary = {
-  userAccess: string[];
-  workflow: string[];
+  userAccess: OrgImpactUserAccessItem[];
+  workflow: OrgImpactWorkflowItem[];
 };
 
 export type OrgActiveNode = {

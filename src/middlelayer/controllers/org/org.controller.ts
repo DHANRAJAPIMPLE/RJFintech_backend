@@ -45,6 +45,80 @@ import type {
 } from './org.type';
 
 export class OrgController {
+  private static normalizeImpactSummary(summary: unknown) {
+    const impactSummary = summary as {
+      userAccess?: unknown[];
+      workflow?: unknown[];
+    } | null;
+
+    return {
+      userAccess: Array.isArray(impactSummary?.userAccess)
+        ? impactSummary.userAccess
+            .map((entry) => {
+              if (typeof entry === 'string' && entry.trim()) {
+                return { name: entry.trim(), email: null };
+              }
+              if (
+                entry &&
+                typeof entry === 'object' &&
+                'name' in entry &&
+                typeof entry.name === 'string' &&
+                entry.name.trim()
+              ) {
+                return {
+                  name: entry.name.trim(),
+                  email:
+                    'email' in entry &&
+                    typeof entry.email === 'string' &&
+                    entry.email.trim()
+                      ? entry.email.trim()
+                      : null,
+                };
+              }
+              return null;
+            })
+            .filter(
+              (
+                entry,
+              ): entry is { name: string; email: string | null } =>
+                entry !== null,
+            )
+        : [],
+      workflow: Array.isArray(impactSummary?.workflow)
+        ? impactSummary.workflow
+            .map((entry) => {
+              if (typeof entry === 'string' && entry.trim()) {
+                return { workflowName: entry.trim(), alias: null };
+              }
+              if (
+                entry &&
+                typeof entry === 'object' &&
+                'workflowName' in entry &&
+                typeof entry.workflowName === 'string' &&
+                entry.workflowName.trim()
+              ) {
+                return {
+                  workflowName: entry.workflowName.trim(),
+                  alias:
+                    'alias' in entry &&
+                    typeof entry.alias === 'string' &&
+                    entry.alias.trim()
+                      ? entry.alias.trim()
+                      : null,
+                };
+              }
+              return null;
+            })
+            .filter(
+              (
+                entry,
+              ): entry is { workflowName: string; alias: string | null } =>
+                entry !== null,
+            )
+        : [],
+    };
+  }
+
   private static formatActiveNode(node: OrgActiveNode): OrgActiveNode {
     return {
       nodeName: node.nodeName,
@@ -52,7 +126,6 @@ export class OrgController {
       nodePath: node.nodePath,
       isPending: node.isPending ?? false,
       status: node.status ?? 'ACTIVE',
-      impactSummary: node.impactSummary ?? { userAccess: [], workflow: [] },
     };
   }
 
@@ -480,7 +553,9 @@ export class OrgController {
             initiatedDate: req.createdAt,
             workflowName: req.workflowName,
             alias: req.alias,
-            impactSummary: req.impactSummary ?? { userAccess: [], workflow: [] },
+            impactSummary: OrgController.normalizeImpactSummary(
+              req.impactSummary,
+            ),
           };
         },
       );
