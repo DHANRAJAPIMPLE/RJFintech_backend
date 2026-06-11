@@ -238,6 +238,46 @@ export class UserDbController {
     );
   }
 
+  private static doesAccessCoverNode(
+    access: {
+      isGlobalAccess?: boolean | null;
+      accessCategory?: string | null;
+      orgStructure?: { nodePath?: string | null } | null;
+    },
+    targetNodePath: string,
+  ) {
+    if (access.isGlobalAccess) {
+      return true;
+    }
+
+    const accessNodePath =
+      typeof access.orgStructure?.nodePath === 'string'
+        ? access.orgStructure.nodePath.trim()
+        : '';
+    if (!accessNodePath) {
+      return false;
+    }
+
+    const normalizedCategory = String(access.accessCategory || 'NODE')
+      .trim()
+      .toUpperCase();
+
+    if (targetNodePath === accessNodePath) {
+      return true;
+    }
+
+    if (normalizedCategory === 'ALL_CHILD') {
+      return targetNodePath.startsWith(`${accessNodePath}.`);
+    }
+
+    if (normalizedCategory === 'IMMEDIATE_CHILD') {
+      const parentPath = targetNodePath.split('.').slice(0, -1).join('.');
+      return parentPath === accessNodePath;
+    }
+
+    return false;
+  }
+
   private static formatConflictDate(value: Date | string | null | undefined) {
     if (!value) return 'N/A';
     const date = value instanceof Date ? value : new Date(value);
@@ -8736,17 +8776,30 @@ export class UserDbController {
         throw new AppError('Node path is required', 400);
       }
 
-      // Fetch all user accesses for this node path, including their roles
+      const normalizedNodePath = String(nodePath).trim();
+
+      // Fetch all access rows that can contribute to this node, including
+      // parent-scope assignments and active company membership.
       const userAccesses = await prisma.userAccess.findMany({
         where: {
-          orgStructure: {
-            nodePath: nodePath,
-            status: 'ACTIVE',
-          },
           ...(companyId ? { companyId } : {}),
+          user: {
+            userMappings: {
+              some: {
+                ...(companyId ? { companyId } : {}),
+                status: 'ACTIVE',
+              },
+            },
+          },
         },
         include: {
           role: true,
+          orgStructure: {
+            select: {
+              nodePath: true,
+              status: true,
+            },
+          },
         },
       });
 
@@ -8757,6 +8810,16 @@ export class UserDbController {
       > = {};
 
       userAccesses.forEach((ua) => {
+        if (ua.orgStructure?.status !== 'ACTIVE' && !ua.isGlobalAccess) {
+          return;
+        }
+
+        if (
+          !UserDbController.doesAccessCoverNode(ua, normalizedNodePath)
+        ) {
+          return;
+        }
+
         const subCat = ua.role?.subCategory;
         const pLevel = ua.role?.permissionLevel?.toUpperCase();
 
