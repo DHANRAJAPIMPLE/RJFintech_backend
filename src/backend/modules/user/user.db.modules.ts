@@ -1680,6 +1680,31 @@ export class UserDbController {
 
     const explicitFrom = parseBoundary(onboardingDate.fromDate, 'start');
     const explicitTo = parseBoundary(onboardingDate.toDate, 'end');
+    const range = UserDbController.normalizeFilterText(
+      onboardingDate.dateRange,
+    )?.toUpperCase();
+
+    if (range === 'CUSTOM') {
+      if (!explicitFrom || !explicitTo) {
+        throw new AppError(
+          'fromDate and toDate are required when dateRange is CUSTOM',
+          400,
+        );
+      }
+
+      if (explicitFrom > explicitTo) {
+        throw new AppError(
+          'fromDate must be earlier than or equal to toDate',
+          400,
+        );
+      }
+
+      return {
+        from: explicitFrom,
+        to: explicitTo,
+      };
+    }
+
     if (explicitFrom || explicitTo) {
       return {
         from: explicitFrom,
@@ -1687,9 +1712,6 @@ export class UserDbController {
       };
     }
 
-    const range = UserDbController.normalizeFilterText(
-      onboardingDate.dateRange,
-    )?.toUpperCase();
     if (!range) return null;
 
     const now = new Date();

@@ -127,7 +127,7 @@ const fetchAllUserAppliedSchema = z
             (value) =>
               typeof value === 'string' ? value.trim().toUpperCase() : value,
             z
-              .enum(['7DAYS', '15DAYS', '1MONTH', '1YEAR'])
+              .enum(['7DAYS', '15DAYS', '1MONTH', '1YEAR', 'CUSTOM'])
               .nullable()
               .optional(),
           )
@@ -136,6 +136,32 @@ const fetchAllUserAppliedSchema = z
         toDate: optionalDateStringSchema.nullable().optional(),
       })
       .strict()
+      .superRefine((value, context) => {
+        if (value.dateRange !== 'CUSTOM') return;
+
+        if (!value.fromDate || !value.toDate) {
+          context.addIssue({
+            code: 'custom',
+            message: 'fromDate and toDate are required when dateRange is CUSTOM',
+            path: ['fromDate'],
+          });
+          return;
+        }
+
+        const fromDate = new Date(value.fromDate);
+        const toDate = new Date(value.toDate);
+        if (
+          Number.isNaN(fromDate.getTime()) ||
+          Number.isNaN(toDate.getTime()) ||
+          fromDate.getTime() > toDate.getTime()
+        ) {
+          context.addIssue({
+            code: 'custom',
+            message: 'fromDate must be earlier than or equal to toDate',
+            path: ['toDate'],
+          });
+        }
+      })
       .nullable()
       .optional(),
     status: optionalStringArraySchema,
