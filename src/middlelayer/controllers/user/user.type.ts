@@ -276,7 +276,6 @@ export type PendingUserListItem = {
   impact?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
-  eligibleapprovers?: PendingUserApprover[];
   basicDetails: PendingUserBasicDetails;
   primary?: PendingUserAccess[];
   secondary?: PendingUserAccess[];

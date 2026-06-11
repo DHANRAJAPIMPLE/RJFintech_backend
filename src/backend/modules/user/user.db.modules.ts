@@ -1020,27 +1020,20 @@ export class UserDbController {
     const pendingByEmail = new Map<string, any>();
     if (normalizedEmails.length === 0) return pendingByEmail;
 
-    const pendingCandidates = await prisma.userOnboarding.findMany({
+    const allPendingCandidates = await prisma.userOnboarding.findMany({
       where: {
         companyId,
         status: 'PENDING',
-        OR: normalizedEmails.flatMap((email) => [
-          {
-            data: {
-              path: ['targetUserEmail'],
-              equals: email,
-            } as any,
-          },
-          {
-            data: {
-              path: ['basicDetails', 'email'],
-              equals: email,
-            } as any,
-          },
-        ]),
       },
+      select: { id: true, data: true, type: true, createdAt: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
+    const requestedEmailSet = new Set(normalizedEmails);
+    const pendingCandidates = allPendingCandidates.filter((request: any) =>
+      requestedEmailSet.has(
+        UserDbController.getPendingRequestTargetEmail(request),
+      ),
+    );
     const effectivePendingIds =
       await UserDbController.filterEffectivelyPendingRequestIds(
         'user_onboarding',
@@ -1926,23 +1919,47 @@ export class UserDbController {
   private static matchesRoleFilter(access: any, acceptedValues: string[]) {
     if (acceptedValues.length === 0) return true;
 
+    const permissionLevel = String(
+      access?.permissionLevel ?? access?.role?.permissionLevel ?? '',
+    ).toUpperCase();
     const canView = Boolean(access?.canView ?? access?.role?.view);
     const canModify = Boolean(access?.canModify ?? access?.role?.modify);
     const canApprove = Boolean(access?.canApprove ?? access?.role?.approve);
     const canInitiate = Boolean(access?.canInitiate ?? access?.role?.initiate);
+    const isMaker =
+      permissionLevel === 'USER' ||
+      (permissionLevel === '' &&
+        canView &&
+        canModify &&
+        canInitiate &&
+        !canApprove);
+    const isChecker =
+      permissionLevel === 'MANAGER' ||
+      (permissionLevel === '' &&
+        canView &&
+        canApprove &&
+        !canModify &&
+        !canInitiate);
+    const isViewer =
+      permissionLevel === 'VIEWER' ||
+      (permissionLevel === '' &&
+        canView &&
+        !canModify &&
+        !canApprove &&
+        !canInitiate);
     const normalizedRoleName = UserDbController.compactFilterValue(
       access?.roleName ?? access?.role?.roleName,
     );
 
     return acceptedValues.some((accepted) => {
       if (accepted === 'maker') {
-        return canInitiate && canModify;
+        return isMaker;
       }
       if (accepted === 'checker') {
-        return canApprove;
+        return isChecker;
       }
       if (accepted === 'user' || accepted === 'viewer') {
-        return canView && !canModify && !canApprove && !canInitiate;
+        return isViewer;
       }
 
       if (!normalizedRoleName) return false;
@@ -3206,6 +3223,7 @@ export class UserDbController {
                   roleName: true,
                   category: true,
                   subCategory: true,
+                  permissionLevel: true,
                 },
               },
               orgStructure: {
@@ -3844,6 +3862,7 @@ export class UserDbController {
       roleCategory: access.role?.category ?? access.roleCategory,
       roleSubCategory: access.role?.subCategory ?? access.roleSubCategory,
       roleName: access.role?.roleName ?? access.roleName ?? access.roleCode,
+      permissionLevel: access.role?.permissionLevel ?? access.permissionLevel,
       canView: Boolean(access.role?.view),
       canModify: Boolean(access.role?.modify),
       canApprove: Boolean(access.role?.approve),
@@ -4471,6 +4490,7 @@ export class UserDbController {
             roleCategory: access.role?.category || '',
             roleSubCategory: access.role?.subCategory || '',
             roleName: access.role?.roleName || access.roleCode,
+            permissionLevel: access.role?.permissionLevel || '',
             nodeName: access.orgStructure?.nodeName || '',
             nodePath: access.orgStructure?.nodePath || '',
             nodeType: access.orgStructure?.nodeType || null,
@@ -4573,6 +4593,7 @@ export class UserDbController {
             roleCategory: p.roleCategory,
             roleSubCategory: p.roleSubCategory,
             roleName: p.roleName,
+            permissionLevel: p.permissionLevel,
             nodeName: p.nodeName,
             nodePath: p.nodePath,
             ...(detail ? { nodeType: p.nodeType } : {}),
@@ -4599,7 +4620,6 @@ export class UserDbController {
           id: onb.id,
           type,
           impact: onb.impact || null,
-          ...(eligibleapprovers.length > 0 ? { eligibleapprovers } : {}),
           ...(detail
             ? {
                 oldData: responseOldData,
@@ -5637,49 +5657,13 @@ export class UserDbController {
         throw new AppError('User not found', 404);
       }
 
-      const pendingCandidates = await prisma.userOnboarding.findMany({
-        where: {
-          companyId: resolvedCompanyId,
-          status: 'PENDING',
-          OR: [
-            {
-              data: {
-                path: ['targetUserEmail'],
-                equals: user.email,
-              } as any,
-            },
-            {
-              data: {
-                path: ['basicDetails', 'email'],
-                equals: user.email,
-              } as any,
-            },
-          ],
-        },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      });
-      const effectivePendingIds =
-        await UserDbController.filterEffectivelyPendingRequestIds(
-          'user_onboarding',
-          pendingCandidates.map((request: any) => request.id),
-        );
-      const visiblePendingRequestIds = new Set(
-        await UserDbController.getCurrentApproverRequestIds(
-          'user_onboarding',
-          userId,
+      const pendingByEmail =
+        await UserDbController.getEffectivePendingUserRequestsByEmail(
           resolvedCompanyId,
-        ),
-      );
-      const pendingRequest = pendingCandidates.find(
-        (request: any) =>
-          effectivePendingIds.has(request.id) &&
-          UserDbController.isPendingUserRequestVisible({
-            onboarding: request,
-            isGlobal,
-            visibleNodePaths,
-            viewerUserId: userId,
-            visibleRequestIds: visiblePendingRequestIds,
-          }),
+          [user.email],
+        );
+      const pendingTagRequest = pendingByEmail.get(
+        UserDbController.normalizeEmail(user.email),
       );
       const pendingApprovalEligibleUserCounts =
         await UserDbController.getPendingApprovalEligibleUserCounts(
@@ -5690,7 +5674,7 @@ export class UserDbController {
       res.status(200).json({
         message: 'User details fetched successfully!',
         code: 200,
-        data: UserDbController.formatProductionUser(user, pendingRequest, {
+        data: UserDbController.formatProductionUser(user, pendingTagRequest, {
           detail: true,
           pendingApprovalCount:
             pendingApprovalEligibleUserCounts.get(user.id)?.count || 0,

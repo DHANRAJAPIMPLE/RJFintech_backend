@@ -172,9 +172,6 @@ export class UserController {
       id: user.id,
       type: user.type,
       impact: user.impact ?? null,
-      ...(user.eligibleapprovers && user.eligibleapprovers.length > 0
-        ? { eligibleapprovers: user.eligibleapprovers }
-        : {}),
       ...(detail
         ? {
             oldData: isInitiate ? null : (user.oldData ?? null),
