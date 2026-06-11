@@ -37,37 +37,39 @@ const monitoringDateRangeSchema = z.preprocess(
   (value) => {
     if (typeof value !== 'string') return value;
 
-    const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, '');
+    const normalized = value
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '');
     if (normalized === '7DAY') return '7DAYS';
     if (normalized === '15DAY') return '15DAYS';
     return normalized;
   },
-  z
-    .enum(['7DAYS', '15DAYS', '1MONTH', 'CUSTOM'])
-    .optional()
-    .nullable(),
+  z.enum(['7DAYS', '15DAYS', '1MONTH', 'CUSTOM']).optional().nullable(),
 );
 
-const monitoringStatusSchema = z.preprocess((value) => {
-  const normalize = (item: unknown) => {
-    if (item === undefined || item === null || item === '') return null;
-    return item;
-  };
+const monitoringStatusSchema = z.preprocess(
+  (value) => {
+    const normalize = (item: unknown) => {
+      if (item === undefined || item === null || item === '') return null;
+      return item;
+    };
 
-  if (Array.isArray(value)) return value.map(normalize).filter(Boolean);
-  if (typeof value === 'string' && value.includes(',')) {
-    return value
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  const normalized = normalize(value);
-  return normalized === null ? undefined : [normalized];
-}, z.array(z.coerce.number().int().min(100).max(599)).optional());
+    if (Array.isArray(value)) return value.map(normalize).filter(Boolean);
+    if (typeof value === 'string' && value.includes(',')) {
+      return value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    const normalized = normalize(value);
+    return normalized === null ? undefined : [normalized];
+  },
+  z.array(z.coerce.number().int().min(100).max(599)).optional(),
+);
 
 const responseSizeSortSchema = z.preprocess(
-  (value) =>
-    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  (value) => (typeof value === 'string' ? value.trim().toLowerCase() : value),
   z.enum(['asc', 'desc']).optional().nullable(),
 );
 
@@ -98,22 +100,25 @@ const responseSizeRangeSchema = z
   .nullable()
   .optional();
 
-const subTrackSchema = z.preprocess((value) => {
-  const normalize = (item: unknown) => {
-    if (item === undefined || item === null || item === '') return null;
-    return item;
-  };
+const subTrackSchema = z.preprocess(
+  (value) => {
+    const normalize = (item: unknown) => {
+      if (item === undefined || item === null || item === '') return null;
+      return item;
+    };
 
-  if (Array.isArray(value)) return value.map(normalize).filter(Boolean);
-  if (typeof value === 'string' && value.includes(',')) {
-    return value
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  const normalized = normalize(value);
-  return normalized === null ? undefined : [normalized];
-}, z.array(z.coerce.number().int().min(0)).optional());
+    if (Array.isArray(value)) return value.map(normalize).filter(Boolean);
+    if (typeof value === 'string' && value.includes(',')) {
+      return value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    const normalized = normalize(value);
+    return normalized === null ? undefined : [normalized];
+  },
+  z.array(z.coerce.number().int().min(0)).optional(),
+);
 
 const monitoringAppliedFiltersSchema = z
   .object({

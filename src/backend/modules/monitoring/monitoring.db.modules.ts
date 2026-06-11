@@ -6,6 +6,7 @@ import { prisma } from '../../lib/prisma';
 import {
   appendCursorWhere,
   buildPage,
+  decodeCursor,
   getPageOrder,
   resolveCursorPagination,
 } from '../../../shared/utils/cursor-pagination.util';
@@ -46,6 +47,11 @@ export const monitoringApiSpanSchema = z
 
 type ApiSpanTypeValue = 'MIDDLELAYER' | 'BACKEND' | 'EXTERNAL';
 type ResponseSizeSort = 'asc' | 'desc';
+type MonitoringCursor = {
+  id: string;
+  createdAt: Date;
+  responseSize?: number | null;
+};
 
 type MonitoringFilters = {
   query: string | null;
@@ -261,6 +267,135 @@ const getMonitoringPageOrder = (
   ] as const;
 };
 
+const getMonitoringRawCursor = (
+  input: Record<string, unknown>,
+  pagination: ReturnType<typeof resolveCursorPagination>,
+) =>
+  input.cursor ??
+  (pagination.direction === 'prev' ? input.prevCursor : input.nextCursor) ??
+  input.cursorId ??
+  null;
+
+const decodeMonitoringCursor = (value: unknown): MonitoringCursor | null => {
+  const baseCursor = decodeCursor(value);
+  if (!baseCursor || typeof value !== 'string') return baseCursor;
+
+  try {
+    const payload = JSON.parse(
+      Buffer.from(value.trim(), 'base64url').toString('utf8'),
+    );
+    const responseSize = Number(payload.responseSize);
+
+    return {
+      ...baseCursor,
+      responseSize: Number.isInteger(responseSize) ? responseSize : null,
+    };
+  } catch {
+    return baseCursor;
+  }
+};
+
+const encodeMonitoringCursor = (row?: SpanRow | null) => {
+  if (!row) return null;
+
+  return Buffer.from(
+    JSON.stringify({
+      id: row.id,
+      createdAt: row.createdAt.toISOString(),
+      responseSize: row.responseSize ?? null,
+    }),
+  ).toString('base64url');
+};
+
+const appendResponseSizeCursorWhere = (
+  where: Record<string, unknown>,
+  cursor: MonitoringCursor | null,
+  direction: 'next' | 'prev',
+  responseSizeSort?: ResponseSizeSort | null,
+) => {
+  if (
+    !cursor ||
+    !responseSizeSort ||
+    cursor.responseSize === null ||
+    cursor.responseSize === undefined
+  ) {
+    return appendCursorWhere(
+      where,
+      cursor,
+      direction === 'prev' ? 'newer' : 'older',
+    );
+  }
+
+  const responseSizeOperator =
+    direction === 'next'
+      ? responseSizeSort === 'asc'
+        ? 'gt'
+        : 'lt'
+      : responseSizeSort === 'asc'
+        ? 'lt'
+        : 'gt';
+  const createdAtOperator = direction === 'next' ? 'lt' : 'gt';
+  const idOperator = direction === 'next' ? 'lt' : 'gt';
+
+  return {
+    AND: [
+      where,
+      {
+        OR: [
+          { responseSize: { [responseSizeOperator]: cursor.responseSize } },
+          {
+            responseSize: cursor.responseSize,
+            createdAt: { [createdAtOperator]: cursor.createdAt },
+          },
+          {
+            responseSize: cursor.responseSize,
+            createdAt: cursor.createdAt,
+            id: { [idOperator]: cursor.id },
+          },
+        ],
+      },
+    ],
+  };
+};
+
+const buildMonitoringPage = (
+  rows: SpanRow[],
+  pagination: ReturnType<typeof resolveCursorPagination>,
+  newCount: number,
+  responseSizeSort?: ResponseSizeSort | null,
+) => {
+  if (!responseSizeSort) return buildPage(rows, pagination, newCount);
+
+  const hasExtra = rows.length > pagination.limit;
+  const limitedRows = hasExtra ? rows.slice(0, pagination.limit) : rows;
+  const pageRows =
+    pagination.direction === 'prev' ? [...limitedRows].reverse() : limitedRows;
+  const firstRow = pageRows[0] || null;
+  const lastRow = pageRows[pageRows.length - 1] || null;
+  const hasNext =
+    pagination.direction === 'prev' ? !!pagination.cursor : hasExtra;
+  const hasPrev = pagination.isPagePagination
+    ? pagination.page > 1
+    : pagination.direction === 'prev'
+      ? hasExtra
+      : !!pagination.cursor;
+
+  return {
+    pageRows,
+    pageInfo: {
+      page: pagination.page,
+      nextCursor: hasNext ? encodeMonitoringCursor(lastRow) : null,
+      prevCursor: hasPrev ? encodeMonitoringCursor(firstRow) : null,
+      topCursor:
+        pagination.requestedTopCursor || encodeMonitoringCursor(firstRow),
+      hasNext,
+      hasPrev,
+      hasNewData: newCount > 0,
+      newCount,
+    },
+  };
+};
+
 export const findMonitoringRowsByTrackingId = async (trackingId: string) => {
   return prisma.apiSpan.findMany({
     where: {
@@ -332,8 +467,7 @@ const normalizeString = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
 
   const trimmed = value.trim();
-  return trimmed &&
-    !['null', 'undefined'].includes(trimmed.toLowerCase())
+  return trimmed && !['null', 'undefined'].includes(trimmed.toLowerCase())
     ? trimmed
     : null;
 };
@@ -357,9 +491,7 @@ const normalizeNumberArray = (value: unknown): number[] => {
   );
 };
 
-const normalizeDateRange = (
-  value: unknown,
-): MonitoringFilters['dateRange'] => {
+const normalizeDateRange = (value: unknown): MonitoringFilters['dateRange'] => {
   let normalized = normalizeString(value)
     ?.toUpperCase()
     .replace(/[\s-]+/g, '');
@@ -636,6 +768,10 @@ export class MonitoringService {
     const filters = resolveMonitoringFilters(input);
     const query = filters.query;
     const pagination = resolveCursorPagination(input);
+    const monitoringCursor = decodeMonitoringCursor(
+      getMonitoringRawCursor(input, pagination),
+    );
+    const monitoringTopCursor = decodeMonitoringCursor(input.topCursor);
 
     const queryFilter: any = query
       ? {
@@ -653,7 +789,10 @@ export class MonitoringService {
             {
               company: {
                 is: {
-                  companyCode: { contains: query, mode: 'insensitive' as const },
+                  companyCode: {
+                    contains: query,
+                    mode: 'insensitive' as const,
+                  },
                 },
               },
             },
@@ -703,14 +842,20 @@ export class MonitoringService {
     };
 
     const pageWhere = pagination.cursor
-      ? appendCursorWhere(
+      ? appendResponseSizeCursorWhere(
           where,
-          pagination.cursor,
-          pagination.direction === 'prev' ? 'newer' : 'older',
+          monitoringCursor,
+          pagination.direction,
+          filters.responseSizeSort,
         )
       : where;
     const newWhere = pagination.topCursor
-      ? appendCursorWhere(where, pagination.topCursor, 'newer')
+      ? appendResponseSizeCursorWhere(
+          where,
+          monitoringTopCursor,
+          'prev',
+          filters.responseSizeSort,
+        )
       : null;
     const [totalCount, parentRows, newCount] = await Promise.all([
       prisma.apiSpan.count({ where }),
@@ -723,11 +868,21 @@ export class MonitoringService {
         ? prisma.apiSpan.count({ where: newWhere as any })
         : Promise.resolve(0),
     ]);
-    const pageData = buildPage(parentRows, pagination, newCount);
+    const pageData = buildMonitoringPage(
+      parentRows,
+      pagination,
+      newCount,
+      filters.responseSizeSort,
+    );
     const firstPageRow = pageData.pageRows[0];
     if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
       const newerCount = await prisma.apiSpan.count({
-        where: appendCursorWhere(where, firstPageRow, 'newer') as any,
+        where: appendResponseSizeCursorWhere(
+          where,
+          firstPageRow,
+          'prev',
+          filters.responseSizeSort,
+        ) as any,
       });
       pageData.pageInfo.page = Math.floor(newerCount / pagination.limit) + 1;
     }
