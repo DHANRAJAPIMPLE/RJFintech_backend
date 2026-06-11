@@ -147,7 +147,7 @@ const fetchAllUserAppliedSchema = z
         z.enum(['initiate', 'modify']).nullable().optional(),
       )
       .optional(),
-    isPending: z
+    hasPending: z
       .preprocess(
         (value) =>
           typeof value === 'string' ? value.trim().toLowerCase() : value,

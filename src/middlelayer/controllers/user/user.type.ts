@@ -137,11 +137,19 @@ export type UserFilterManagerInternalOption = UserFilterManagerOption & {
 
 export type FetchAllUsersNodeAccess = 'primary' | 'secondary';
 
+export type FetchAllUsersNodeAccessMap = Record<
+  string,
+  FetchAllUsersNodeAccess[]
+>;
+
 export type FetchAllUsersAppliedFilters = {
   designation?: string[] | null;
   nodeName?: {
     values?: string[] | null;
-    nodeAccess?: FetchAllUsersNodeAccess | null;
+    nodeAccess?:
+      | FetchAllUsersNodeAccess
+      | FetchAllUsersNodeAccessMap
+      | null;
   } | null;
   nodeType?: string[] | null;
   category?: string[] | null;
@@ -155,7 +163,7 @@ export type FetchAllUsersAppliedFilters = {
   status?: string[] | null;
   role?: string[] | null;
   currentStatus?: 'initiate' | 'modify' | null;
-  isPending?: 'yes' | 'no' | null;
+  hasPending?: 'yes' | 'no' | null;
 };
 
 export type FetchAllUsersPaginationRequest = {

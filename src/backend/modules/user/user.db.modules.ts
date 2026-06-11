@@ -131,7 +131,7 @@ type NormalizedUserListAppliedFilters = {
   status: string[];
   role: string[];
   currentStatus: 'INITIATE' | 'MODIFY' | null;
-  isPending: boolean | null;
+  hasPending: boolean | null;
   onboardingDate: {
     from: Date | null;
     to: Date | null;
@@ -1747,11 +1747,13 @@ export class UserDbController {
               )?.toLowerCase() === 'modify'
             ? 'MODIFY'
             : null,
-      isPending:
-        UserDbController.normalizeFilterText(source.isPending)?.toLowerCase() ===
+      hasPending:
+        UserDbController.normalizeFilterText(source.hasPending)?.toLowerCase() ===
         'yes'
           ? true
-          : UserDbController.normalizeFilterText(source.isPending)?.toLowerCase() ===
+          : UserDbController.normalizeFilterText(
+                source.hasPending,
+              )?.toLowerCase() ===
               'no'
             ? false
             : null,
@@ -1771,7 +1773,7 @@ export class UserDbController {
       normalized.status.length > 0 ||
       normalized.role.length > 0 ||
       normalized.currentStatus !== null ||
-      normalized.isPending !== null ||
+      normalized.hasPending !== null ||
       normalized.onboardingDate !== null;
 
     return hasFilters ? normalized : null;
@@ -1919,7 +1921,7 @@ export class UserDbController {
       defaultStatus: string;
       isPendingRecord?: boolean;
       pendingRequestType?: unknown;
-      pendingStateOverride?: boolean | null;
+      hasPendingOverride?: boolean | null;
     },
   ) {
     if (!filters) return true;
@@ -1929,18 +1931,20 @@ export class UserDbController {
     const secondary = Array.isArray(user?.secondary) ? user.secondary : [];
     const allAccesses = [...primary, ...secondary];
     const hasNodeAccessMap = Object.keys(filters.nodeAccess).length > 0;
-    const isPending =
-      options.pendingStateOverride !== undefined &&
-      options.pendingStateOverride !== null
-        ? options.pendingStateOverride
-        : options.isPendingRecord === true || user?.isPending === true;
-    const currentPendingStatus = isPending
+    const isPendingRecord =
+      options.isPendingRecord === true || user?.isPending === true;
+    const hasPending =
+      options.hasPendingOverride !== undefined &&
+      options.hasPendingOverride !== null
+        ? options.hasPendingOverride
+        : false;
+    const currentPendingStatus = isPendingRecord
       ? UserDbController.normalizeCurrentPendingStatus(options.pendingRequestType)
       : null;
     const statusCandidates = [
       options.defaultStatus,
       basicDetails.status,
-      isPending ? 'PENDING' : null,
+      isPendingRecord ? 'PENDING' : null,
     ]
       .map((value) => UserDbController.compactFilterValue(value))
       .filter((value): value is string => Boolean(value));
@@ -2111,7 +2115,7 @@ export class UserDbController {
       return false;
     }
 
-    if (filters.isPending !== null && isPending !== filters.isPending) {
+    if (filters.hasPending !== null && hasPending !== filters.hasPending) {
       return false;
     }
 
@@ -2980,13 +2984,29 @@ export class UserDbController {
       : 'next';
   }
 
-  private static encodeCursor(row?: { id: string; createdAt: Date } | null) {
+  private static getCursorDate(
+    row:
+      | { id: string; createdAt?: Date | null; updatedAt?: Date | null }
+      | null
+      | undefined,
+  ) {
     if (!row) return null;
+
+    const value = row.updatedAt ?? row.createdAt ?? null;
+    return value instanceof Date ? value : null;
+  }
+
+  private static encodeCursor(
+    row?: { id: string; createdAt?: Date | null; updatedAt?: Date | null } | null,
+  ) {
+    if (!row) return null;
+    const sortAt = UserDbController.getCursorDate(row);
+    if (!sortAt) return null;
 
     return Buffer.from(
       JSON.stringify({
         id: row.id,
-        createdAt: row.createdAt.toISOString(),
+        createdAt: sortAt.toISOString(),
       }),
     ).toString('base64url');
   }
@@ -3007,7 +3027,7 @@ export class UserDbController {
       const payload = JSON.parse(
         Buffer.from(normalizedValue, 'base64url').toString('utf8'),
       );
-      const createdAt = new Date(payload.createdAt);
+      const createdAt = new Date(payload.createdAt ?? payload.sortAt);
       if (
         typeof payload.id !== 'string' ||
         !payload.id ||
@@ -3024,10 +3044,15 @@ export class UserDbController {
 
   private static appendCursorWhere(
     where: any,
-    cursor: { id: string; createdAt: Date } | null,
+    cursor:
+      | { id: string; createdAt?: Date | null; updatedAt?: Date | null }
+      | null,
     direction: 'older' | 'newer',
+    timeField: 'createdAt' | 'updatedAt' = 'createdAt',
   ) {
     if (!cursor) return where;
+    const cursorDate = UserDbController.getCursorDate(cursor);
+    if (!cursorDate) return where;
 
     const createdAtOperator = direction === 'older' ? 'lt' : 'gt';
     const idOperator = direction === 'older' ? 'lt' : 'gt';
@@ -3037,9 +3062,9 @@ export class UserDbController {
         where,
         {
           OR: [
-            { createdAt: { [createdAtOperator]: cursor.createdAt } },
+            { [timeField]: { [createdAtOperator]: cursorDate } },
             {
-              createdAt: cursor.createdAt,
+              [timeField]: cursorDate,
               id: { [idOperator]: cursor.id },
             },
           ],
@@ -3049,14 +3074,17 @@ export class UserDbController {
   }
 
   private static buildPageInfo(
-    rows: Array<{ id: string; createdAt: Date }>,
+    rows: Array<{ id: string; createdAt?: Date; updatedAt?: Date }>,
     limit: number,
     requestedTopCursor: string | null,
     newCount: number,
     direction: 'next' | 'prev',
-    cursor: { id: string; createdAt: Date } | null,
+    cursor:
+      | { id: string; createdAt?: Date | null; updatedAt?: Date | null }
+      | null,
     page: number,
     isPagePagination = false,
+    timeField: 'createdAt' | 'updatedAt' = 'createdAt',
   ) {
     const hasExtra = rows.length > limit;
     const limitedRows = hasExtra ? rows.slice(0, limit) : rows;
@@ -3088,12 +3116,22 @@ export class UserDbController {
   }
 
   private static isRowInCursorDirection(
-    row: { id: string; createdAt: Date },
-    cursor: { id: string; createdAt: Date },
+    row: { id: string; createdAt?: Date; updatedAt?: Date },
+    cursor: { id: string; createdAt?: Date | null; updatedAt?: Date | null },
     direction: 'older' | 'newer',
+    timeField: 'createdAt' | 'updatedAt' = 'createdAt',
   ) {
-    const rowTime = row.createdAt.getTime();
-    const cursorTime = cursor.createdAt.getTime();
+    const rowDate =
+      timeField === 'updatedAt'
+        ? row.updatedAt || row.createdAt
+        : row.createdAt || row.updatedAt;
+    const cursorDate = UserDbController.getCursorDate(cursor);
+    if (!(rowDate instanceof Date) || !cursorDate) {
+      return false;
+    }
+
+    const rowTime = rowDate.getTime();
+    const cursorTime = cursorDate.getTime();
 
     if (direction === 'older') {
       return (
@@ -3106,10 +3144,13 @@ export class UserDbController {
     );
   }
 
-  private static getPageOrder(direction: 'next' | 'prev'): any[] {
+  private static getPageOrder(
+    direction: 'next' | 'prev',
+    timeField: 'createdAt' | 'updatedAt' = 'createdAt',
+  ): any[] {
     return direction === 'prev'
-      ? [{ createdAt: 'asc' }, { id: 'asc' }]
-      : [{ createdAt: 'desc' }, { id: 'desc' }];
+      ? [{ [timeField]: 'asc' }, { id: 'asc' }]
+      : [{ [timeField]: 'desc' }, { id: 'desc' }];
   }
 
   private static async getCurrentApproverRequestIds(
@@ -4390,12 +4431,10 @@ export class UserDbController {
           },
         };
         const pendingApprovalEligibleUserIds =
-          appliedFilters.isPending !== null
-            ? await UserDbController.getPendingApprovalEligibleUserIds(
-                resolvedCompanyId,
-                appliedFilters,
-              )
-            : null;
+          await UserDbController.getPendingApprovalEligibleUserIds(
+            resolvedCompanyId,
+            appliedFilters,
+          );
 
         const [
           allActiveRows,
@@ -4407,17 +4446,17 @@ export class UserDbController {
           prisma.user.findMany({
             where: buildUserWhere('ACTIVE'),
             include: fullUserInclude,
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
             }),
             prisma.user.findMany({
               where: buildUserWhere('INACTIVE'),
               include: fullUserInclude,
-              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
             }),
             prisma.user.findMany({
               where: buildUserWhere('ARCHIVE'),
               include: fullUserInclude,
-              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
             }),
             UserDbController.fetchPendingUserOnboardings({
               resolvedCompanyId,
@@ -4473,8 +4512,9 @@ export class UserDbController {
                 pendingRequestType: pendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
-                pendingStateOverride:
-                  pendingApprovalEligibleUserIds?.has(item.raw.id) ?? null,
+                hasPendingOverride: pendingApprovalEligibleUserIds.has(
+                  item.raw.id,
+                ),
               },
             ),
           );
@@ -4498,8 +4538,9 @@ export class UserDbController {
                 pendingRequestType: pendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
-                pendingStateOverride:
-                  pendingApprovalEligibleUserIds?.has(item.raw.id) ?? null,
+                hasPendingOverride: pendingApprovalEligibleUserIds.has(
+                  item.raw.id,
+                ),
               },
             ),
           );
@@ -4523,8 +4564,9 @@ export class UserDbController {
                 pendingRequestType: pendingByEmail.get(
                   UserDbController.normalizeEmail(item.raw.email) || '',
                 )?.type,
-                pendingStateOverride:
-                  pendingApprovalEligibleUserIds?.has(item.raw.id) ?? null,
+                hasPendingOverride: pendingApprovalEligibleUserIds.has(
+                  item.raw.id,
+                ),
               },
             ),
           );
@@ -4576,6 +4618,7 @@ export class UserDbController {
                 isProductionStatusType ? row.raw : row,
                 cursor,
                 effectiveDirection === 'prev' ? 'newer' : 'older',
+                isProductionStatusType ? 'updatedAt' : 'createdAt',
               )
             : true,
         );
@@ -4585,6 +4628,7 @@ export class UserDbController {
                 isProductionStatusType ? row.raw : row,
                 topCursor,
                 'newer',
+                isProductionStatusType ? 'updatedAt' : 'createdAt',
               ),
             ).length
           : 0;
@@ -4601,6 +4645,7 @@ export class UserDbController {
           cursor,
           page,
           isPagePagination,
+          isProductionStatusType ? 'updatedAt' : 'createdAt',
         );
 
         const firstSelectedPageRow = selectedPage.pageRows[0];
@@ -4610,6 +4655,7 @@ export class UserDbController {
               isProductionStatusType ? row.raw : row,
               firstSelectedPageRow,
               'newer',
+              isProductionStatusType ? 'updatedAt' : 'createdAt',
             ),
           ).length;
           selectedPage.pageInfo.page = Math.floor(newerCount / limit) + 1;
@@ -4689,7 +4735,6 @@ export class UserDbController {
           prisma.user.count({ where: buildUserWhere('INACTIVE') }),
           prisma.user.count({ where: buildUserWhere('ARCHIVE') }),
         ]);
-
       const activeWhere = buildUserWhere('ACTIVE');
       const inactiveWhere = buildUserWhere('INACTIVE');
       const archiveWhere = buildUserWhere('ARCHIVE');
@@ -4709,6 +4754,7 @@ export class UserDbController {
               selectedUserWhere,
               cursor,
               effectiveDirection === 'prev' ? 'newer' : 'older',
+              'updatedAt',
             )
           : selectedUserWhere;
       const selectedUserNewWhere =
@@ -4717,6 +4763,7 @@ export class UserDbController {
               selectedUserWhere,
               topCursor,
               'newer',
+              'updatedAt',
             )
           : null;
 
@@ -4727,7 +4774,10 @@ export class UserDbController {
             : prisma.user.findMany({
                 where: selectedUserPageWhere,
                 include: userInclude,
-                orderBy: UserDbController.getPageOrder(effectiveDirection),
+                orderBy: UserDbController.getPageOrder(
+                  effectiveDirection,
+                  'updatedAt',
+                ),
                 ...(isProductionStatusType
                   ? { skip: cursor ? 0 : offset, take: limit + 1 }
                   : {}),
@@ -4737,7 +4787,7 @@ export class UserDbController {
             : prisma.user.findMany({
                 where: buildUserWhere('INACTIVE'),
                 include: userInclude,
-                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+                orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
               }),
           listType === 'active' || listType === 'archive'
             ? Promise.resolve({ pendingCount: 0, pendingOnboardings: [] })
@@ -4772,6 +4822,7 @@ export class UserDbController {
             cursor,
             page,
             isPagePagination,
+            'updatedAt',
           )
         : { pageRows: selectedRows, pageInfo: null };
       const firstActivePageRow = selectedPage.pageRows[0];
@@ -4787,6 +4838,7 @@ export class UserDbController {
             selectedUserWhere,
             firstActivePageRow,
             'newer',
+            'updatedAt',
           ),
         });
         selectedPage.pageInfo.page = Math.floor(newerCount / limit) + 1;
@@ -4864,7 +4916,9 @@ export class UserDbController {
       const inactiveUsers =
         listType === 'inactive'
           ? selectedUsers
-          : inactiveRows.map(UserDbController.formatProductionUser);
+          : inactiveRows.map((user: any) =>
+              UserDbController.formatProductionUser(user),
+            );
       const archiveUsers = listType === 'archive' ? selectedUsers : [];
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
