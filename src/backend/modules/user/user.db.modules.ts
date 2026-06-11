@@ -1842,22 +1842,29 @@ export class UserDbController {
     return Boolean(normalized && acceptedValues.includes(normalized));
   }
 
-  private static matchesRoleFilter(roleName: unknown, acceptedValues: string[]) {
+  private static matchesRoleFilter(access: any, acceptedValues: string[]) {
     if (acceptedValues.length === 0) return true;
 
-    const normalizedRoleName = UserDbController.compactFilterValue(roleName);
-    if (!normalizedRoleName) return false;
+    const canView = Boolean(access?.canView ?? access?.role?.view);
+    const canModify = Boolean(access?.canModify ?? access?.role?.modify);
+    const canApprove = Boolean(access?.canApprove ?? access?.role?.approve);
+    const canInitiate = Boolean(access?.canInitiate ?? access?.role?.initiate);
+    const normalizedRoleName = UserDbController.compactFilterValue(
+      access?.roleName ?? access?.role?.roleName,
+    );
 
     return acceptedValues.some((accepted) => {
-      if (accepted === 'maker' || accepted === 'user') {
-        return normalizedRoleName.includes('user');
+      if (accepted === 'maker') {
+        return canInitiate && canModify;
       }
-      if (accepted === 'checker' || accepted === 'manager') {
-        return normalizedRoleName.includes('manager');
+      if (accepted === 'checker') {
+        return canApprove;
       }
-      if (accepted === 'viewer') {
-        return normalizedRoleName.includes('viewer');
+      if (accepted === 'user' || accepted === 'viewer') {
+        return canView && !canModify && !canApprove && !canInitiate;
       }
+
+      if (!normalizedRoleName) return false;
 
       return (
         normalizedRoleName === accepted || normalizedRoleName.includes(accepted)
@@ -2206,7 +2213,7 @@ export class UserDbController {
     if (
       filters.role.length > 0 &&
       !allAccesses.some((access: any) =>
-        UserDbController.matchesRoleFilter(access?.roleName, filters.role),
+        UserDbController.matchesRoleFilter(access, filters.role),
       )
     ) {
       return false;
@@ -3658,6 +3665,10 @@ export class UserDbController {
       roleCategory: access.role?.category ?? access.roleCategory,
       roleSubCategory: access.role?.subCategory ?? access.roleSubCategory,
       roleName: access.role?.roleName ?? access.roleName ?? access.roleCode,
+      canView: Boolean(access.role?.view),
+      canModify: Boolean(access.role?.modify),
+      canApprove: Boolean(access.role?.approve),
+      canInitiate: Boolean(access.role?.initiate),
       nodeName: access.orgStructure?.nodeName ?? access.nodeName,
       nodePath: access.orgStructure?.nodePath ?? access.nodePath,
       ...(includeNodeType
@@ -3670,11 +3681,17 @@ export class UserDbController {
   private static formatProductionUser(
     u: any,
     pendingRequest?: any,
-    options: { detail?: boolean; pendingApprovalCount?: number } = {},
+    options: {
+      detail?: boolean;
+      pendingApprovalCount?: number;
+      includePendingApprovalCount?: boolean;
+    } = {},
   ) {
     const mapping = u.userMappings[0];
     const detail = options.detail === true;
     const pendingApprovalCount = Number(options.pendingApprovalCount) || 0;
+    const includePendingApprovalCount =
+      options.includePendingApprovalCount === true;
     const summaryPrimaryAccess = u.userAccesses.find(
       (a: any) => a.accessType === 'PRIMARY' || a.isGlobalAccess,
     );
@@ -3689,7 +3706,7 @@ export class UserDbController {
 
     return {
       isPending: Boolean(pendingRequest),
-      pendingApprovalCount,
+      ...(includePendingApprovalCount ? { pendingApprovalCount } : {}),
       basicDetails: {
         name: u.name,
         email: u.email,
@@ -4654,6 +4671,7 @@ export class UserDbController {
       };
 
       if (filterEnabled && appliedFilters) {
+        const includePendingApprovalCount = appliedFilters.hasPending !== null;
         const fullUserInclude = {
           userMappings: {
             where: { companyId: resolvedCompanyId },
@@ -4930,6 +4948,7 @@ export class UserDbController {
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
                     {
+                      includePendingApprovalCount,
                       pendingApprovalCount:
                         pendingApprovalEligibleUsers.get(item.raw.id)?.count ||
                         0,
@@ -4947,6 +4966,7 @@ export class UserDbController {
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
                     {
+                      includePendingApprovalCount,
                       pendingApprovalCount:
                         pendingApprovalEligibleUsers.get(item.raw.id)?.count ||
                         0,
@@ -4965,6 +4985,7 @@ export class UserDbController {
                       UserDbController.normalizeEmail(item.raw.email) || '',
                     ),
                     {
+                      includePendingApprovalCount,
                       pendingApprovalCount:
                         pendingApprovalEligibleUsers.get(item.raw.id)?.count ||
                         0,
@@ -5174,16 +5195,19 @@ export class UserDbController {
           activePendingByEmail.set(email, request);
         }
       });
-      const pendingApprovalEligibleUsers =
-        await UserDbController.getPendingApprovalEligibleUserCounts(
-          resolvedCompanyId,
-          null,
-        );
+      const includePendingApprovalCount = false;
+      const pendingApprovalEligibleUsers = includePendingApprovalCount
+        ? await UserDbController.getPendingApprovalEligibleUserCounts(
+            resolvedCompanyId,
+            null,
+          )
+        : new Map<string, PendingApprovalEligibleUserSummary>();
       const selectedUsers = selectedPage.pageRows.map((user: any) =>
         UserDbController.formatProductionUser(
           user,
           activePendingByEmail.get((user.email || '').toLowerCase()),
           {
+            includePendingApprovalCount,
             pendingApprovalCount:
               pendingApprovalEligibleUsers.get(user.id)?.count || 0,
           },
@@ -5196,6 +5220,7 @@ export class UserDbController {
             ? selectedUsers
             : inactiveRows.map((user: any) =>
                 UserDbController.formatProductionUser(user, undefined, {
+                  includePendingApprovalCount,
                   pendingApprovalCount:
                     pendingApprovalEligibleUsers.get(user.id)?.count || 0,
                 }),
@@ -8776,24 +8801,54 @@ export class UserDbController {
         throw new AppError('Node path is required', 400);
       }
 
-      const normalizedNodePath = String(nodePath).trim();
+      if (!companyId) {
+        throw new AppError('Company id is required', 400);
+      }
 
-      // Fetch all access rows that can contribute to this node, including
-      // parent-scope assignments and active company membership.
+      const normalizedNodePath = String(nodePath).trim();
+      const companyMappedUsers = await prisma.userMapping.findMany({
+        where: {
+          companyId,
+          status: {
+            in: ['ACTIVE', 'INACTIVE'],
+          },
+        },
+        select: {
+          userId: true,
+        },
+      });
+
+      const mappedUserIds = Array.from(
+        new Set(
+          companyMappedUsers
+            .map((mapping) => String(mapping.userId || '').trim())
+            .filter(Boolean),
+        ),
+      );
+
+      if (mappedUserIds.length === 0) {
+        return res.status(200).json({
+          message: 'User counts fetched successfully!',
+          code: 200,
+          data: {},
+        });
+      }
+
       const userAccesses = await prisma.userAccess.findMany({
         where: {
-          ...(companyId ? { companyId } : {}),
-          user: {
-            userMappings: {
-              some: {
-                ...(companyId ? { companyId } : {}),
-                status: 'ACTIVE',
-              },
-            },
+          companyId,
+          userId: {
+            in: mappedUserIds,
           },
         },
         include: {
-          role: true,
+          role: {
+            select: {
+              subCategory: true,
+              permissionLevel: true,
+              isActive: true,
+            },
+          },
           orgStructure: {
             select: {
               nodePath: true,
@@ -8803,24 +8858,25 @@ export class UserDbController {
         },
       });
 
-      // Group unique user IDs by subCategory and permissionLevel
       const countsMap: Record<
         string,
         { MANAGER: Set<string>; USER: Set<string>; VIEWER: Set<string> }
       > = {};
 
       userAccesses.forEach((ua) => {
+        if (!ua.role?.isActive) {
+          return;
+        }
+
         if (ua.orgStructure?.status !== 'ACTIVE' && !ua.isGlobalAccess) {
           return;
         }
 
-        if (
-          !UserDbController.doesAccessCoverNode(ua, normalizedNodePath)
-        ) {
+        if (!UserDbController.doesAccessCoverNode(ua, normalizedNodePath)) {
           return;
         }
 
-        const subCat = ua.role?.subCategory;
+        const subCat = String(ua.role?.subCategory || '').trim();
         const pLevel = ua.role?.permissionLevel?.toUpperCase();
 
         if (
@@ -8841,7 +8897,6 @@ export class UserDbController {
         }
       });
 
-      // Transform the map into the desired response format and filter out zero-count sub-categories
       const finalData: Record<string, any> = {};
 
       Object.entries(countsMap).forEach(([subCat, levels]) => {
@@ -8849,7 +8904,6 @@ export class UserDbController {
         const userCount = levels.USER.size;
         const viewerCount = levels.VIEWER.size;
 
-        // Only include sub-categories that have at least one user in any level
         if (managerCount > 0 || userCount > 0 || viewerCount > 0) {
           finalData[subCat] = [
             {
