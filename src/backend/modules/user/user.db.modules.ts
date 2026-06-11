@@ -6402,6 +6402,8 @@ export class UserDbController {
         initiatorReportingManagerUserIds,
         corpAdminUserIds,
       ),
+      requiredRecipientUserIds:
+        NotificationService.mergeRecipientUserIds(notificationRecipients),
       includeCreatedBy: true,
     });
 
@@ -6902,6 +6904,8 @@ export class UserDbController {
           initiatorReportingManagerUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
+        requiredRecipientUserIds:
+          NotificationService.mergeRecipientUserIds(notificationRecipients),
         includeCreatedBy: true,
         message: (() => {
           const summary = UserDbController.formatInitiatePermissionSummary(
@@ -7593,7 +7597,10 @@ export class UserDbController {
           corpAdminUserIds,
         ),
         requiredRecipientUserIds:
-          NotificationService.mergeRecipientUserIds(requestInitiatorId),
+          NotificationService.mergeRecipientUserIds(
+            requestInitiatorId,
+            approverId,
+          ),
         includeCreatedBy: true,
         isPending: result?.status === 'PARTIAL_APPROVED',
       });
