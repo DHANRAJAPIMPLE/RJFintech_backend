@@ -13,11 +13,265 @@ import {
   resolveCursorPagination,
 } from '../../../shared/utils/cursor-pagination.util';
 
+type NormalizedCompanyListAppliedFilters = {
+  incorporationDate: {
+    from: Date | null;
+    to: Date | null;
+  } | null;
+  gstCode: boolean | null;
+  ieCode: boolean | null;
+  signatoryCounts: number[];
+};
+
 /**
  * Controller for managing company records, group associations, and the company onboarding lifecycle.
  * Handles the transition from a pending company request to a live production environment.
  */
 export class CompanyDbController {
+  private static normalizeFilterText(value: unknown) {
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim();
+    return normalized || null;
+  }
+
+  private static parseYesNoFilter(value: unknown) {
+    const normalized =
+      CompanyDbController.normalizeFilterText(value)?.toLowerCase();
+    if (normalized === 'yes') return true;
+    if (normalized === 'no') return false;
+    return null;
+  }
+
+  private static hasTextValue(value: unknown) {
+    return typeof value === 'string'
+      ? value.trim().length > 0
+      : value !== null && value !== undefined;
+  }
+
+  private static parseCompanyFilterDateRange(applied: any) {
+    const incorporationDate =
+      applied && typeof applied === 'object'
+        ? (applied.incorporationDate ?? applied.incorperationDate)
+        : null;
+    if (!incorporationDate || typeof incorporationDate !== 'object') {
+      return null;
+    }
+
+    const parseBoundary = (
+      value: unknown,
+      boundary: 'start' | 'end',
+    ): Date | null => {
+      const normalized = CompanyDbController.normalizeFilterText(value);
+      if (!normalized) return null;
+
+      const suffix = boundary === 'start' ? 'T00:00:00.000Z' : 'T23:59:59.999Z';
+      const parsed = new Date(`${normalized}${suffix}`);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    const startOfDay = (date: Date) =>
+      new Date(
+        Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+      );
+    const endOfDay = (date: Date) =>
+      new Date(
+        Date.UTC(
+          date.getUTCFullYear(),
+          date.getUTCMonth(),
+          date.getUTCDate(),
+          23,
+          59,
+          59,
+          999,
+        ),
+      );
+
+    const explicitFrom = parseBoundary(incorporationDate.fromDate, 'start');
+    const explicitTo = parseBoundary(incorporationDate.toDate, 'end');
+    const range = CompanyDbController.normalizeFilterText(
+      incorporationDate.dateRange,
+    )?.toUpperCase();
+
+    if (range === 'CUSTOM') {
+      if (!explicitFrom || !explicitTo) {
+        throw new AppError(
+          'fromDate and toDate are required when dateRange is CUSTOM',
+          400,
+        );
+      }
+
+      if (explicitFrom > explicitTo) {
+        throw new AppError(
+          'fromDate must be earlier than or equal to toDate',
+          400,
+        );
+      }
+
+      return { from: explicitFrom, to: explicitTo };
+    }
+
+    if (explicitFrom || explicitTo) {
+      return { from: explicitFrom, to: explicitTo };
+    }
+
+    if (!range) return null;
+
+    const now = new Date();
+    const todayStart = startOfDay(now);
+    const todayEnd = endOfDay(now);
+    const from = new Date(todayStart);
+
+    if (range === '7DAYS') {
+      from.setUTCDate(from.getUTCDate() - 6);
+    } else if (range === '15DAYS') {
+      from.setUTCDate(from.getUTCDate() - 14);
+    } else if (range === '1MONTH') {
+      from.setUTCMonth(from.getUTCMonth() - 1);
+    } else {
+      return null;
+    }
+
+    return { from, to: todayEnd };
+  }
+
+  private static normalizeSignatoryCounts(value: unknown) {
+    const rawValues = Array.isArray(value) ? value : [value];
+    return Array.from(
+      new Set(
+        rawValues
+          .map((rawValue) => Number(rawValue))
+          .filter(
+            (count) => Number.isInteger(count) && count >= 2 && count <= 5,
+          ),
+      ),
+    );
+  }
+
+  private static normalizeCompanyListAppliedFilters(
+    applied: unknown,
+  ): NormalizedCompanyListAppliedFilters | null {
+    const source =
+      applied && typeof applied === 'object'
+        ? (applied as Record<string, unknown>)
+        : null;
+    if (!source) return null;
+
+    const normalized: NormalizedCompanyListAppliedFilters = {
+      incorporationDate:
+        CompanyDbController.parseCompanyFilterDateRange(source),
+      gstCode: CompanyDbController.parseYesNoFilter(
+        source.gstcode ?? source.gstCode,
+      ),
+      ieCode: CompanyDbController.parseYesNoFilter(
+        source.isCode ?? source.ieCode,
+      ),
+      signatoryCounts: CompanyDbController.normalizeSignatoryCounts(
+        source.signatoryCount,
+      ),
+    };
+
+    const hasFilters =
+      normalized.incorporationDate !== null ||
+      normalized.gstCode !== null ||
+      normalized.ieCode !== null ||
+      normalized.signatoryCounts.length > 0;
+
+    return hasFilters ? normalized : null;
+  }
+
+  private static matchesDateRange(
+    value: unknown,
+    range: NormalizedCompanyListAppliedFilters['incorporationDate'],
+  ) {
+    if (!range) return true;
+
+    const date = value instanceof Date ? value : new Date(String(value || ''));
+    if (Number.isNaN(date.getTime())) return false;
+    if (range.from && date < range.from) return false;
+    if (range.to && date > range.to) return false;
+    return true;
+  }
+
+  private static getCompanySignatoryCount(company: any) {
+    if (Array.isArray(company?.signatories)) return company.signatories.length;
+    if (Array.isArray(company?.userAccesses))
+      return company.userAccesses.length;
+    return 0;
+  }
+
+  private static matchesAppliedCompanyFilters(
+    company: any,
+    filters: NormalizedCompanyListAppliedFilters | null,
+    isPendingRecord = false,
+  ) {
+    if (!filters) return true;
+
+    const companyData = isPendingRecord
+      ? (company?.data as any)?.company || {}
+      : company;
+    const signatories = isPendingRecord
+      ? (company?.data as any)?.signatories
+      : company?.signatories;
+    const signatoryCount = Array.isArray(signatories)
+      ? signatories.length
+      : CompanyDbController.getCompanySignatoryCount(company);
+    const registrationDate = isPendingRecord
+      ? companyData.registeredAt
+      : companyData.registrationDate;
+    const gstValue = isPendingRecord ? companyData.gst : companyData.gstNumber;
+    const ieValue = isPendingRecord ? companyData.ieCode : companyData.ieCode;
+
+    if (
+      !CompanyDbController.matchesDateRange(
+        registrationDate,
+        filters.incorporationDate,
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.gstCode !== null &&
+      CompanyDbController.hasTextValue(gstValue) !== filters.gstCode
+    ) {
+      return false;
+    }
+
+    if (
+      filters.ieCode !== null &&
+      CompanyDbController.hasTextValue(ieValue) !== filters.ieCode
+    ) {
+      return false;
+    }
+
+    if (
+      filters.signatoryCounts.length > 0 &&
+      !filters.signatoryCounts.includes(signatoryCount)
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private static matchesPendingCompanyQuery(onboarding: any, query: string) {
+    const normalizedQuery = query.toLowerCase();
+    const data = onboarding.data as any;
+    return [
+      onboarding.companyCode,
+      onboarding.groupCode,
+      data?.company?.name,
+      data?.company?.gst,
+      data?.company?.ieCode,
+      data?.group?.name,
+    ].some(
+      (value) =>
+        typeof value === 'string' &&
+        value.toLowerCase().includes(normalizedQuery),
+    );
+  }
+
   private static async resolveNotificationCompanyId(
     userId?: string,
     companyId?: string | null,
@@ -71,18 +325,15 @@ export class CompanyDbController {
 
     histories.forEach((history) => {
       if (!initiationMetaByCompanyCode.has(history.companyCode)) {
-        initiationMetaByCompanyCode.set(
-          history.companyCode,
-          {
-            initiator: HistoryUserUtil.formatAuditUser(
-              history.user,
-              history.eventUserId,
-              saasAdminUserIds,
-              viewerUserId,
-            ),
-            initiatedDate: history.createdAt,
-          },
-        );
+        initiationMetaByCompanyCode.set(history.companyCode, {
+          initiator: HistoryUserUtil.formatAuditUser(
+            history.user,
+            history.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+          initiatedDate: history.createdAt,
+        });
       }
     });
 
@@ -120,19 +371,35 @@ export class CompanyDbController {
     try {
       const viewerUserId =
         typeof req.body?.userId === 'string' ? req.body.userId : null;
+      const paginationInput =
+        req.body?.pagination &&
+        typeof req.body.pagination === 'object' &&
+        !Array.isArray(req.body.pagination)
+          ? req.body.pagination
+          : req.body;
       const rawStatusType =
-        typeof req.body?.statusType === 'string'
-          ? req.body.statusType.trim().toLowerCase()
+        typeof (paginationInput?.statusType ?? req.body?.statusType) ===
+        'string'
+          ? (paginationInput.statusType ?? req.body.statusType)
+              .trim()
+              .toLowerCase()
           : '';
       if (rawStatusType !== 'active' && rawStatusType !== 'pending') {
         throw new AppError('Invalid statusType', 400);
       }
       const statusType = rawStatusType as 'active' | 'pending';
       const query =
-        typeof req.body?.query === 'string' && req.body.query.trim()
-          ? req.body.query.trim()
+        typeof paginationInput?.query === 'string' &&
+        paginationInput.query.trim()
+          ? paginationInput.query.trim()
           : null;
-      const pagination = resolveCursorPagination(req.body ?? {});
+      const pagination = resolveCursorPagination(paginationInput ?? {});
+      const filterEnabled = req.body?.filter === true;
+      const appliedFilters = filterEnabled
+        ? CompanyDbController.normalizeCompanyListAppliedFilters(
+            req.body?.applied,
+          )
+        : null;
       const buildCompanyWhere = (status: 'ACTIVE' | 'INACTIVE') => ({
         status,
         ...(query
@@ -203,8 +470,7 @@ export class CompanyDbController {
             );
           })
         : null;
-      const listWhere =
-        statusType === 'active' ? activeWhere : pendingWhere;
+      const listWhere = statusType === 'active' ? activeWhere : pendingWhere;
       const pageWhere = pagination.cursor
         ? appendCursorWhere(
             listWhere as any,
@@ -229,6 +495,132 @@ export class CompanyDbController {
           },
         },
       } as const;
+      if (filterEnabled && appliedFilters) {
+        const [allActiveRows, allInactiveRows, allPendingRows] =
+          await Promise.all([
+            prisma.company.findMany({
+              where: activeWhere,
+              include: companyInclude,
+              orderBy: getPageOrder('next') as any,
+            }),
+            prisma.company.findMany({
+              where: inactiveWhere,
+              include: companyInclude,
+              orderBy: getPageOrder('next') as any,
+            }),
+            prisma.companyOnboarding.findMany({
+              where: pendingWhere,
+              orderBy: getPageOrder('next') as any,
+            }),
+          ]);
+
+        const filteredActiveRows = allActiveRows.filter((company) =>
+          CompanyDbController.matchesAppliedCompanyFilters(
+            company,
+            appliedFilters,
+          ),
+        );
+        const filteredInactiveRows = allInactiveRows.filter((company) =>
+          CompanyDbController.matchesAppliedCompanyFilters(
+            company,
+            appliedFilters,
+          ),
+        );
+        const filteredPendingRows = allPendingRows
+          .filter((onboarding) =>
+            query
+              ? CompanyDbController.matchesPendingCompanyQuery(
+                  onboarding,
+                  query,
+                )
+              : true,
+          )
+          .filter((onboarding) =>
+            CompanyDbController.matchesAppliedCompanyFilters(
+              onboarding,
+              appliedFilters,
+              true,
+            ),
+          );
+
+        const selectedRowsSource =
+          statusType === 'active' ? filteredActiveRows : filteredPendingRows;
+        const selectedRows = getInMemoryPageRows(
+          selectedRowsSource as any[],
+          pagination,
+        );
+        const newCount = pagination.topCursor
+          ? selectedRowsSource.filter((row: any) =>
+              isRowInCursorDirection(row, pagination.topCursor!, 'newer'),
+            ).length
+          : 0;
+        const pageData = buildPage(selectedRows as any[], pagination, newCount);
+        const firstPageRow = pageData.pageRows[0];
+
+        if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
+          const newerCount = selectedRowsSource.filter((row: any) =>
+            isRowInCursorDirection(row, firstPageRow, 'newer'),
+          ).length;
+          pageData.pageInfo.page =
+            Math.floor(newerCount / pagination.limit) + 1;
+        }
+
+        if (statusType === 'active') {
+          const companies = pageData.pageRows.map((company: any) => {
+            const signatories = company.userAccesses.map((userAccess: any) => {
+              const mapping = userAccess.user.userMappings.find(
+                (userMapping: any) => userMapping.companyId === company.id,
+              );
+              return {
+                name: userAccess.user.name,
+                email: userAccess.user.email,
+                phone: userAccess.user.phone,
+                designation: mapping?.designation || null,
+                employeeId: mapping?.employeeId || null,
+              };
+            });
+            const companyData = { ...company };
+            delete companyData.userAccesses;
+            return { ...companyData, signatories };
+          });
+
+          return res.status(200).json({
+            data: companies,
+            activeCount: filteredActiveRows.length,
+            inactiveCount: filteredInactiveRows.length,
+            pendingCount: filteredPendingRows.length,
+            pageInfo: pageData.pageInfo,
+          });
+        }
+
+        const pendingCodes = pageData.pageRows.map(
+          (onboarding: any) => onboarding.companyCode,
+        );
+        const initiationMetaByCompanyCode =
+          await CompanyDbController.getPendingInitiationMetaByCompanyCodes(
+            pendingCodes,
+            viewerUserId,
+          );
+        const pending = pageData.pageRows.map((onboarding: any) => {
+          const initiationMeta =
+            initiationMetaByCompanyCode.get(onboarding.companyCode) || null;
+          return {
+            ...onboarding,
+            initiator: initiationMeta?.initiator || null,
+            initiatedDate:
+              initiationMeta?.initiatedDate || onboarding.createdAt,
+          };
+        });
+
+        return res.status(200).json({
+          data: pending,
+          activeCount: filteredActiveRows.length,
+          inactiveCount: filteredInactiveRows.length,
+          pendingCount: filteredPendingRows.length,
+          pageInfo: pageData.pageInfo,
+        });
+      }
+
       const [activeCount, inactiveCount, pendingCount, selectedRows, newCount] =
         await Promise.all([
           prisma.company.count({ where: activeWhere }),

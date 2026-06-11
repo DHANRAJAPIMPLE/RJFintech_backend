@@ -52,6 +52,7 @@ export class AdminController {
   ) {
     try {
       const body = zodParse(companyListSchema, req.body ?? {});
+      const statusType = body.pagination?.statusType ?? body.statusType;
       const { data, ok, status } =
         await internalPost<FetchAdminGroupsInternalResponse>(
           `${config.backendCompanyUrl}/groups`,
@@ -68,7 +69,7 @@ export class AdminController {
 
       const backendData = data as FetchAdminGroupsInternalSuccess;
       const publicData =
-        body.statusType === 'active'
+        statusType === 'active'
           ? (backendData.data as AdminBackendCompany[]).map(
               (company): AdminCompanyGroup => {
                 const group = company.companyMappings?.[0]?.group;

@@ -12,6 +12,8 @@ import {
   cursorPaginationFields,
   emailSchema,
   nameSchema,
+  optionalCursorTokenSchema,
+  paginationSchema,
   requiredActivePendingTypeSchema,
 } from './common.validation';
 
@@ -27,6 +29,111 @@ const groupCodeSchema = z
   .max(20, 'Group code too long')
   .nullable()
   .optional();
+
+const optionalDateStringSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+    return value;
+  },
+  z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format')
+    .optional(),
+);
+
+const yesNoSchema = z
+  .preprocess(
+    (value) => (typeof value === 'string' ? value.trim().toLowerCase() : value),
+    z.enum(['yes', 'no']).nullable().optional(),
+  )
+  .optional();
+
+const companyDateRangeFilterSchema = z
+  .object({
+    dateRange: z
+      .preprocess(
+        (value) =>
+          typeof value === 'string' ? value.trim().toUpperCase() : value,
+        z.enum(['7DAYS', '15DAYS', '1MONTH', 'CUSTOM']).nullable().optional(),
+      )
+      .optional(),
+    fromDate: optionalDateStringSchema.nullable().optional(),
+    toDate: optionalDateStringSchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.dateRange !== 'CUSTOM') return;
+
+    if (!value.fromDate || !value.toDate) {
+      context.addIssue({
+        code: 'custom',
+        message: 'fromDate and toDate are required when dateRange is CUSTOM',
+        path: ['fromDate'],
+      });
+      return;
+    }
+
+    const fromDate = new Date(value.fromDate);
+    const toDate = new Date(value.toDate);
+    if (
+      Number.isNaN(fromDate.getTime()) ||
+      Number.isNaN(toDate.getTime()) ||
+      fromDate.getTime() > toDate.getTime()
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'fromDate must be earlier than or equal to toDate',
+        path: ['toDate'],
+      });
+    }
+  });
+
+const companyAppliedFilterSchema = z
+  .object({
+    incorporationDate: companyDateRangeFilterSchema.nullable().optional(),
+    incorperationDate: companyDateRangeFilterSchema.nullable().optional(),
+    gstcode: yesNoSchema,
+    gstCode: yesNoSchema,
+    isCode: yesNoSchema,
+    ieCode: yesNoSchema,
+    signatoryCount: z
+      .preprocess(
+        (value) => {
+          if (value === undefined || value === null || value === '') {
+            return undefined;
+          }
+          return value;
+        },
+        z
+          .union([
+            z.coerce.number().int().min(2).max(5),
+            z.array(z.coerce.number().int().min(2).max(5)),
+          ])
+          .nullable()
+          .optional(),
+      )
+      .optional(),
+  })
+  .strict();
+
+const companyListPaginationSchema = z
+  .object({
+    statusType: requiredActivePendingTypeSchema,
+    query: cursorPaginationFields.query,
+    page: cursorPaginationFields.page,
+    direction: cursorPaginationFields.direction,
+    cursor: optionalCursorTokenSchema('Cursor').nullable().optional(),
+    prevCursor: optionalCursorTokenSchema('Previous cursor')
+      .nullable()
+      .optional(),
+    nextCursor: optionalCursorTokenSchema('Next cursor').nullable().optional(),
+    cursorId: optionalCursorTokenSchema('Cursor').nullable().optional(),
+    topCursor: optionalCursorTokenSchema('Top cursor').nullable().optional(),
+    ...paginationSchema,
+  })
+  .strict();
 
 export const companyOnboardingSchema = z.object({
   group: z
@@ -140,7 +247,20 @@ export const companyCodeOnly = z
 
 export const companyListSchema = z
   .object({
-    statusType: requiredActivePendingTypeSchema,
+    statusType: requiredActivePendingTypeSchema.optional(),
     ...cursorPaginationFields,
+    filter: z.boolean().optional(),
+    pagination: companyListPaginationSchema.optional(),
+    applied: companyAppliedFilterSchema.nullable().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const statusType = value.pagination?.statusType ?? value.statusType;
+    if (!statusType) {
+      context.addIssue({
+        code: 'custom',
+        message: 'statusType is required',
+        path: ['statusType'],
+      });
+    }
+  });
