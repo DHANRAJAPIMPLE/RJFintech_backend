@@ -34,9 +34,20 @@ type CompanyNodeFilterDesignationOption = {
   count: number;
 };
 
+type CompanyNodeFilterNodeTypeOption = {
+  value: string;
+  count: number;
+};
+
 type CompanyNodeFilterNodeOption = {
   value: string;
   path: string;
+};
+
+type CompanyNodeFilterUserStatusSummary = {
+  active: number;
+  pending: number;
+  inactive: number;
 };
 
 type UserAccessVisibilityNode = {
@@ -2718,79 +2729,128 @@ export class UserDbController {
       pendingOrgNodePaths,
     );
     const visibleNodePathSet = new Set(visibility.visibleNodePaths);
-
-    const users = await prisma.user.findMany({
-      where: {
-        userMappings: {
-          some: {
-            companyId,
-            status: 'ACTIVE',
-          },
-        },
-        ...(visibility.isGlobal
-          ? {}
-          : visibility.visibleNodeIds.length > 0
-            ? {
+    const visibleUserWhere = visibility.isGlobal
+      ? {}
+      : visibility.visibleNodeIds.length > 0
+        ? {
+            AND: [
+              {
                 userAccesses: {
                   some: {
                     companyId,
                     nodeId: { in: visibility.visibleNodeIds },
                   },
                 },
-              }
-            : {
-                id: '__no_visible_user__',
-              }),
-      },
-      select: {
-        userMappings: {
-          where: {
-            companyId,
-            status: 'ACTIVE',
-          },
-          select: {
-            designation: true,
-            manager: {
-              select: {
-                name: true,
-                email: true,
               },
-            },
-          },
-        },
-        userAccesses: {
-          where: {
-            companyId,
-            role: {
-              isActive: true,
-            },
-            orgStructure: {
+              {
+                userAccesses: {
+                  none: {
+                    companyId,
+                    isGlobalAccess: true,
+                  },
+                },
+              },
+            ],
+          }
+        : {
+            id: '__no_visible_user__',
+          };
+
+    const [users, activeCount, inactiveCount, pendingUsers] = await Promise.all([
+      prisma.user.findMany({
+        where: {
+          userMappings: {
+            some: {
+              companyId,
               status: 'ACTIVE',
-              nodePath: { notIn: Array.from(pendingOrgNodePaths) },
             },
           },
-          select: {
-            role: {
-              select: {
-                roleName: true,
-                category: true,
-                subCategory: true,
+          ...visibleUserWhere,
+        },
+        select: {
+          userMappings: {
+            where: {
+              companyId,
+              status: 'ACTIVE',
+            },
+            select: {
+              designation: true,
+              manager: {
+                select: {
+                  name: true,
+                  email: true,
+                },
               },
             },
-            orgStructure: {
-              select: {
-                nodePath: true,
+          },
+          userAccesses: {
+            where: {
+              companyId,
+              role: {
+                isActive: true,
+              },
+              orgStructure: {
+                status: 'ACTIVE',
+                nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+              },
+            },
+            select: {
+              role: {
+                select: {
+                  roleName: true,
+                  category: true,
+                  subCategory: true,
+                },
+              },
+              orgStructure: {
+                select: {
+                  nodePath: true,
+                },
               },
             },
           },
         },
-      },
-    });
+      }),
+      prisma.user.count({
+        where: {
+          userMappings: {
+            some: {
+              companyId,
+              status: 'ACTIVE',
+            },
+          },
+          ...visibleUserWhere,
+        },
+      }),
+      prisma.user.count({
+        where: {
+          userMappings: {
+            some: {
+              companyId,
+              status: 'INACTIVE',
+            },
+          },
+          ...visibleUserWhere,
+        },
+      }),
+      UserDbController.fetchPendingUserOnboardings({
+        resolvedCompanyId: companyId,
+        isGlobal: visibility.isGlobal,
+        visibleNodePaths: visibility.visibleNodePaths,
+        offset: 0,
+        limit: 1,
+        applyPagination: false,
+        page: 1,
+        query: null,
+        viewerUserId: userId,
+      }),
+    ]);
 
     const designationCounts = new Map<
       string,
       CompanyNodeFilterDesignationOption
     >();
+    const nodeTypeCounts = new Map<string, CompanyNodeFilterNodeTypeOption>();
     const categoryMap = new Map<string, string>();
     const subCategoryMap = new Map<string, Set<string>>();
     const reportingManagerMap = new Map<string, string>();
@@ -2859,20 +2919,21 @@ export class UserDbController {
     );
     nodeName.sort((a, b) => a.value.localeCompare(b.value));
 
-    const nodeType = Array.from(
-      new Map(
-        visibility.visibleNodes
-          .map((node) => {
-            const label = UserDbController.humanizeFilterLabel(node.nodeType);
-            return label ? [label.toLowerCase(), label] : null;
-          })
-          .filter(
-            (
-              entry,
-            ): entry is [string, string] => Array.isArray(entry) && entry.length === 2,
-          ),
-      ).values(),
-    ).sort((a, b) => a.localeCompare(b));
+    visibility.visibleNodes.forEach((node) => {
+      const label = UserDbController.humanizeFilterLabel(node.nodeType);
+      if (!label) return;
+
+      const key = label.toLowerCase();
+      const current = nodeTypeCounts.get(key);
+      nodeTypeCounts.set(key, {
+        value: label,
+        count: (current?.count || 0) + 1,
+      });
+    });
+
+    const nodeType = Array.from(nodeTypeCounts.values()).sort((a, b) =>
+      a.value.localeCompare(b.value),
+    );
 
     const category = Array.from(categoryMap.values()).sort((a, b) =>
       a.localeCompare(b),
@@ -2893,6 +2954,11 @@ export class UserDbController {
       left[0].localeCompare(right[0]),
     );
     const subCategory = Object.fromEntries(subCategoryEntries);
+    const userStatusSummary: CompanyNodeFilterUserStatusSummary = {
+      active: activeCount,
+      pending: pendingUsers.pendingCount,
+      inactive: inactiveCount,
+    };
 
     return {
       designation: Array.from(designationCounts.values()).sort((a, b) =>
@@ -2902,7 +2968,8 @@ export class UserDbController {
       nodeType,
       category,
       subCategory,
-      reportingManager
+      reportingManager,
+      userStatusSummary,
     };
   }
 

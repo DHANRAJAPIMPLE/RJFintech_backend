@@ -36,19 +36,30 @@ export type UserCompanyNodeFilterDesignationOption = {
   count: number;
 };
 
+export type UserCompanyNodeFilterNodeTypeOption = {
+  value: string;
+  count: number;
+};
+
 export type UserCompanyNodeFilterNodeOption = {
   value: string;
   path: string;
 };
 
+export type UserCompanyNodeFilterUserStatusSummary = {
+  active: number;
+  pending: number;
+  inactive: number;
+};
+
 export type UserCompanyNodeFilterDropdowns = {
   designation: UserCompanyNodeFilterDesignationOption[];
   nodeName: UserCompanyNodeFilterNodeOption[];
-  nodeType: string[];
+  nodeType: UserCompanyNodeFilterNodeTypeOption[];
   category: string[];
   subCategory: Record<string, string[]>;
   reportingManager: string[];
-
+  userStatusSummary: UserCompanyNodeFilterUserStatusSummary;
 };
 
 export type FetchCompanyNodeFilterResponse = {
