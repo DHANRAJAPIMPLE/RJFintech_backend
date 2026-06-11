@@ -3,6 +3,16 @@ import { cursorPaginationFields } from './common.validation';
 
 const trackingIdSchema = z.string().trim().uuid('Invalid tracking ID');
 
+const monitoringQuerySchema = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') return value;
+
+  const trimmed = value.trim();
+  return trimmed === '' || ['null', 'undefined'].includes(trimmed.toLowerCase())
+    ? undefined
+    : trimmed;
+}, z.string().max(150, 'Query is too long').optional());
+
 const emptyToUndefined = (value: unknown) => {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') return value;
@@ -122,6 +132,7 @@ const monitoringAppliedFiltersSchema = z
     responseSizeRange: responseSizeRangeSchema,
     subtrack: subTrackSchema,
     subTrack: subTrackSchema,
+    query: monitoringQuerySchema,
   })
   .strict()
   .superRefine((value, ctx) => {

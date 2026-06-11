@@ -417,12 +417,16 @@ const normalizeResponseSizeRange = (
 const getAppliedMonitoringFilterInput = (
   input: Record<string, unknown>,
 ): Record<string, unknown> => {
+  if (
+    input.applied &&
+    typeof input.applied === 'object' &&
+    !Array.isArray(input.applied)
+  ) {
+    return input.applied as Record<string, unknown>;
+  }
+
   if (input.filter === true) {
-    return input.applied &&
-      typeof input.applied === 'object' &&
-      !Array.isArray(input.applied)
-      ? (input.applied as Record<string, unknown>)
-      : {};
+    return {};
   }
 
   return input.filter === false ? {} : input;
@@ -441,7 +445,7 @@ const resolveMonitoringFilters = (
   );
 
   return {
-    query: normalizeString(input.query),
+    query: normalizeString(applied.query ?? input.query),
     dateRange: normalizeDateRange(
       applied.dateRange ?? applied.date ?? applied.data,
     ),
