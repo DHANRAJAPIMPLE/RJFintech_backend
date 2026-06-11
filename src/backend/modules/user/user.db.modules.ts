@@ -1924,7 +1924,7 @@ export class UserDbController {
 
     const includeUserAcc = pendingModules.includes('USER_ACC');
     const includeOrgStr = pendingModules.includes('ORG_STR');
-    const workflowSubModules = pendingModules;
+    const includeWorkFlow = pendingModules.includes('WORK_FLOW');
 
     const [userRequests, orgRequests, workflowRequests] = await Promise.all([
       includeUserAcc
@@ -1945,17 +1945,15 @@ export class UserDbController {
             select: { id: true, initiatorId: true, eligibleApprovers: true },
           })
         : Promise.resolve([]),
-      workflowSubModules.length > 0
+      includeWorkFlow
         ? prisma.workflowReq.findMany({
             where: {
               companyId,
               status: 'PENDING',
-              subModule: { in: workflowSubModules },
             },
             select: {
               id: true,
               initiatorId: true,
-              subModule: true,
               eligibleApprovers: true,
             },
           })
@@ -2099,22 +2097,11 @@ export class UserDbController {
     await Promise.all([
       addRequestTableApprovers('user_onboarding', userRequests, () => 'USER_ACC'),
       addRequestTableApprovers('org_structure_req', orgRequests, () => 'ORG_STR'),
-      addRequestTableApprovers('workflow_req', workflowRequests, (request) => {
-        const normalizedSubCategory =
-          UserDbController.normalizeFilterText(
-            request?.subModule,
-          )?.toUpperCase();
-
-        if (
-          normalizedSubCategory === 'USER_ACC' ||
-          normalizedSubCategory === 'ORG_STR' ||
-          normalizedSubCategory === 'WORK_FLOW'
-        ) {
-          return normalizedSubCategory;
-        }
-
-        return null;
-      }),
+      addRequestTableApprovers(
+        'workflow_req',
+        workflowRequests,
+        () => 'WORK_FLOW',
+      ),
     ]);
 
     return eligibleUserSummaries;
