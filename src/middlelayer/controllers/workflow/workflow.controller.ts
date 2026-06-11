@@ -115,10 +115,7 @@ export class WorkflowController {
       status: workflow.status,
       alias: workflow.alias,
       module:
-        workflow.module ??
-        workflow.data?.module ??
-        nextData?.module ??
-        null,
+        workflow.module ?? workflow.data?.module ?? nextData?.module ?? null,
       subModule:
         workflow.subModule ??
         workflow.data?.subModule ??
@@ -141,7 +138,8 @@ export class WorkflowController {
               module: workflow.data?.module,
               nodePath: workflow.data?.nodePath,
               subModule: workflow.data?.subModule,
-              levelsHash: workflow.data?.levelsHash ?? workflow.levelsHash ?? null,
+              levelsHash:
+                workflow.data?.levelsHash ?? workflow.levelsHash ?? null,
               status: workflow.data?.status ?? null,
             },
             oldData: workflow.oldData ?? workflow.data?.oldData ?? null,
@@ -470,10 +468,17 @@ export class WorkflowController {
       }
 
       const body = zodParse(workflowListSchema, req.body ?? {});
+      const paginationBody = (body.pagination ?? {}) as Record<string, any>;
+      const internalBody = {
+        ...body,
+        ...paginationBody,
+        statusType: paginationBody.statusType ?? body.statusType,
+        pagination: body.pagination,
+      };
       const { data, ok, status } =
         await internalPost<FetchWorkflowsInternalResponse>(
           `${config.backendUrl}/internal/workflow/fetch`,
-          { ...body, companyId, userId: req.user?.id },
+          { ...internalBody, companyId, userId: req.user?.id },
         );
 
       if (!ok) {
@@ -486,9 +491,9 @@ export class WorkflowController {
 
       const workflowData = data as FetchWorkflowsInternalData;
       const publicData =
-        body.statusType === 'active' ||
-        body.statusType === 'inactive' ||
-        body.statusType === 'archive'
+        internalBody.statusType === 'active' ||
+        internalBody.statusType === 'inactive' ||
+        internalBody.statusType === 'archive'
           ? workflowData.data.map((workflow) =>
               WorkflowController.formatActiveWorkflow(
                 workflow as WorkflowActiveInternalItem,

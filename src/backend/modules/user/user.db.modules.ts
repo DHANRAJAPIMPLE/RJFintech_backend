@@ -1707,8 +1707,7 @@ export class UserDbController {
       const normalized = UserDbController.normalizeFilterText(value);
       if (!normalized) return null;
 
-      const suffix =
-        boundary === 'start' ? 'T00:00:00.000Z' : 'T23:59:59.999Z';
+      const suffix = boundary === 'start' ? 'T00:00:00.000Z' : 'T23:59:59.999Z';
       const parsed = new Date(`${normalized}${suffix}`);
       return Number.isNaN(parsed.getTime()) ? null : parsed;
     };
@@ -1809,7 +1808,10 @@ export class UserDbController {
     if (typeof rawNodeAccess === 'string') {
       // Legacy format: single "primary" / "secondary" string → apply to ALL node values
       const normalizedAccessStr = rawNodeAccess.trim().toUpperCase();
-      if (normalizedAccessStr === 'PRIMARY' || normalizedAccessStr === 'SECONDARY') {
+      if (
+        normalizedAccessStr === 'PRIMARY' ||
+        normalizedAccessStr === 'SECONDARY'
+      ) {
         const nodeValues = UserDbController.normalizeAppliedFilterValues(
           nodeName?.values,
         );
@@ -1827,9 +1829,7 @@ export class UserDbController {
       for (const [key, value] of Object.entries(accessMap)) {
         if (Array.isArray(value)) {
           const normalizedValues = value
-            .map((v) =>
-              typeof v === 'string' ? v.trim().toUpperCase() : '',
-            )
+            .map((v) => (typeof v === 'string' ? v.trim().toUpperCase() : ''))
             .filter((v) => v === 'PRIMARY' || v === 'SECONDARY');
           if (normalizedValues.length > 0) {
             // Compact the key the same way nodeValues are compacted so that
@@ -1866,8 +1866,9 @@ export class UserDbController {
       status: UserDbController.normalizeAppliedFilterValues(source.status),
       role: UserDbController.normalizeAppliedFilterValues(source.role),
       currentStatus:
-        UserDbController.normalizeFilterText(source.currentStatus)?.toLowerCase() ===
-        'initiate'
+        UserDbController.normalizeFilterText(
+          source.currentStatus,
+        )?.toLowerCase() === 'initiate'
           ? 'INITIATE'
           : UserDbController.normalizeFilterText(
                 source.currentStatus,
@@ -1875,13 +1876,13 @@ export class UserDbController {
             ? 'MODIFY'
             : null,
       hasPending:
-        UserDbController.normalizeFilterText(source.hasPending)?.toLowerCase() ===
-        'yes'
+        UserDbController.normalizeFilterText(
+          source.hasPending,
+        )?.toLowerCase() === 'yes'
           ? true
           : UserDbController.normalizeFilterText(
                 source.hasPending,
-              )?.toLowerCase() ===
-              'no'
+              )?.toLowerCase() === 'no'
             ? false
             : null,
       onboardingDate: UserDbController.parseUserFilterDateRange(source),
@@ -2193,8 +2194,16 @@ export class UserDbController {
     };
 
     await Promise.all([
-      addRequestTableApprovers('user_onboarding', userRequests, () => 'USER_ACC'),
-      addRequestTableApprovers('org_structure_req', orgRequests, () => 'ORG_STR'),
+      addRequestTableApprovers(
+        'user_onboarding',
+        userRequests,
+        () => 'USER_ACC',
+      ),
+      addRequestTableApprovers(
+        'org_structure_req',
+        orgRequests,
+        () => 'ORG_STR',
+      ),
       addRequestTableApprovers(
         'workflow_req',
         workflowRequests,
@@ -2236,7 +2245,9 @@ export class UserDbController {
         .filter((subCategory): subCategory is string => Boolean(subCategory)),
     );
     const currentPendingStatus = isPendingRecord
-      ? UserDbController.normalizeCurrentPendingStatus(options.pendingRequestType)
+      ? UserDbController.normalizeCurrentPendingStatus(
+          options.pendingRequestType,
+        )
       : null;
     const statusCandidates = [
       options.defaultStatus,
@@ -2300,56 +2311,50 @@ export class UserDbController {
           // ── nodeName / nodeAccess filter ──
           if (hasNodeNameFilter) {
             if (filters.nodeValues.length > 0) {
-              const nodeMatch = filters.nodeValues.some(
-                (filterNodeValue) => {
+              const nodeMatch = filters.nodeValues.some((filterNodeValue) => {
+                const matchesNode =
+                  UserDbController.matchesNormalizedFilterValue(
+                    access?.nodeName,
+                    [filterNodeValue],
+                  ) ||
+                  UserDbController.matchesNormalizedFilterValue(
+                    access?.nodePath,
+                    [filterNodeValue],
+                  );
+                if (!matchesNode) return false;
+
+                const requiredAccessTypes = filters.nodeAccess[filterNodeValue];
+                if (!requiredAccessTypes || requiredAccessTypes.length === 0)
+                  return true;
+
+                return requiredAccessTypes.some((accessType) => {
+                  if (accessType === 'PRIMARY') return isPrimary;
+                  if (accessType === 'SECONDARY') return !isPrimary;
+                  return true;
+                });
+              });
+              if (!nodeMatch) return false;
+            } else {
+              // nodeValues empty but nodeAccess has entries
+              const accessTypeMatch = Object.entries(filters.nodeAccess).some(
+                ([nodeKey, accessTypes]) => {
                   const matchesNode =
                     UserDbController.matchesNormalizedFilterValue(
                       access?.nodeName,
-                      [filterNodeValue],
+                      [nodeKey],
                     ) ||
                     UserDbController.matchesNormalizedFilterValue(
                       access?.nodePath,
-                      [filterNodeValue],
+                      [nodeKey],
                     );
                   if (!matchesNode) return false;
-
-                  const requiredAccessTypes =
-                    filters.nodeAccess[filterNodeValue];
-                  if (
-                    !requiredAccessTypes ||
-                    requiredAccessTypes.length === 0
-                  )
-                    return true;
-
-                  return requiredAccessTypes.some((accessType) => {
+                  return accessTypes.some((accessType) => {
                     if (accessType === 'PRIMARY') return isPrimary;
                     if (accessType === 'SECONDARY') return !isPrimary;
                     return true;
                   });
                 },
               );
-              if (!nodeMatch) return false;
-            } else {
-              // nodeValues empty but nodeAccess has entries
-              const accessTypeMatch = Object.entries(
-                filters.nodeAccess,
-              ).some(([nodeKey, accessTypes]) => {
-                const matchesNode =
-                  UserDbController.matchesNormalizedFilterValue(
-                    access?.nodeName,
-                    [nodeKey],
-                  ) ||
-                  UserDbController.matchesNormalizedFilterValue(
-                    access?.nodePath,
-                    [nodeKey],
-                  );
-                if (!matchesNode) return false;
-                return accessTypes.some((accessType) => {
-                  if (accessType === 'PRIMARY') return isPrimary;
-                  if (accessType === 'SECONDARY') return !isPrimary;
-                  return true;
-                });
-              });
               if (!accessTypeMatch) return false;
             }
           }
@@ -2427,8 +2432,6 @@ export class UserDbController {
     ) {
       return false;
     }
-
-
 
     if (
       filters.currentStatus !== null &&
@@ -2926,6 +2929,7 @@ export class UserDbController {
     userId: string,
     companyId: string,
     pendingOrgNodePaths: Set<string>,
+    subCategory = 'USER_ACC',
   ): Promise<UserAccessVisibilityScope> {
     const globalAccess = await prisma.userAccess.findFirst({
       where: {
@@ -2968,7 +2972,7 @@ export class UserDbController {
         userId,
         companyId,
         role: {
-          subCategory: 'USER_ACC',
+          subCategory,
           view: true,
         },
         orgStructure: {
@@ -3194,96 +3198,98 @@ export class UserDbController {
             id: '__no_visible_user__',
           };
 
-    const [users, activeCount, inactiveCount, pendingUsers] = await Promise.all([
-      prisma.user.findMany({
-        where: {
-          userMappings: {
-            some: {
-              companyId,
-              status: 'ACTIVE',
-            },
-          },
-          ...visibleUserWhere,
-        },
-        select: {
-          userMappings: {
-            where: {
-              companyId,
-              status: 'ACTIVE',
-            },
-            select: {
-              designation: true,
-              manager: {
-                select: {
-                  name: true,
-                  email: true,
-                },
-              },
-            },
-          },
-          userAccesses: {
-            where: {
-              companyId,
-              role: {
-                isActive: true,
-              },
-              orgStructure: {
+    const [users, activeCount, inactiveCount, pendingUsers] = await Promise.all(
+      [
+        prisma.user.findMany({
+          where: {
+            userMappings: {
+              some: {
+                companyId,
                 status: 'ACTIVE',
-                nodePath: { notIn: Array.from(pendingOrgNodePaths) },
               },
             },
-            select: {
-              role: {
-                select: {
-                  roleName: true,
-                  category: true,
-                  subCategory: true,
-                  permissionLevel: true,
+            ...visibleUserWhere,
+          },
+          select: {
+            userMappings: {
+              where: {
+                companyId,
+                status: 'ACTIVE',
+              },
+              select: {
+                designation: true,
+                manager: {
+                  select: {
+                    name: true,
+                    email: true,
+                  },
                 },
               },
-              orgStructure: {
-                select: {
-                  nodePath: true,
+            },
+            userAccesses: {
+              where: {
+                companyId,
+                role: {
+                  isActive: true,
+                },
+                orgStructure: {
+                  status: 'ACTIVE',
+                  nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+                },
+              },
+              select: {
+                role: {
+                  select: {
+                    roleName: true,
+                    category: true,
+                    subCategory: true,
+                    permissionLevel: true,
+                  },
+                },
+                orgStructure: {
+                  select: {
+                    nodePath: true,
+                  },
                 },
               },
             },
           },
-        },
-      }),
-      prisma.user.count({
-        where: {
-          userMappings: {
-            some: {
-              companyId,
-              status: 'ACTIVE',
+        }),
+        prisma.user.count({
+          where: {
+            userMappings: {
+              some: {
+                companyId,
+                status: 'ACTIVE',
+              },
             },
+            ...visibleUserWhere,
           },
-          ...visibleUserWhere,
-        },
-      }),
-      prisma.user.count({
-        where: {
-          userMappings: {
-            some: {
-              companyId,
-              status: 'INACTIVE',
+        }),
+        prisma.user.count({
+          where: {
+            userMappings: {
+              some: {
+                companyId,
+                status: 'INACTIVE',
+              },
             },
+            ...visibleUserWhere,
           },
-          ...visibleUserWhere,
-        },
-      }),
-      UserDbController.fetchPendingUserOnboardings({
-        resolvedCompanyId: companyId,
-        isGlobal: visibility.isGlobal,
-        visibleNodePaths: visibility.visibleNodePaths,
-        offset: 0,
-        limit: 1,
-        applyPagination: false,
-        page: 1,
-        query: null,
-        viewerUserId: userId,
-      }),
-    ]);
+        }),
+        UserDbController.fetchPendingUserOnboardings({
+          resolvedCompanyId: companyId,
+          isGlobal: visibility.isGlobal,
+          visibleNodePaths: visibility.visibleNodePaths,
+          offset: 0,
+          limit: 1,
+          applyPagination: false,
+          page: 1,
+          query: null,
+          viewerUserId: userId,
+        }),
+      ],
+    );
 
     const designationCounts = new Map<
       string,
@@ -3389,9 +3395,7 @@ export class UserDbController {
       categoryMap.get(categoryKey) || categoryKey,
       Array.from(values).sort((a, b) => a.localeCompare(b)),
     ]);
-    subCategoryEntries.sort((left, right) =>
-      left[0].localeCompare(right[0]),
-    );
+    subCategoryEntries.sort((left, right) => left[0].localeCompare(right[0]));
     const subCategory = Object.fromEntries(subCategoryEntries);
     const userStatusSummary: CompanyNodeFilterUserStatusSummary = {
       active: activeCount,
@@ -3409,6 +3413,84 @@ export class UserDbController {
       subCategory,
       reportingManager,
       userStatusSummary,
+    };
+  }
+
+  private static async buildWorkflowFilterDropdowns(
+    userId: string,
+    companyId: string,
+  ) {
+    const pendingOrgNodePaths =
+      await UserDbController.getPendingOrgNodePathsForFetch(companyId);
+    const visibility = await UserDbController.getUserAccessVisibilityScope(
+      userId,
+      companyId,
+      pendingOrgNodePaths,
+      'WORK_FLOW',
+    );
+
+    const roles = await prisma.roles.findMany({
+      where: { isActive: true },
+      select: {
+        category: true,
+        subCategory: true,
+      },
+    });
+
+    const nodeName: CompanyNodeFilterNodeOption[] = visibility.visibleNodes
+      .map((node) => ({
+        value: node.nodeName,
+        path: node.nodePath,
+      }))
+      .sort((a, b) => a.value.localeCompare(b.value));
+
+    const nodeTypeCounts = new Map<string, CompanyNodeFilterNodeTypeOption>();
+    visibility.visibleNodes.forEach((node) => {
+      const label = UserDbController.humanizeFilterLabel(node.nodeType);
+      if (!label) return;
+
+      const key = label.toLowerCase();
+      const current = nodeTypeCounts.get(key);
+      nodeTypeCounts.set(key, {
+        value: label,
+        count: (current?.count || 0) + 1,
+      });
+    });
+
+    const categoryMap = new Map<string, string>();
+    const subCategoryMap = new Map<string, string>();
+    categoryMap.set('all', 'All');
+
+    roles.forEach((role) => {
+      const categoryLabel = UserDbController.humanizeFilterLabel(role.category);
+      const subCategoryLabel = UserDbController.humanizeFilterLabel(
+        role.subCategory,
+      );
+
+      if (categoryLabel) {
+        categoryMap.set(categoryLabel.toLowerCase(), categoryLabel);
+      }
+      if (subCategoryLabel) {
+        subCategoryMap.set(subCategoryLabel.toLowerCase(), subCategoryLabel);
+      }
+    });
+
+    const category = Array.from(categoryMap.values()).sort((left, right) => {
+      if (left === 'All') return -1;
+      if (right === 'All') return 1;
+      return left.localeCompare(right);
+    });
+    const subCategory = Array.from(subCategoryMap.values()).sort((a, b) =>
+      a.localeCompare(b),
+    );
+
+    return {
+      nodeName,
+      nodeType: Array.from(nodeTypeCounts.values()).sort((a, b) =>
+        a.value.localeCompare(b.value),
+      ),
+      category,
+      subCategory,
     };
   }
 
@@ -3432,7 +3514,11 @@ export class UserDbController {
   }
 
   private static encodeCursor(
-    row?: { id: string; createdAt?: Date | null; updatedAt?: Date | null } | null,
+    row?: {
+      id: string;
+      createdAt?: Date | null;
+      updatedAt?: Date | null;
+    } | null,
   ) {
     if (!row) return null;
     const sortAt = UserDbController.getCursorDate(row);
@@ -3479,9 +3565,11 @@ export class UserDbController {
 
   private static appendCursorWhere(
     where: any,
-    cursor:
-      | { id: string; createdAt?: Date | null; updatedAt?: Date | null }
-      | null,
+    cursor: {
+      id: string;
+      createdAt?: Date | null;
+      updatedAt?: Date | null;
+    } | null,
     direction: 'older' | 'newer',
     timeField: 'createdAt' | 'updatedAt' = 'createdAt',
   ) {
@@ -3514,9 +3602,11 @@ export class UserDbController {
     requestedTopCursor: string | null,
     newCount: number,
     direction: 'next' | 'prev',
-    cursor:
-      | { id: string; createdAt?: Date | null; updatedAt?: Date | null }
-      | null,
+    cursor: {
+      id: string;
+      createdAt?: Date | null;
+      updatedAt?: Date | null;
+    } | null,
     page: number,
     isPagePagination = false,
     timeField: 'createdAt' | 'updatedAt' = 'createdAt',
@@ -4153,28 +4243,22 @@ export class UserDbController {
         user,
       ]),
     );
-    const visiblePendingOnboardings = allPendingOnboardings.filter(
-      (onb) => {
-        const targetEmail = UserDbController.normalizeEmail(
-          UserDbController.extractUserTargetEmail(onb.data),
-        );
-        const existingUser = pendingExistingUserMap.get(targetEmail);
-        return (
-          UserDbController.isPendingUserRequestVisible({
-            onboarding: onb,
-            isGlobal,
-            visibleNodePaths,
-            viewerUserId,
-            visibleRequestIds,
-          }) &&
-          UserDbController.matchesPendingUserSearch(
-            onb,
-            query,
-            existingUser,
-          )
-        );
-      },
-    );
+    const visiblePendingOnboardings = allPendingOnboardings.filter((onb) => {
+      const targetEmail = UserDbController.normalizeEmail(
+        UserDbController.extractUserTargetEmail(onb.data),
+      );
+      const existingUser = pendingExistingUserMap.get(targetEmail);
+      return (
+        UserDbController.isPendingUserRequestVisible({
+          onboarding: onb,
+          isGlobal,
+          visibleNodePaths,
+          viewerUserId,
+          visibleRequestIds,
+        }) &&
+        UserDbController.matchesPendingUserSearch(onb, query, existingUser)
+      );
+    });
     const pendingCount = visiblePendingOnboardings.length;
     const newCount =
       applyPagination && topCursor
@@ -4322,7 +4406,9 @@ export class UserDbController {
     const allEligibleApproverIds = new Set<string>();
     pendingOnboardings.forEach((onb: any) => {
       const levels = workflowApproverMap.get(onb.id) || [];
-      const pendingLevel = levels.find((level: any) => level.status === 'PENDING');
+      const pendingLevel = levels.find(
+        (level: any) => level.status === 'PENDING',
+      );
       const approverIds =
         pendingLevel && Array.isArray(pendingLevel.approversList)
           ? (pendingLevel.approversList as string[])
@@ -4483,7 +4569,9 @@ export class UserDbController {
         const type = onb.type || 'INITIATE';
         const isInitiate = type === 'INITIATE';
         const levels = workflowApproverMap.get(onb.id) || [];
-        const pendingLevel = levels.find((level: any) => level.status === 'PENDING');
+        const pendingLevel = levels.find(
+          (level: any) => level.status === 'PENDING',
+        );
         const eligibleApproverIds =
           pendingLevel && Array.isArray(pendingLevel.approversList)
             ? (pendingLevel.approversList as string[])
@@ -4726,7 +4814,9 @@ export class UserDbController {
         ['active', 'pending', 'inactive', 'archive'].includes(requestedListType)
           ? (requestedListType as 'active' | 'pending' | 'inactive' | 'archive')
           : undefined;
-      const query = UserDbController.normalizeFilterText(paginationInput?.query);
+      const query = UserDbController.normalizeFilterText(
+        paginationInput?.query,
+      );
       const pagination = getPagination(paginationInput);
       const rawPage = Number(paginationInput?.page);
       const requestedPage =
@@ -4921,40 +5011,40 @@ export class UserDbController {
             where: buildUserWhere('ACTIVE'),
             include: fullUserInclude,
             orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-            }),
-            prisma.user.findMany({
-              where: buildUserWhere('INACTIVE'),
-              include: fullUserInclude,
-              orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-            }),
-            prisma.user.findMany({
-              where: buildUserWhere('ARCHIVE'),
-              include: fullUserInclude,
-              orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-            }),
-            UserDbController.fetchPendingUserOnboardings({
-              resolvedCompanyId,
-              isGlobal,
-              visibleNodePaths: allVisibleNodePaths,
-              offset: 0,
-              limit: Math.max(limit, 1),
-              applyPagination: false,
-              page: 1,
-              query: null,
-              viewerUserId: userId,
-            }),
-            UserDbController.fetchPendingUserOnboardings({
-              resolvedCompanyId,
-              isGlobal,
-              visibleNodePaths: allVisibleNodePaths,
-              offset: 0,
-              limit: Math.max(limit, 1),
-              applyPagination: false,
-              page: 1,
-              query,
-              viewerUserId: userId,
-            }),
-          ]);
+          }),
+          prisma.user.findMany({
+            where: buildUserWhere('INACTIVE'),
+            include: fullUserInclude,
+            orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+          }),
+          prisma.user.findMany({
+            where: buildUserWhere('ARCHIVE'),
+            include: fullUserInclude,
+            orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+          }),
+          UserDbController.fetchPendingUserOnboardings({
+            resolvedCompanyId,
+            isGlobal,
+            visibleNodePaths: allVisibleNodePaths,
+            offset: 0,
+            limit: Math.max(limit, 1),
+            applyPagination: false,
+            page: 1,
+            query: null,
+            viewerUserId: userId,
+          }),
+          UserDbController.fetchPendingUserOnboardings({
+            resolvedCompanyId,
+            isGlobal,
+            visibleNodePaths: allVisibleNodePaths,
+            offset: 0,
+            limit: Math.max(limit, 1),
+            applyPagination: false,
+            page: 1,
+            query,
+            viewerUserId: userId,
+          }),
+        ]);
 
         const pendingByEmail = new Map<string, any>();
         (allPendingRaw.pendingOnboardings || []).forEach((request: any) => {
@@ -4992,11 +5082,13 @@ export class UserDbController {
               appliedFilters,
               {
                 defaultStatus: 'ACTIVE',
-                pendingRequestType: pendingByEmail.get(
-                  UserDbController.normalizeEmail(item.raw.email) || '',
-                )?.type ?? productionPendingByEmail.get(
-                  UserDbController.normalizeEmail(item.raw.email) || '',
-                )?.type,
+                pendingRequestType:
+                  pendingByEmail.get(
+                    UserDbController.normalizeEmail(item.raw.email) || '',
+                  )?.type ??
+                  productionPendingByEmail.get(
+                    UserDbController.normalizeEmail(item.raw.email) || '',
+                  )?.type,
                 hasPendingOverride:
                   (pendingApprovalEligibleUsers.get(item.raw.id)?.count || 0) >
                   0,
@@ -5024,11 +5116,13 @@ export class UserDbController {
               appliedFilters,
               {
                 defaultStatus: 'INACTIVE',
-                pendingRequestType: pendingByEmail.get(
-                  UserDbController.normalizeEmail(item.raw.email) || '',
-                )?.type ?? productionPendingByEmail.get(
-                  UserDbController.normalizeEmail(item.raw.email) || '',
-                )?.type,
+                pendingRequestType:
+                  pendingByEmail.get(
+                    UserDbController.normalizeEmail(item.raw.email) || '',
+                  )?.type ??
+                  productionPendingByEmail.get(
+                    UserDbController.normalizeEmail(item.raw.email) || '',
+                  )?.type,
                 hasPendingOverride:
                   (pendingApprovalEligibleUsers.get(item.raw.id)?.count || 0) >
                   0,
@@ -5056,11 +5150,13 @@ export class UserDbController {
               appliedFilters,
               {
                 defaultStatus: 'ARCHIVE',
-                pendingRequestType: pendingByEmail.get(
-                  UserDbController.normalizeEmail(item.raw.email) || '',
-                )?.type ?? productionPendingByEmail.get(
-                  UserDbController.normalizeEmail(item.raw.email) || '',
-                )?.type,
+                pendingRequestType:
+                  pendingByEmail.get(
+                    UserDbController.normalizeEmail(item.raw.email) || '',
+                  )?.type ??
+                  productionPendingByEmail.get(
+                    UserDbController.normalizeEmail(item.raw.email) || '',
+                  )?.type,
                 hasPendingOverride:
                   (pendingApprovalEligibleUsers.get(item.raw.id)?.count || 0) >
                   0,
@@ -5442,20 +5538,18 @@ export class UserDbController {
         listType === 'inactive' || listType === 'archive' ? [] : selectedUsers;
       const inactiveUsers =
         listType === 'inactive'
-            ? selectedUsers
-            : inactiveRows.map((user: any) =>
-                UserDbController.formatProductionUser(
-                  user,
-                  productionPendingByEmail.get(
-                    (user.email || '').toLowerCase(),
-                  ),
-                  {
-                    includePendingApprovalCount,
-                    pendingApprovalCount:
-                      pendingApprovalEligibleUsers.get(user.id)?.count || 0,
-                  },
-                ),
-              );
+          ? selectedUsers
+          : inactiveRows.map((user: any) =>
+              UserDbController.formatProductionUser(
+                user,
+                productionPendingByEmail.get((user.email || '').toLowerCase()),
+                {
+                  includePendingApprovalCount,
+                  pendingApprovalCount:
+                    pendingApprovalEligibleUsers.get(user.id)?.count || 0,
+                },
+              ),
+            );
       const archiveUsers = listType === 'archive' ? selectedUsers : [];
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
@@ -6477,8 +6571,9 @@ export class UserDbController {
         initiatorReportingManagerUserIds,
         corpAdminUserIds,
       ),
-      requiredRecipientUserIds:
-        NotificationService.mergeRecipientUserIds(notificationRecipients),
+      requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+        notificationRecipients,
+      ),
       includeCreatedBy: true,
     });
 
@@ -6979,8 +7074,9 @@ export class UserDbController {
           initiatorReportingManagerUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
-        requiredRecipientUserIds:
-          NotificationService.mergeRecipientUserIds(notificationRecipients),
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+        ),
         includeCreatedBy: true,
         message: (() => {
           const summary = UserDbController.formatInitiatePermissionSummary(
@@ -7671,11 +7767,10 @@ export class UserDbController {
           onboardedUserRecipientIds,
           corpAdminUserIds,
         ),
-        requiredRecipientUserIds:
-          NotificationService.mergeRecipientUserIds(
-            requestInitiatorId,
-            approverId,
-          ),
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          requestInitiatorId,
+          approverId,
+        ),
         includeCreatedBy: true,
         isPending: result?.status === 'PARTIAL_APPROVED',
       });
@@ -8022,7 +8117,9 @@ export class UserDbController {
       const buildApprovalSummary = (reqId: string) => {
         const levels = workflowMap.get(reqId) || [];
         const requestStatus = requestSnapshotMap.get(reqId)?.status || null;
-        const normalizedRequestStatus = String(requestStatus || '').toUpperCase();
+        const normalizedRequestStatus = String(
+          requestStatus || '',
+        ).toUpperCase();
 
         if (levels.length === 0) {
           return {
@@ -8042,8 +8139,8 @@ export class UserDbController {
         ).length;
         const currentPendingLevel =
           normalizedRequestStatus === 'PENDING'
-            ? levels.find((level: any) => !isLevelApproved(reqId, level))
-                ?.level ?? null
+            ? (levels.find((level: any) => !isLevelApproved(reqId, level))
+                ?.level ?? null)
             : null;
         const isRejected = normalizedRequestStatus === 'REJECTED';
         const allApproved =
@@ -8165,9 +8262,9 @@ export class UserDbController {
           : UserDbController.getEmptyUserHistoryApprovalSummary();
         const approvalLevel =
           displayEvent === 'APPROVED' || displayEvent === 'REJECTED'
-            ? h.level ?? null
+            ? (h.level ?? null)
             : approvalSummary.currentStatus === 'PENDING'
-              ? (approvalSummary as any).currentPendingLevel ?? null
+              ? ((approvalSummary as any).currentPendingLevel ?? null)
               : null;
         const levelCount = UserDbController.getUserHistoryLevelCount(
           displayEvent || '',
@@ -8333,7 +8430,9 @@ export class UserDbController {
             completedLevels: approvalSummary.completedLevels,
           };
           if ((approvalSummary as any).rejectedAtLevel) {
-            progressSummary.rejectedAtLevel = (approvalSummary as any).rejectedAtLevel;
+            progressSummary.rejectedAtLevel = (
+              approvalSummary as any
+            ).rejectedAtLevel;
           }
 
           syntheticEvents.push({
@@ -8428,25 +8527,28 @@ export class UserDbController {
         return 4;
       };
 
-      const resultList = [...filteredHistory, ...syntheticEvents].sort((left: any, right: any) => {
-        // null createdAt always comes first (top)
-        if (!left.createdAt && right.createdAt) return -1;
-        if (left.createdAt && !right.createdAt) return 1;
-        if (!left.createdAt && !right.createdAt) {
-          return eventPriority(left.event) - eventPriority(right.event);
-        }
+      const resultList = [...filteredHistory, ...syntheticEvents].sort(
+        (left: any, right: any) => {
+          // null createdAt always comes first (top)
+          if (!left.createdAt && right.createdAt) return -1;
+          if (left.createdAt && !right.createdAt) return 1;
+          if (!left.createdAt && !right.createdAt) {
+            return eventPriority(left.event) - eventPriority(right.event);
+          }
 
-        const leftTime = new Date(left.createdAt).getTime();
-        const rightTime = new Date(right.createdAt).getTime();
-        if (leftTime !== rightTime) return rightTime - leftTime;
+          const leftTime = new Date(left.createdAt).getTime();
+          const rightTime = new Date(right.createdAt).getTime();
+          if (leftTime !== rightTime) return rightTime - leftTime;
 
-        // Same timestamp: use event priority
-        const leftPriority = eventPriority(left.event);
-        const rightPriority = eventPriority(right.event);
-        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+          // Same timestamp: use event priority
+          const leftPriority = eventPriority(left.event);
+          const rightPriority = eventPriority(right.event);
+          if (leftPriority !== rightPriority)
+            return leftPriority - rightPriority;
 
-        return String(right.id).localeCompare(String(left.id));
-      });
+          return String(right.id).localeCompare(String(left.id));
+        },
+      );
 
       const seenApprovedReqIds = new Set<string>();
       const dedupedResultList = resultList.filter((item: any) => {
@@ -8457,7 +8559,9 @@ export class UserDbController {
       });
 
       // Remove internal _reqId before sending response
-      const cleanedResultList = dedupedResultList.map(({ _reqId, ...rest }: any) => rest);
+      const cleanedResultList = dedupedResultList.map(
+        ({ _reqId, ...rest }: any) => rest,
+      );
 
       res.status(200).json({
         message: 'User history fetched successfully!',
@@ -8775,6 +8879,17 @@ export class UserDbController {
           filter: true,
           subCategory: 'USER_ACC',
           dropdowns,
+        });
+      }
+
+      if (filter === true && workflowSubCategory === 'WORK_FLOW') {
+        const dropdowns = await UserDbController.buildWorkflowFilterDropdowns(
+          userId,
+          companyId,
+        );
+
+        return res.status(200).json({
+          ...dropdowns,
         });
       }
 

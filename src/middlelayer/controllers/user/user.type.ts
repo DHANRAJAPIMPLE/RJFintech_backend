@@ -69,6 +69,13 @@ export type FetchCompanyNodeFilterResponse = {
   dropdowns: UserCompanyNodeFilterDropdowns;
 };
 
+export type FetchCompanyWorkflowFilterResponse = {
+  nodeName: UserCompanyNodeFilterNodeOption[];
+  nodeType: UserCompanyNodeFilterNodeTypeOption[];
+  category: string[];
+  subCategory: string[];
+};
+
 export type FetchCompanyNodesInternalResponse =
   | {
       nodes?: UserCompanyNodeInternal[];
@@ -76,7 +83,8 @@ export type FetchCompanyNodesInternalResponse =
       error?: string;
     }
   | UserCompanyNodeInternal[]
-  | FetchCompanyNodeFilterResponse;
+  | FetchCompanyNodeFilterResponse
+  | FetchCompanyWorkflowFilterResponse;
 
 export type FetchCompanyNodesResponse = {
   message: 'User nodes fetched successfully!' | 'User nodes not found';
@@ -86,7 +94,8 @@ export type FetchCompanyNodesResponse = {
 
 export type FetchCompanyNodesControllerResponse =
   | FetchCompanyNodesResponse
-  | FetchCompanyNodeFilterResponse;
+  | FetchCompanyNodeFilterResponse
+  | FetchCompanyWorkflowFilterResponse;
 
 export type UserNodePathCountPermissionLevel = 'MANAGER' | 'USER' | 'VIEWER';
 
@@ -146,10 +155,7 @@ export type FetchAllUsersAppliedFilters = {
   designation?: string[] | null;
   nodeName?: {
     values?: string[] | null;
-    nodeAccess?:
-      | FetchAllUsersNodeAccess
-      | FetchAllUsersNodeAccessMap
-      | null;
+    nodeAccess?: FetchAllUsersNodeAccess | FetchAllUsersNodeAccessMap | null;
   } | null;
   nodeType?: string[] | null;
   category?: string[] | null;

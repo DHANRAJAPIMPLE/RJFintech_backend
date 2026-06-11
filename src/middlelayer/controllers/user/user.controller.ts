@@ -63,7 +63,9 @@ import type {
 } from './user.type';
 
 export class UserController {
-  private static normalizeFetchAllUsersRequest(body: unknown): FetchAllUsersRequest {
+  private static normalizeFetchAllUsersRequest(
+    body: unknown,
+  ): FetchAllUsersRequest {
     const parsed: any = zodParse(fetchAllUserSchema, body ?? {});
     const pagination: any = parsed.pagination ?? {};
 
@@ -419,7 +421,7 @@ export class UserController {
               ? inactiveUsers
               : statusType === 'archive'
                 ? archiveUsers
-              : pendingUsers,
+                : pendingUsers,
         activeCount,
         archiveCount,
         inactiveCount,
@@ -773,15 +775,15 @@ export class UserController {
         status: createStatus,
       } = await internalPost<CreateUserOnboardingInternalResponse>(
         `${config.backendUrl}/internal/user/create`,
-          {
-            initiatorId,
-            companyId,
-            companyCode,
-            groupCode,
-            type: 'INITIATE',
-            levelsHash: levelsHash || null,
-            data: {
-              basicDetails,
+        {
+          initiatorId,
+          companyId,
+          companyCode,
+          groupCode,
+          type: 'INITIATE',
+          levelsHash: levelsHash || null,
+          data: {
+            basicDetails,
             permissions,
           },
           status: 'PENDING',
@@ -991,7 +993,10 @@ export class UserController {
     next: NextFunction,
   ) {
     try {
-      const { subCategory, filter } = zodParse(userCompanyNodesSchema, req.body);
+      const { subCategory, filter } = zodParse(
+        userCompanyNodesSchema,
+        req.body,
+      );
       const userId = req.user?.id;
       const companyId = req.user?.companyId;
 
@@ -1017,11 +1022,45 @@ export class UserController {
         typeof payload === 'object' &&
         'filter' in payload &&
         payload.filter === true;
+      const isWorkflowFilterResponse = (
+        payload: FetchCompanyNodesInternalResponse,
+      ): payload is Extract<
+        FetchCompanyNodesInternalResponse,
+        {
+          nodeName: unknown;
+          nodeType: unknown;
+          category: unknown;
+          subCategory: unknown;
+        }
+      > =>
+        !Array.isArray(payload) &&
+        payload !== null &&
+        typeof payload === 'object' &&
+        'nodeName' in payload &&
+        'nodeType' in payload &&
+        'category' in payload &&
+        'subCategory' in payload;
+      const isNodeEnvelope = (
+        payload: FetchCompanyNodesInternalResponse,
+      ): payload is {
+        nodes?: UserCompanyNodeInternal[];
+        message?: string;
+        error?: string;
+      } =>
+        !Array.isArray(payload) &&
+        payload !== null &&
+        typeof payload === 'object' &&
+        !isFilterResponse(payload) &&
+        !isWorkflowFilterResponse(payload);
       const errorMessage = Array.isArray(data)
         ? undefined
         : isFilterResponse(data)
           ? undefined
-          : data?.message || data?.error;
+          : isWorkflowFilterResponse(data)
+            ? undefined
+            : isNodeEnvelope(data)
+              ? data.message || data.error
+              : undefined;
 
       if (!ok) {
         throw new AppError(
@@ -1030,13 +1069,15 @@ export class UserController {
         );
       }
 
-      if (isFilterResponse(data)) {
+      if (isFilterResponse(data) || isWorkflowFilterResponse(data)) {
         return res.status(200).json(data);
       }
 
       const rawNodes: UserCompanyNodeInternal[] = Array.isArray(data)
         ? data
-        : data?.nodes || [];
+        : isNodeEnvelope(data)
+          ? data.nodes || []
+          : [];
       const nodes: UserCompanyNode[] = rawNodes.map((node) => ({
         nodeName: node.nodeName,
         nodePath: node.nodePath,
