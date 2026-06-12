@@ -63,7 +63,6 @@ export type FetchMonitoringSpansListResponse = {
   data: FetchMonitoringSpanItem[];
   totalCount: number;
   pageInfo: MonitoringListPageInfo;
-  filter: MonitoringFilterSummary;
 };
 
 export type FetchMonitoringSoftFilterResponse = {
@@ -141,7 +140,6 @@ export type FetchMonitoringSpansInternalResponse =
       data: FetchMonitoringSpanInternalItem[];
       totalCount: number;
       pageInfo: MonitoringListPageInfo;
-      filter: MonitoringFilterSummary;
     }
   | FetchMonitoringSoftFilterResponse
   | MonitoringApiErrorResponse;

@@ -85,7 +85,6 @@ export class MonitoringController {
         data: spans.data.map(MonitoringController.formatFetchAllSpan),
         totalCount: spans.totalCount,
         pageInfo: spans.pageInfo,
-        filter: spans.filter,
       });
     } catch (error) {
       return next(error);

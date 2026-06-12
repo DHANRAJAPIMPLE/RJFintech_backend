@@ -1089,7 +1089,7 @@ export class MonitoringService {
           filters.responseSizeSort,
         )
       : null;
-    const [totalCount, parentRows, newCount, filter] = await Promise.all([
+    const [totalCount, parentRows, newCount] = await Promise.all([
       prisma.apiSpan.count({ where }),
       findMiddlelayerMonitoringRows(
         pageWhere,
@@ -1099,7 +1099,6 @@ export class MonitoringService {
       newWhere
         ? prisma.apiSpan.count({ where: newWhere as any })
         : Promise.resolve(0),
-      fetchMonitoringFilterSummary(where),
     ]);
     const pageData = buildMonitoringPage(
       parentRows,
@@ -1134,7 +1133,6 @@ export class MonitoringService {
       ),
       totalCount,
       pageInfo: pageData.pageInfo,
-      filter,
     };
   }
 
