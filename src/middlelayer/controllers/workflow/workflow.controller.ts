@@ -293,6 +293,10 @@ export class WorkflowController {
         type: _type,
         ...initiationData
       } = initiation;
+      const workflowPayload = {
+        ...initiationData,
+        nodePath,
+      };
 
       const { data: company, ok: companyOk } = await internalPost<
         WorkflowCompanyLookupInternalResponse | WorkflowApiErrorResponse | null
@@ -347,7 +351,7 @@ export class WorkflowController {
           companyId,
           levelsHash: levelsHash || null,
           type: 'INITIATE',
-          data: initiationData,
+          data: workflowPayload,
           eligibleApprovers,
         },
       );

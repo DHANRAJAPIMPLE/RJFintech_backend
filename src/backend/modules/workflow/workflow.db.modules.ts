@@ -3556,6 +3556,7 @@ export class WorkflowDbController {
         type,
         target,
         remarks,
+        nodePath: requestNodePath,
       } = req.body;
       const requestType = String(type ?? 'INITIATE').toUpperCase();
 
@@ -3635,7 +3636,11 @@ export class WorkflowDbController {
       const workflowType = WorkflowDbController.normalizeWorkflowType(
         data?.workflowType,
       );
-      const workflowData = { ...(data || {}), workflowType };
+      const workflowData = {
+        ...(data || {}),
+        ...(data?.nodePath ? {} : { nodePath: requestNodePath }),
+        workflowType,
+      };
       delete workflowData.type;
       const { module, subModule, nodePath, levels } = workflowData;
       await WorkflowDbController.assertNoPendingOrgModificationForNode(
