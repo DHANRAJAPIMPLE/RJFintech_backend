@@ -302,6 +302,11 @@ const workflowCompanyNodeAppliedSchema = z
           .optional(),
       ])
       .optional(),
+    workflowLevel: optionalIntegerArraySchema({
+      min: 1,
+      max: 10,
+      field: 'Workflow level count',
+    }),
     levels: z
       .union([
         optionalStringArraySchema,

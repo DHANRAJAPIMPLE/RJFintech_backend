@@ -108,6 +108,10 @@ const optionalIntegerArraySchema = (
     (value) => {
       const normalize = (item: unknown) => {
         if (item === undefined || item === null || item === '') return null;
+        if (item && typeof item === 'object') {
+          const objectValue = (item as Record<string, unknown>).value;
+          return objectValue === undefined ? item : objectValue;
+        }
         return item;
       };
 
@@ -239,6 +243,11 @@ const workflowAppliedFilterSchema = z
           .optional(),
       ])
       .optional(),
+    workflowLevel: optionalIntegerArraySchema({
+      min: 1,
+      max: 10,
+      field: 'Workflow level',
+    }),
     approverType: z
       .array(z.preprocess(normalizeApproverType, approverTypeEnum))
       .nullable()

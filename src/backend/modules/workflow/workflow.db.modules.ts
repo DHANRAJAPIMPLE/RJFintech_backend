@@ -55,7 +55,7 @@ type NormalizedWorkflowListAppliedFilters = {
   subModule: string[];
   checkerCounts: number[];
   levels: NormalizedWorkflowLevelFilter[];
-  workflowLevels: number | null;
+  workflowLevels: number[];
   approverType: string[];
   hasLinkedOrg: boolean | null;
   onboardingDate: {
@@ -106,6 +106,17 @@ export class WorkflowDbController {
     values: unknown,
     options: { min: number; max: number },
   ) {
+    const normalizeItem = (value: unknown) => {
+      if (value && typeof value === 'object') {
+        const objectValue = (value as Record<string, unknown>).value;
+        if (objectValue !== undefined) {
+          return Number(objectValue);
+        }
+      }
+
+      return Number(value);
+    };
+
     const items =
       typeof values === 'string'
         ? values.includes(',')
@@ -120,7 +131,7 @@ export class WorkflowDbController {
     return Array.from(
       new Set(
         items
-          .map((value) => Number(value))
+          .map((value) => normalizeItem(value))
           .filter(
             (value) =>
               Number.isInteger(value) &&
@@ -266,18 +277,6 @@ export class WorkflowDbController {
           .filter((value): value is string => Boolean(value)),
       ),
     );
-    const workflowLevels =
-      source.workflowLevels === undefined || source.workflowLevels === null
-        ? null
-        : Number(source.workflowLevels);
-    const validWorkflowLevels =
-      typeof workflowLevels === 'number' &&
-      Number.isInteger(workflowLevels) &&
-      workflowLevels >= 1 &&
-      workflowLevels <= 5
-        ? workflowLevels
-        : null;
-
     const normalized: NormalizedWorkflowListAppliedFilters = {
       nodeValues: WorkflowDbController.normalizeAppliedFilterValues(
         nodeNameValues,
@@ -297,7 +296,10 @@ export class WorkflowDbController {
         { min: 1, max: 10 },
       ),
       levels,
-      workflowLevels: validWorkflowLevels,
+      workflowLevels: WorkflowDbController.normalizeAppliedNumberValues(
+        source.workflowLevel ?? source.workflowLevels,
+        { min: 1, max: 10 },
+      ),
       approverType,
       hasLinkedOrg:
         WorkflowDbController.normalizeFilterText(
@@ -320,7 +322,7 @@ export class WorkflowDbController {
       normalized.subModule.length > 0 ||
       normalized.checkerCounts.length > 0 ||
       normalized.levels.length > 0 ||
-      normalized.workflowLevels !== null ||
+      normalized.workflowLevels.length > 0 ||
       normalized.approverType.length > 0 ||
       normalized.hasLinkedOrg !== null ||
       normalized.onboardingDate !== null;
@@ -427,8 +429,8 @@ export class WorkflowDbController {
     }
 
     if (
-      filters.workflowLevels !== null &&
-      levels.length !== filters.workflowLevels
+      filters.workflowLevels.length > 0 &&
+      !filters.workflowLevels.includes(levels.length)
     ) {
       return false;
     }

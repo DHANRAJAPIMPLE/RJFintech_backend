@@ -1919,7 +1919,7 @@ export class UserDbController {
         { min: 1, max: 10 },
       ),
       workflowLevels: UserDbController.normalizeAppliedNumberValues(
-        source.workflowLevels,
+        source.workflowLevel ?? source.workflowLevels,
         { min: 1, max: 10 },
       ),
       levels: Array.from(new Set(normalizedLevels)),
@@ -3976,7 +3976,7 @@ export class UserDbController {
         subCategory: ['Work Flow'],
         module: [],
         checker: [],
-        workflowLevels: [],
+        workflowLevel: [],
         summary: {
           nodeCount: 0,
           workflowCount: 0,
@@ -4347,7 +4347,7 @@ export class UserDbController {
       checker: Array.from(checkerCounts.values()).sort(
         (a, b) => a.value - b.value,
       ),
-      workflowLevels: Array.from(workflowLevelCounts.values()).sort(
+      workflowLevel: Array.from(workflowLevelCounts.values()).sort(
         (a, b) => a.value - b.value,
       ),
       summary: {

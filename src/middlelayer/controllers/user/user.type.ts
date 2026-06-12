@@ -118,6 +118,10 @@ export type FetchCompanyWorkflowFilterResponse = {
     value: number;
     count: number;
   }>;
+  workflowLevel?: Array<{
+    value: number;
+    count: number;
+  }>;
   levels?: Array<{
     value: string;
     level: number;
