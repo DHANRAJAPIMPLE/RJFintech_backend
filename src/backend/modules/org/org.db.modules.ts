@@ -492,11 +492,6 @@ export class OrgStructureDbController {
         id: true,
         companyId: true,
         data: true,
-        orgStructure: {
-          select: {
-            nodePath: true,
-          },
-        },
       },
     });
 
