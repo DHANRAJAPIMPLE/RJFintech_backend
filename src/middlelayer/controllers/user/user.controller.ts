@@ -1031,8 +1031,8 @@ export class UserController {
         {
           nodeName: unknown;
           nodeType: unknown;
-          category: unknown;
           subCategory: unknown;
+          module?: unknown;
         }
       > =>
         !Array.isArray(payload) &&
@@ -1040,8 +1040,8 @@ export class UserController {
         typeof payload === 'object' &&
         'nodeName' in payload &&
         'nodeType' in payload &&
-        'category' in payload &&
-        'subCategory' in payload;
+        'subCategory' in payload &&
+        'workflowSubCategory' in payload;
       const isNodeEnvelope = (
         payload: FetchCompanyNodesInternalResponse,
       ): payload is {
