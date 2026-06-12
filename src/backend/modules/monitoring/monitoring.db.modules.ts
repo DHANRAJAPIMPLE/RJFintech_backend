@@ -982,6 +982,16 @@ export class MonitoringService {
 
   static async fetchAllMiddlelayerSpans(input: Record<string, unknown>) {
     const { filters, where } = await buildMonitoringWhere(input);
+
+    if (input.softFilter === true) {
+      const filter = await fetchMonitoringFilterSummary(where);
+
+      return {
+        softFilter: true as const,
+        filter,
+      };
+    }
+
     const pagination = resolveCursorPagination(input);
     const monitoringCursor = decodeMonitoringCursor(
       getMonitoringRawCursor(input, pagination),

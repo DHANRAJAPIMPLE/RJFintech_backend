@@ -42,6 +42,7 @@ type CompanyNodeFilterNodeTypeOption = {
 type CompanyNodeFilterNodeOption = {
   value: string;
   path: string;
+  nodeType?: string | null;
   count?: number;
   level?: number;
   levelCount?: string;
@@ -1699,6 +1700,11 @@ export class UserDbController {
   }
 
   private static normalizeAppliedFilterValues(values: unknown) {
+    if (typeof values === 'string') {
+      const normalized = UserDbController.compactFilterValue(values);
+      return normalized ? [normalized] : [];
+    }
+
     if (!Array.isArray(values)) return [];
 
     return Array.from(
@@ -1714,11 +1720,20 @@ export class UserDbController {
     values: unknown,
     limits: { min: number; max: number },
   ) {
-    if (!Array.isArray(values)) return [];
+    const items =
+      typeof values === 'string'
+        ? values.includes(',')
+          ? values.split(',')
+          : [values]
+        : Array.isArray(values)
+          ? values
+          : values === undefined || values === null || values === ''
+            ? []
+            : [values];
 
     return Array.from(
       new Set(
-        values
+        items
           .map((value) => Number(value))
           .filter(
             (value) =>
@@ -1745,13 +1760,32 @@ export class UserDbController {
         : null;
     const nodeValues =
       typeof source.nodeName === 'string' ? [source.nodeName] : nodeName?.values;
+    const rawLevels = Array.isArray(source.levels) ? source.levels : [];
+    const normalizedLevels = rawLevels
+      .flatMap((level) => {
+        if (typeof level === 'string') {
+          return [level];
+        }
+
+        if (
+          level &&
+          typeof level === 'object' &&
+          Number.isInteger(Number((level as any).count))
+        ) {
+          return [`LEVEL${Number((level as any).count)}`];
+        }
+
+        return [];
+      })
+      .map((level) => UserDbController.compactFilterValue(level))
+      .filter((level): level is string => Boolean(level));
 
     const normalized: CompanyWorkflowFilterApplied = {
       nodeValues: UserDbController.normalizeAppliedFilterValues(nodeValues),
       nodeType: UserDbController.normalizeAppliedFilterValues(source.nodeType),
       module: UserDbController.normalizeAppliedFilterValues(source.module),
       subCategory: UserDbController.normalizeAppliedFilterValues(
-        source.subCategory,
+        source.subCategory ?? source.subModule,
       ),
       checkerCounts: UserDbController.normalizeAppliedNumberValues(
         source.checker ?? source.checkerCount ?? source.checkers,
@@ -1761,7 +1795,7 @@ export class UserDbController {
         source.workflowLevels,
         { min: 1, max: 10 },
       ),
-      levels: UserDbController.normalizeAppliedFilterValues(source.levels),
+      levels: Array.from(new Set(normalizedLevels)),
     };
 
     const hasFilters =
@@ -3568,6 +3602,7 @@ export class UserDbController {
           nodeNameMap.set(nodePath.toLowerCase(), {
             value: nodeName || nodePath,
             path: nodePath,
+            nodeType,
             level,
             levelCount,
             count: (existingNode?.count || 0) + 1,
@@ -3592,6 +3627,19 @@ export class UserDbController {
     const nodeName = Array.from(nodeNameMap.values()).sort((a, b) =>
       a.value.localeCompare(b.value),
     );
+    const nodes = nodeName.map((node) => ({
+      nodeName: node.value,
+      nodePath: node.path,
+      nodeType:
+        UserDbController.humanizeFilterLabel(node.nodeType) || node.nodeType,
+      level: node.level || 1,
+      levelLabel: (node.levelCount || 'root').toUpperCase(),
+      userCount: node.count || 0,
+      permissionCount: node.permissionCount || 0,
+      makerCount: node.makerCount || 0,
+      checkerCount: node.checkerCount || 0,
+      viewerCount: node.userCount || 0,
+    }));
 
     const category = Array.from(categoryMap.values()).sort((a, b) =>
       a.localeCompare(b),
@@ -3626,6 +3674,7 @@ export class UserDbController {
       subCategory,
       reportingManager,
       userStatusSummary,
+      nodes,
     };
   }
 

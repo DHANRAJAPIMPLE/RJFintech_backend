@@ -219,19 +219,87 @@ const workflowCompanyNodeAppliedSchema = z
       .nullable()
       .optional(),
     nodeType: optionalStringArraySchema,
+    workflowType: optionalStringArraySchema,
     module: optionalStringArraySchema,
     subCategory: optionalStringArraySchema,
+    subModule: optionalStringArraySchema,
     checker: optionalIntegerArraySchema({
       min: 1,
       max: 10,
       field: 'Checker count',
     }),
-    workflowLevels: optionalIntegerArraySchema({
+    checkerCount: optionalIntegerArraySchema({
       min: 1,
       max: 10,
-      field: 'Workflow level count',
+      field: 'Checker count',
     }),
-    levels: optionalStringArraySchema,
+    checkers: optionalIntegerArraySchema({
+      min: 1,
+      max: 10,
+      field: 'Checker count',
+    }),
+    workflowLevels: z
+      .union([
+        optionalIntegerArraySchema({
+          min: 1,
+          max: 10,
+          field: 'Workflow level count',
+        }),
+        z.coerce
+          .number()
+          .int('Workflow level count must be an integer')
+          .min(1, 'Workflow level count must be between 1 and 10')
+          .max(10, 'Workflow level count must be between 1 and 10')
+          .nullable()
+          .optional(),
+      ])
+      .optional(),
+    levels: z
+      .union([
+        optionalStringArraySchema,
+        z
+          .array(
+            z
+              .object({
+                count: z.coerce
+                  .number()
+                  .int('Level count must be an integer')
+                  .min(1, 'Level count must be between 1 and 5')
+                  .max(5, 'Level count must be between 1 and 5'),
+                approverType: z.string().trim().min(1).optional(),
+              })
+              .strict(),
+          )
+          .nullable()
+          .optional(),
+      ])
+      .optional(),
+    approverType: optionalStringArraySchema,
+    hasLinkedOrg: z
+      .preprocess(
+        (value) =>
+          typeof value === 'string' ? value.trim().toLowerCase() : value,
+        z.enum(['yes', 'no']).nullable().optional(),
+      )
+      .optional(),
+    onboardingDate: z
+      .object({
+        dateRange: z
+          .preprocess(
+            (value) =>
+              typeof value === 'string' ? value.trim().toUpperCase() : value,
+            z
+              .enum(['7DAYS', '15DAYS', '1MONTH', '1YEAR', 'CUSTOM'])
+              .nullable()
+              .optional(),
+          )
+          .optional(),
+        fromDate: optionalDateStringSchema.nullable().optional(),
+        toDate: optionalDateStringSchema.nullable().optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 

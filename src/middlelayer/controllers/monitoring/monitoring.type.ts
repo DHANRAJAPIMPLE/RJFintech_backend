@@ -59,12 +59,21 @@ export type MonitoringFilterSummary = {
   responseSizeRanges: MonitoringResponseSizeFilterItem[];
 };
 
-export type FetchMonitoringSpansResponse = {
+export type FetchMonitoringSpansListResponse = {
   data: FetchMonitoringSpanItem[];
   totalCount: number;
   pageInfo: MonitoringListPageInfo;
   filter: MonitoringFilterSummary;
 };
+
+export type FetchMonitoringSoftFilterResponse = {
+  softFilter: true;
+  filter: MonitoringFilterSummary;
+};
+
+export type FetchMonitoringSpansResponse =
+  | FetchMonitoringSpansListResponse
+  | FetchMonitoringSoftFilterResponse;
 
 export type FetchMonitoringSpanInternalItem = FetchMonitoringSpanItem & {
   subCount: string | null;
@@ -134,6 +143,7 @@ export type FetchMonitoringSpansInternalResponse =
       pageInfo: MonitoringListPageInfo;
       filter: MonitoringFilterSummary;
     }
+  | FetchMonitoringSoftFilterResponse
   | MonitoringApiErrorResponse;
 
 export type FetchMonitoringDetailsInternalResponse =

@@ -11,6 +11,8 @@ import {
 import type {
   FetchMonitoringDetailsInternalResponse,
   FetchMonitoringDetailsResponse,
+  FetchMonitoringSpansListResponse,
+  FetchMonitoringSoftFilterResponse,
   FetchMonitoringSpanInternalItem,
   FetchMonitoringSpansInternalResponse,
   FetchMonitoringSpansResponse,
@@ -18,9 +20,20 @@ import type {
 } from './monitoring.type';
 
 export class MonitoringController {
+  private static isSoftFilterResponse(
+    payload: FetchMonitoringSpansInternalResponse,
+  ): payload is FetchMonitoringSoftFilterResponse {
+    return (
+      payload !== null &&
+      typeof payload === 'object' &&
+      'softFilter' in payload &&
+      payload.softFilter === true
+    );
+  }
+
   private static formatFetchAllSpan(
     span: FetchMonitoringSpanInternalItem,
-  ): FetchMonitoringSpansResponse['data'][number] {
+  ): FetchMonitoringSpansListResponse['data'][number] {
     return {
       trackingId: span.trackingId,
       apiUrl: span.apiUrl,
@@ -63,6 +76,11 @@ export class MonitoringController {
         FetchMonitoringSpansInternalResponse,
         MonitoringApiErrorResponse
       >;
+
+      if (MonitoringController.isSoftFilterResponse(spans)) {
+        return res.status(200).json(spans);
+      }
+
       return res.status(200).json({
         data: spans.data.map(MonitoringController.formatFetchAllSpan),
         totalCount: spans.totalCount,

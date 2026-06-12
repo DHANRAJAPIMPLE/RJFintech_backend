@@ -183,6 +183,7 @@ const monitoringAppliedFiltersSchema = z
 export const monitoringFetchAllSchema = z
   .object({
     ...cursorPaginationFields,
+    softFilter: z.boolean().optional(),
     filter: z.union([z.boolean(), monitoringAppliedFiltersSchema]).optional(),
     applied: monitoringAppliedFiltersSchema.nullable().optional(),
     date: monitoringDateRangeSchema,
