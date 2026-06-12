@@ -75,15 +75,6 @@ export type UserCompanyNodeFilterDropdowns = {
   reportingManager: string[];
   userStatusSummary: UserCompanyNodeFilterUserStatusSummary;
   permissionSummary: UserCompanyNodeFilterPermissionSummary;
-  nodes?: Array<{
-    nodeName: string;
-    nodePath: string;
-    nodeType: string;
-    level: number;
-    levelLabel: string;
-    userCount: number;
-    permissionCount: number;
-  }>;
 };
 
 export type FetchCompanyNodeFilterResponse = {
@@ -92,6 +83,21 @@ export type FetchCompanyNodeFilterResponse = {
   subCategory: 'USER_ACC';
   dropdowns: UserCompanyNodeFilterDropdowns;
 };
+
+export type FetchCompanyNodeFilterInternalResponse =
+  FetchCompanyNodeFilterResponse & {
+    dropdowns: UserCompanyNodeFilterDropdowns & {
+      nodes?: Array<{
+        nodeName: string;
+        nodePath: string;
+        nodeType: string;
+        level: number;
+        levelLabel: string;
+        userCount: number;
+        permissionCount: number;
+      }>;
+    };
+  };
 
 export type FetchCompanyWorkflowFilterResponse = {
   filter?: true;
@@ -125,40 +131,43 @@ export type FetchCompanyWorkflowFilterResponse = {
     totalLevelCount: number;
     uniqueLevelCount: number;
   };
-  nodes?: Array<{
-    nodeName: string;
-    nodePath: string;
-    nodeType: string;
-    level: number;
-    levelLabel: string;
-    workflowCount: number;
-    moduleCount: number;
-    workflows: Array<{
-      levelsHash: string;
-      name: string;
-      alias: string;
-      module: string;
-      subModule: string;
-      status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
-      checkerCount: number;
-      levelCount: number;
-      levels: Array<{
-        level: number;
-        label: string;
-      }>;
-    }>;
-  }>;
 };
 
+export type FetchCompanyWorkflowFilterInternalResponse =
+  FetchCompanyWorkflowFilterResponse & {
+    nodes?: Array<{
+      nodeName: string;
+      nodePath: string;
+      nodeType: string;
+      level: number;
+      levelLabel: string;
+      workflowCount: number;
+      moduleCount: number;
+      workflows: Array<{
+        levelsHash: string;
+        name: string;
+        alias: string;
+        module: string;
+        subModule: string;
+        status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
+        checkerCount: number;
+        levelCount: number;
+        levels: Array<{
+          level: number;
+          label: string;
+        }>;
+      }>;
+    }>;
+  };
+
 export type FetchCompanyNodesInternalResponse =
+  | UserCompanyNodeInternal[]
   | {
-      nodes?: UserCompanyNodeInternal[];
       message?: string;
       error?: string;
     }
-  | UserCompanyNodeInternal[]
-  | FetchCompanyNodeFilterResponse
-  | FetchCompanyWorkflowFilterResponse;
+  | FetchCompanyNodeFilterInternalResponse
+  | FetchCompanyWorkflowFilterInternalResponse;
 
 export type FetchCompanyNodesResponse = {
   message: 'User nodes fetched successfully!' | 'User nodes not found';

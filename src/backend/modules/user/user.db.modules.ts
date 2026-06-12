@@ -9641,9 +9641,7 @@ export class UserDbController {
           };
         });
 
-        return res.status(200).json({
-          nodes,
-        });
+        return res.status(200).json(nodes);
       } else {
         if (!workflowSubCategory) {
           return res.status(200).json([]);
@@ -9731,9 +9729,7 @@ export class UserDbController {
               index === self.findIndex((t) => t.nodePath === node.nodePath),
           );
 
-        return res.status(200).json({
-          nodes,
-        });
+        return res.status(200).json(nodes);
       }
     } catch (error) {
       next(error);

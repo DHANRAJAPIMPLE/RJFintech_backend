@@ -834,8 +834,12 @@ const buildMonitoringWhere = async (input: Record<string, unknown>) => {
     : {};
   const userFilter = filters.users.length
     ? {
-        userId: {
-          in: filters.users,
+        user: {
+          is: {
+            OR: filters.users.map((email) => ({
+              email: { equals: email, mode: 'insensitive' as const },
+            })),
+          },
         },
       }
     : {};
@@ -960,7 +964,6 @@ const fetchMonitoringFilterSummary = async (where: Record<string, unknown>) => {
 
         const user = userById.get(item.userId);
         return {
-          userId: item.userId,
           userName: user?.name ?? null,
           userEmail: user?.email ?? null,
           count: item._count._all,

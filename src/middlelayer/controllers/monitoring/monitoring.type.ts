@@ -28,7 +28,6 @@ export type MonitoringFilterCountItem = {
 };
 
 export type MonitoringUserFilterItem = MonitoringFilterCountItem & {
-  userId: string;
   userName: string | null;
   userEmail: string | null;
 };

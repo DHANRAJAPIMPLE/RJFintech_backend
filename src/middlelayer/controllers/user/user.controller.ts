@@ -1022,7 +1022,8 @@ export class UserController {
         payload !== null &&
         typeof payload === 'object' &&
         'filter' in payload &&
-        payload.filter === true;
+        payload.filter === true &&
+        'dropdowns' in payload;
       const isWorkflowFilterResponse = (
         payload: FetchCompanyNodesInternalResponse,
       ): payload is Extract<
@@ -1044,7 +1045,6 @@ export class UserController {
       const isNodeEnvelope = (
         payload: FetchCompanyNodesInternalResponse,
       ): payload is {
-        nodes?: UserCompanyNodeInternal[];
         message?: string;
         error?: string;
       } =>
@@ -1070,15 +1070,24 @@ export class UserController {
         );
       }
 
-      if (isFilterResponse(data) || isWorkflowFilterResponse(data)) {
-        return res.status(200).json(data);
+      if (isFilterResponse(data)) {
+        const { nodes: _nodes, ...dropdowns } = data.dropdowns;
+
+        return res.status(200).json({
+          ...data,
+          dropdowns,
+        });
+      }
+
+      if (isWorkflowFilterResponse(data)) {
+        const { nodes: _nodes, ...workflowResponse } = data;
+
+        return res.status(200).json(workflowResponse);
       }
 
       const rawNodes: UserCompanyNodeInternal[] = Array.isArray(data)
         ? data
-        : isNodeEnvelope(data)
-          ? data.nodes || []
-          : [];
+        : [];
       const nodes: UserCompanyNode[] = rawNodes.map((node) => ({
         nodeName: node.nodeName,
         nodePath: node.nodePath,
