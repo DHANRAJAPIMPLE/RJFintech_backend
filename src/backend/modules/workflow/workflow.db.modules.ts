@@ -53,6 +53,7 @@ type NormalizedWorkflowListAppliedFilters = {
   workflowType: string[];
   module: string[];
   subModule: string[];
+  checkerCounts: number[];
   levels: NormalizedWorkflowLevelFilter[];
   workflowLevels: number | null;
   approverType: string[];
@@ -97,6 +98,35 @@ export class WorkflowDbController {
         values
           .map((value) => WorkflowDbController.compactFilterValue(value))
           .filter((value): value is string => Boolean(value)),
+      ),
+    );
+  }
+
+  private static normalizeAppliedNumberValues(
+    values: unknown,
+    options: { min: number; max: number },
+  ) {
+    const items =
+      typeof values === 'string'
+        ? values.includes(',')
+          ? values.split(',')
+          : [values]
+        : Array.isArray(values)
+          ? values
+          : values === undefined || values === null || values === ''
+            ? []
+            : [values];
+
+    return Array.from(
+      new Set(
+        items
+          .map((value) => Number(value))
+          .filter(
+            (value) =>
+              Number.isInteger(value) &&
+              value >= options.min &&
+              value <= options.max,
+          ),
       ),
     );
   }
@@ -262,6 +292,10 @@ export class WorkflowDbController {
       subModule: WorkflowDbController.normalizeAppliedFilterValues(
         source.subModule,
       ),
+      checkerCounts: WorkflowDbController.normalizeAppliedNumberValues(
+        source.checker ?? source.checkerCount ?? source.checkers,
+        { min: 1, max: 10 },
+      ),
       levels,
       workflowLevels: validWorkflowLevels,
       approverType,
@@ -284,6 +318,7 @@ export class WorkflowDbController {
       normalized.workflowType.length > 0 ||
       normalized.module.length > 0 ||
       normalized.subModule.length > 0 ||
+      normalized.checkerCounts.length > 0 ||
       normalized.levels.length > 0 ||
       normalized.workflowLevels !== null ||
       normalized.approverType.length > 0 ||
@@ -346,10 +381,51 @@ export class WorkflowDbController {
     return [];
   }
 
+  private static extractCheckerCountFromAlias(alias: unknown) {
+    const normalized = WorkflowDbController.normalizeFilterText(alias);
+    if (!normalized) return null;
+
+    const match = normalized.match(/_(\d+)C(?:_|$)/i);
+    if (!match) return null;
+
+    const count = Number(match[1]);
+    return Number.isInteger(count) && count >= 0 ? count : null;
+  }
+
+  private static countWorkflowCheckersFromLevels(levels: unknown) {
+    return WorkflowDbController.workflowLevelsFromPayload(levels).reduce(
+      (total, level) =>
+        total + (level.approver2 && level.approverType === 'AND' ? 2 : 1),
+      0,
+    );
+  }
+
+  private static resolveWorkflowCheckerCount(alias: unknown, levels?: unknown) {
+    const aliasCount = WorkflowDbController.extractCheckerCountFromAlias(alias);
+    if (aliasCount !== null) return aliasCount;
+    if (levels === undefined) return null;
+
+    return WorkflowDbController.countWorkflowCheckersFromLevels(levels);
+  }
+
   private static matchesWorkflowLevels(
     levels: any[],
+    alias: unknown,
     filters: NormalizedWorkflowListAppliedFilters,
   ) {
+    if (filters.checkerCounts.length > 0) {
+      const checkerCount = WorkflowDbController.resolveWorkflowCheckerCount(
+        alias,
+        levels,
+      );
+      if (
+        checkerCount === null ||
+        !filters.checkerCounts.includes(checkerCount)
+      ) {
+        return false;
+      }
+    }
+
     if (
       filters.workflowLevels !== null &&
       levels.length !== filters.workflowLevels
@@ -440,7 +516,9 @@ export class WorkflowDbController {
     ) {
       return false;
     }
-    if (!WorkflowDbController.matchesWorkflowLevels(levels, filters)) {
+    if (
+      !WorkflowDbController.matchesWorkflowLevels(levels, row.alias, filters)
+    ) {
       return false;
     }
     if (
@@ -463,9 +541,9 @@ export class WorkflowDbController {
   ) {
     const data = (row.data as any) || {};
     const target = data.target || {};
-    const levels = WorkflowDbController.workflowLevelsFromPayload(
-      data.levels || associatedWorkflow?.levels || {},
-    );
+    const levelSource = data.levels || associatedWorkflow?.levels || {};
+    const levels = WorkflowDbController.workflowLevelsFromPayload(levelSource);
+    const alias = row.alias || data.alias || associatedWorkflow?.alias || null;
     const workflowType =
       data.workflowType || data.type || associatedWorkflow?.type || null;
     const module =
@@ -521,7 +599,9 @@ export class WorkflowDbController {
     ) {
       return false;
     }
-    if (!WorkflowDbController.matchesWorkflowLevels(levels, filters)) {
+    if (
+      !WorkflowDbController.matchesWorkflowLevels(levels, alias, filters)
+    ) {
       return false;
     }
     if (filters.hasLinkedOrg !== null) {

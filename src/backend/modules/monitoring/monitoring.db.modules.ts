@@ -67,6 +67,12 @@ type MonitoringFilters = {
   subTrack: number[];
 };
 
+type MonitoringSummaryBucket = {
+  label: string;
+  minBytes: number;
+  maxBytes: number | null;
+};
+
 type CreateApiSpanInput = {
   trackingId: string;
   subCount?: string | null;
@@ -557,6 +563,14 @@ const getAppliedMonitoringFilterInput = (
     return input.applied as Record<string, unknown>;
   }
 
+  if (
+    input.filter &&
+    typeof input.filter === 'object' &&
+    !Array.isArray(input.filter)
+  ) {
+    return input.filter as Record<string, unknown>;
+  }
+
   if (input.filter === true) {
     return {};
   }
@@ -701,6 +715,208 @@ const resolveSubTrackTrackingIds = async (
     .map((count) => count.trackingId);
 };
 
+const buildMonitoringWhere = async (input: Record<string, unknown>) => {
+  const filters = resolveMonitoringFilters(input);
+  const query = filters.query;
+
+  const queryFilter: any = query
+    ? {
+        OR: [
+          { url: { contains: query, mode: 'insensitive' as const } },
+          { ipAddress: { contains: query, mode: 'insensitive' as const } },
+          { trackingId: { contains: query, mode: 'insensitive' as const } },
+          {
+            company: {
+              is: {
+                legalName: { contains: query, mode: 'insensitive' as const },
+              },
+            },
+          },
+          {
+            company: {
+              is: {
+                companyCode: {
+                  contains: query,
+                  mode: 'insensitive' as const,
+                },
+              },
+            },
+          },
+          {
+            user: {
+              is: {
+                name: { contains: query, mode: 'insensitive' as const },
+              },
+            },
+          },
+          {
+            user: {
+              is: {
+                email: { contains: query, mode: 'insensitive' as const },
+              },
+            },
+          },
+        ],
+      }
+    : {};
+  const createdAtFilter = resolveCreatedAtFilter(filters);
+  const statusFilter = resolveStatusFilter(filters.status);
+  const responseSizeRangeFilter = resolveResponseSizeRangeFilter(
+    filters.responseSizeRange,
+  );
+  const subTrackTrackingIds = await resolveSubTrackTrackingIds(
+    filters.subTrack,
+  );
+
+  const filterParts = [
+    queryFilter,
+    statusFilter,
+    responseSizeRangeFilter,
+    createdAtFilter ? { createdAt: createdAtFilter } : {},
+    subTrackTrackingIds
+      ? {
+          trackingId: {
+            in: subTrackTrackingIds,
+          },
+        }
+      : {},
+  ].filter((filter) => Object.keys(filter).length > 0);
+
+  return {
+    filters,
+    where: {
+      type: 'MIDDLELAYER',
+      ...(filterParts.length > 0 ? { AND: filterParts } : {}),
+    } as any,
+  };
+};
+
+const monitoringResponseSizeBuckets: MonitoringSummaryBucket[] = [
+  { label: '0 - 50 KB', minBytes: 0, maxBytes: 50 * 1024 },
+  { label: '50 - 100 KB', minBytes: 50 * 1024, maxBytes: 100 * 1024 },
+  { label: '100 - 250 KB', minBytes: 100 * 1024, maxBytes: 250 * 1024 },
+  { label: '250 - 500 KB', minBytes: 250 * 1024, maxBytes: 500 * 1024 },
+  { label: '500 KB - 1 MB', minBytes: 500 * 1024, maxBytes: 1024 * 1024 },
+  { label: '1 MB+', minBytes: 1024 * 1024, maxBytes: null },
+];
+
+const buildMonitoringResponseSizeBucketWhere = (
+  where: Record<string, unknown>,
+  bucket: MonitoringSummaryBucket,
+) => ({
+  AND: [
+    where,
+    {
+      responseSize: {
+        gte: bucket.minBytes,
+        ...(bucket.maxBytes === null ? {} : { lt: bucket.maxBytes }),
+      },
+    },
+  ],
+});
+
+const fetchMonitoringFilterSummary = async (where: Record<string, unknown>) => {
+  const userCounts = await prisma.apiSpan.groupBy({
+    by: ['userId'],
+    where: {
+      AND: [where as any, { userId: { not: null } }],
+    },
+    _count: {
+      _all: true,
+    },
+  });
+  const [users, ipCounts, urlCounts, statusCounts, bucketCounts] =
+    await Promise.all([
+      prisma.user.findMany({
+        where: {
+          id: {
+            in: userCounts
+              .map((item) => item.userId)
+              .filter((item): item is string => Boolean(item)),
+          },
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      }),
+      prisma.apiSpan.groupBy({
+        by: ['ipAddress'],
+        where: {
+          AND: [where as any, { ipAddress: { not: null } }],
+        },
+        _count: {
+          _all: true,
+        },
+      }),
+      prisma.apiSpan.groupBy({
+        by: ['url'],
+        where: where as any,
+        _count: {
+          _all: true,
+        },
+      }),
+      prisma.apiSpan.groupBy({
+        by: ['statusCode'],
+        where: {
+          AND: [where as any, { statusCode: { not: null } }],
+        },
+        _count: {
+          _all: true,
+        },
+      }),
+      Promise.all(
+        monitoringResponseSizeBuckets.map(async (bucket) => ({
+          ...bucket,
+          count: await prisma.apiSpan.count({
+            where: buildMonitoringResponseSizeBucketWhere(where, bucket) as any,
+          }),
+        })),
+      ),
+    ]);
+
+  const userById = new Map(users.map((user) => [user.id, user]));
+
+  return {
+    users: userCounts
+      .map((item) => {
+        if (!item.userId) return null;
+
+        const user = userById.get(item.userId);
+        return {
+          userId: item.userId,
+          userName: user?.name ?? null,
+          userEmail: user?.email ?? null,
+          count: item._count._all,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .sort((left, right) => right.count - left.count),
+    ips: ipCounts
+      .filter((item) => typeof item.ipAddress === 'string' && item.ipAddress)
+      .map((item) => ({
+        ip: item.ipAddress as string,
+        count: item._count._all,
+      }))
+      .sort((left, right) => right.count - left.count),
+    urls: urlCounts
+      .map((item) => ({
+        apiUrl: item.url,
+        count: item._count._all,
+      }))
+      .sort((left, right) => right.count - left.count),
+    statusCodes: statusCounts
+      .filter((item) => item.statusCode !== null)
+      .map((item) => ({
+        statusCode: item.statusCode as number,
+        count: item._count._all,
+      }))
+      .sort((left, right) => right.count - left.count),
+    responseSizeRanges: bucketCounts,
+  };
+};
+
 const formatDetailParentSpan = (row: SpanRow) => ({
   trackingId: row.trackingId,
   subCount: row.subCount,
@@ -765,81 +981,12 @@ export class MonitoringService {
   }
 
   static async fetchAllMiddlelayerSpans(input: Record<string, unknown>) {
-    const filters = resolveMonitoringFilters(input);
-    const query = filters.query;
+    const { filters, where } = await buildMonitoringWhere(input);
     const pagination = resolveCursorPagination(input);
     const monitoringCursor = decodeMonitoringCursor(
       getMonitoringRawCursor(input, pagination),
     );
     const monitoringTopCursor = decodeMonitoringCursor(input.topCursor);
-
-    const queryFilter: any = query
-      ? {
-          OR: [
-            { url: { contains: query, mode: 'insensitive' as const } },
-            { ipAddress: { contains: query, mode: 'insensitive' as const } },
-            { trackingId: { contains: query, mode: 'insensitive' as const } },
-            {
-              company: {
-                is: {
-                  legalName: { contains: query, mode: 'insensitive' as const },
-                },
-              },
-            },
-            {
-              company: {
-                is: {
-                  companyCode: {
-                    contains: query,
-                    mode: 'insensitive' as const,
-                  },
-                },
-              },
-            },
-            {
-              user: {
-                is: {
-                  name: { contains: query, mode: 'insensitive' as const },
-                },
-              },
-            },
-            {
-              user: {
-                is: {
-                  email: { contains: query, mode: 'insensitive' as const },
-                },
-              },
-            },
-          ],
-        }
-      : {};
-    const createdAtFilter = resolveCreatedAtFilter(filters);
-    const statusFilter = resolveStatusFilter(filters.status);
-    const responseSizeRangeFilter = resolveResponseSizeRangeFilter(
-      filters.responseSizeRange,
-    );
-    const subTrackTrackingIds = await resolveSubTrackTrackingIds(
-      filters.subTrack,
-    );
-
-    const filterParts = [
-      queryFilter,
-      statusFilter,
-      responseSizeRangeFilter,
-      createdAtFilter ? { createdAt: createdAtFilter } : {},
-      subTrackTrackingIds
-        ? {
-            trackingId: {
-              in: subTrackTrackingIds,
-            },
-          }
-        : {},
-    ].filter((filter) => Object.keys(filter).length > 0);
-
-    const where: any = {
-      type: 'MIDDLELAYER',
-      ...(filterParts.length > 0 ? { AND: filterParts } : {}),
-    };
 
     const pageWhere = pagination.cursor
       ? appendResponseSizeCursorWhere(
@@ -857,7 +1004,7 @@ export class MonitoringService {
           filters.responseSizeSort,
         )
       : null;
-    const [totalCount, parentRows, newCount] = await Promise.all([
+    const [totalCount, parentRows, newCount, filter] = await Promise.all([
       prisma.apiSpan.count({ where }),
       findMiddlelayerMonitoringRows(
         pageWhere,
@@ -867,6 +1014,7 @@ export class MonitoringService {
       newWhere
         ? prisma.apiSpan.count({ where: newWhere as any })
         : Promise.resolve(0),
+      fetchMonitoringFilterSummary(where),
     ]);
     const pageData = buildMonitoringPage(
       parentRows,
@@ -901,6 +1049,7 @@ export class MonitoringService {
       ),
       totalCount,
       pageInfo: pageData.pageInfo,
+      filter,
     };
   }
 

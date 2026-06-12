@@ -59,6 +59,32 @@ const optionalStringArraySchema = z.preprocess(
   z.array(z.string().trim().min(1)).nullable().optional(),
 );
 
+const optionalIntegerArraySchema = ({
+  min,
+  max,
+  field,
+}: {
+  min: number;
+  max: number;
+  field: string;
+}) =>
+  z.preprocess(
+    (value) => {
+      if (value === undefined || value === null) return undefined;
+      return value;
+    },
+    z
+      .array(
+        z.coerce
+          .number()
+          .int(`${field} must be an integer`)
+          .min(min, `${field} must be between ${min} and ${max}`)
+          .max(max, `${field} must be between ${min} and ${max}`),
+      )
+      .nullable()
+      .optional(),
+  );
+
 const optionalDateStringSchema = z.preprocess(
   (value) => {
     if (value === undefined || value === null || value === '') {
@@ -180,6 +206,32 @@ const fetchAllUserAppliedSchema = z
         z.enum(['yes', 'no']).nullable().optional(),
       )
       .optional(),
+  })
+  .strict();
+
+const workflowCompanyNodeAppliedSchema = z
+  .object({
+    nodeName: z
+      .object({
+        values: optionalStringArraySchema,
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    nodeType: optionalStringArraySchema,
+    module: optionalStringArraySchema,
+    subCategory: optionalStringArraySchema,
+    checker: optionalIntegerArraySchema({
+      min: 1,
+      max: 10,
+      field: 'Checker count',
+    }),
+    workflowLevels: optionalIntegerArraySchema({
+      min: 1,
+      max: 10,
+      field: 'Workflow level count',
+    }),
+    levels: optionalStringArraySchema,
   })
   .strict();
 
@@ -450,6 +502,10 @@ export const userCompanyNodesSchema = z.object({
     .nullable()
     .optional(),
   filter: z.boolean().optional(),
+  applied: z
+    .union([fetchAllUserAppliedSchema, workflowCompanyNodeAppliedSchema])
+    .nullable()
+    .optional(),
 });
 
 export const userFetchByNodePathCountSchema = z.object({

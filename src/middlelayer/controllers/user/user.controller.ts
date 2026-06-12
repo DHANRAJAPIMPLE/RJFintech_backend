@@ -993,7 +993,7 @@ export class UserController {
     next: NextFunction,
   ) {
     try {
-      const { subCategory, filter } = zodParse(
+      const { subCategory, filter, applied } = zodParse(
         userCompanyNodesSchema,
         req.body,
       );
@@ -1012,6 +1012,7 @@ export class UserController {
             companyId,
             subCategory,
             filter: filter === true,
+            applied: filter === true ? (applied ?? null) : null,
           },
         );
       const isFilterResponse = (

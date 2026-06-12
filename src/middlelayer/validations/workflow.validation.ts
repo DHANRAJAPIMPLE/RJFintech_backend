@@ -101,6 +101,45 @@ const optionalStringArraySchema = z.preprocess((value) => {
   return value;
 }, z.array(z.string().trim().min(1)).nullable().optional());
 
+const optionalIntegerArraySchema = (
+  options: { min: number; max: number; field: string },
+) =>
+  z.preprocess(
+    (value) => {
+      const normalize = (item: unknown) => {
+        if (item === undefined || item === null || item === '') return null;
+        return item;
+      };
+
+      if (Array.isArray(value)) return value.map(normalize).filter(Boolean);
+      if (typeof value === 'string' && value.includes(',')) {
+        return value
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+
+      const normalized = normalize(value);
+      return normalized === null ? undefined : [normalized];
+    },
+    z
+      .array(
+        z.coerce
+          .number()
+          .int(`${options.field} must be an integer`)
+          .min(
+            options.min,
+            `${options.field} must be between ${options.min} and ${options.max}`,
+          )
+          .max(
+            options.max,
+            `${options.field} must be between ${options.min} and ${options.max}`,
+          ),
+      )
+      .nullable()
+      .optional(),
+  );
+
 const optionalDateStringSchema = z.preprocess(
   (value) => {
     if (value === undefined || value === null || value === '') {
@@ -178,6 +217,11 @@ const workflowAppliedFilterSchema = z
     workflowType: optionalStringArraySchema,
     module: optionalStringArraySchema,
     subModule: optionalStringArraySchema,
+    checker: optionalIntegerArraySchema({
+      min: 1,
+      max: 10,
+      field: 'Checker count',
+    }),
     levels: z.array(workflowLevelFilterSchema).nullable().optional(),
     workflowLevels: z.coerce
       .number()

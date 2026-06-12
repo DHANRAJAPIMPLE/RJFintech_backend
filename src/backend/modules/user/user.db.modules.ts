@@ -42,12 +42,29 @@ type CompanyNodeFilterNodeTypeOption = {
 type CompanyNodeFilterNodeOption = {
   value: string;
   path: string;
+  count?: number;
+  level?: number;
+  levelCount?: string;
+  permissionCount?: number;
+  makerCount?: number;
+  checkerCount?: number;
+  userCount?: number;
 };
 
 type CompanyNodeFilterUserStatusSummary = {
   active: number;
   pending: number;
   inactive: number;
+};
+
+type CompanyWorkflowFilterApplied = {
+  nodeValues: string[];
+  nodeType: string[];
+  module: string[];
+  subCategory: string[];
+  checkerCounts: number[];
+  workflowLevels: number[];
+  levels: string[];
 };
 
 type UserAccessVisibilityNode = {
@@ -1693,6 +1710,72 @@ export class UserDbController {
     );
   }
 
+  private static normalizeAppliedNumberValues(
+    values: unknown,
+    limits: { min: number; max: number },
+  ) {
+    if (!Array.isArray(values)) return [];
+
+    return Array.from(
+      new Set(
+        values
+          .map((value) => Number(value))
+          .filter(
+            (value) =>
+              Number.isInteger(value) &&
+              value >= limits.min &&
+              value <= limits.max,
+          ),
+      ),
+    );
+  }
+
+  private static normalizeWorkflowCompanyFilters(
+    applied: unknown,
+  ): CompanyWorkflowFilterApplied | null {
+    const source =
+      applied && typeof applied === 'object'
+        ? (applied as Record<string, unknown>)
+        : null;
+    if (!source) return null;
+
+    const nodeName =
+      source.nodeName && typeof source.nodeName === 'object'
+        ? (source.nodeName as Record<string, unknown>)
+        : null;
+    const nodeValues =
+      typeof source.nodeName === 'string' ? [source.nodeName] : nodeName?.values;
+
+    const normalized: CompanyWorkflowFilterApplied = {
+      nodeValues: UserDbController.normalizeAppliedFilterValues(nodeValues),
+      nodeType: UserDbController.normalizeAppliedFilterValues(source.nodeType),
+      module: UserDbController.normalizeAppliedFilterValues(source.module),
+      subCategory: UserDbController.normalizeAppliedFilterValues(
+        source.subCategory,
+      ),
+      checkerCounts: UserDbController.normalizeAppliedNumberValues(
+        source.checker ?? source.checkerCount ?? source.checkers,
+        { min: 1, max: 10 },
+      ),
+      workflowLevels: UserDbController.normalizeAppliedNumberValues(
+        source.workflowLevels,
+        { min: 1, max: 10 },
+      ),
+      levels: UserDbController.normalizeAppliedFilterValues(source.levels),
+    };
+
+    const hasFilters =
+      normalized.nodeValues.length > 0 ||
+      normalized.nodeType.length > 0 ||
+      normalized.module.length > 0 ||
+      normalized.subCategory.length > 0 ||
+      normalized.checkerCounts.length > 0 ||
+      normalized.workflowLevels.length > 0 ||
+      normalized.levels.length > 0;
+
+    return hasFilters ? normalized : null;
+  }
+
   private static parseUserFilterDateRange(applied: any) {
     const onboardingDate =
       applied && typeof applied === 'object' ? applied.onboardingDate : null;
@@ -1920,6 +2003,7 @@ export class UserDbController {
   private static matchesRoleFilter(access: any, acceptedValues: string[]) {
     if (acceptedValues.length === 0) return true;
 
+    const accessRoleBucket = UserDbController.resolveAccessRoleBucket(access);
     const permissionLevel = String(
       access?.permissionLevel ?? access?.role?.permissionLevel ?? '',
     ).toUpperCase();
@@ -1927,40 +2011,19 @@ export class UserDbController {
     const canModify = Boolean(access?.canModify ?? access?.role?.modify);
     const canApprove = Boolean(access?.canApprove ?? access?.role?.approve);
     const canInitiate = Boolean(access?.canInitiate ?? access?.role?.initiate);
-    const isMaker =
-      permissionLevel === 'USER' ||
-      (permissionLevel === '' &&
-        canView &&
-        canModify &&
-        canInitiate &&
-        !canApprove);
-    const isChecker =
-      permissionLevel === 'MANAGER' ||
-      (permissionLevel === '' &&
-        canView &&
-        canApprove &&
-        !canModify &&
-        !canInitiate);
-    const isViewer =
-      permissionLevel === 'VIEWER' ||
-      (permissionLevel === '' &&
-        canView &&
-        !canModify &&
-        !canApprove &&
-        !canInitiate);
     const normalizedRoleName = UserDbController.compactFilterValue(
       access?.roleName ?? access?.role?.roleName,
     );
 
     return acceptedValues.some((accepted) => {
       if (accepted === 'maker') {
-        return isMaker;
+        return accessRoleBucket === 'maker';
       }
       if (accepted === 'checker') {
-        return isChecker;
+        return accessRoleBucket === 'checker';
       }
       if (accepted === 'user' || accepted === 'viewer') {
-        return isViewer;
+        return accessRoleBucket === 'user';
       }
 
       if (!normalizedRoleName) return false;
@@ -1969,6 +2032,39 @@ export class UserDbController {
         normalizedRoleName === accepted || normalizedRoleName.includes(accepted)
       );
     });
+  }
+
+  private static resolveAccessRoleBucket(access: any) {
+    const permissionLevel = String(
+      access?.permissionLevel ?? access?.role?.permissionLevel ?? '',
+    ).toUpperCase();
+    const canView = Boolean(access?.canView ?? access?.role?.view);
+    const canModify = Boolean(access?.canModify ?? access?.role?.modify);
+    const canApprove = Boolean(access?.canApprove ?? access?.role?.approve);
+    const canInitiate = Boolean(access?.canInitiate ?? access?.role?.initiate);
+
+    if (
+      permissionLevel === 'MANAGER' ||
+      (canApprove && !canModify && !canInitiate)
+    ) {
+      return 'checker' as const;
+    }
+
+    if (
+      permissionLevel === 'VIEWER' ||
+      (canView && !canModify && !canApprove && !canInitiate)
+    ) {
+      return 'user' as const;
+    }
+
+    if (
+      permissionLevel === 'USER' ||
+      ((canInitiate || canModify) && !canApprove)
+    ) {
+      return 'maker' as const;
+    }
+
+    return null;
   }
 
   private static matchesCreatedAtRange(
@@ -3162,6 +3258,7 @@ export class UserDbController {
   private static async buildUserAccFilterDropdowns(
     userId: string,
     companyId: string,
+    applied?: unknown,
   ) {
     const pendingOrgNodePaths =
       await UserDbController.getPendingOrgNodePathsForFetch(companyId);
@@ -3198,7 +3295,11 @@ export class UserDbController {
             id: '__no_visible_user__',
           };
 
-    const [users, activeCount, inactiveCount, pendingUsers] = await Promise.all(
+    const appliedFilters =
+      UserDbController.normalizeUserListAppliedFilters(applied);
+
+    const [users, activeCount, inactiveCount, pendingUsers, eligibleCounts] =
+      await Promise.all(
       [
         prisma.user.findMany({
           where: {
@@ -3211,6 +3312,7 @@ export class UserDbController {
             ...visibleUserWhere,
           },
           select: {
+            id: true,
             userMappings: {
               where: {
                 companyId,
@@ -3238,17 +3340,25 @@ export class UserDbController {
                 },
               },
               select: {
+                accessType: true,
+                isGlobalAccess: true,
                 role: {
                   select: {
                     roleName: true,
                     category: true,
                     subCategory: true,
                     permissionLevel: true,
+                    view: true,
+                    modify: true,
+                    approve: true,
+                    initiate: true,
                   },
                 },
                 orgStructure: {
                   select: {
+                    nodeName: true,
                     nodePath: true,
+                    nodeType: true,
                   },
                 },
               },
@@ -3288,6 +3398,10 @@ export class UserDbController {
           query: null,
           viewerUserId: userId,
         }),
+        UserDbController.getPendingApprovalEligibleUserCounts(
+          companyId,
+          appliedFilters,
+        ),
       ],
     );
 
@@ -3296,12 +3410,79 @@ export class UserDbController {
       CompanyNodeFilterDesignationOption
     >();
     const nodeTypeCounts = new Map<string, CompanyNodeFilterNodeTypeOption>();
+    const nodeNameMap = new Map<string, CompanyNodeFilterNodeOption>();
     const categoryMap = new Map<string, string>();
     const subCategoryMap = new Map<string, Set<string>>();
     const reportingManagerMap = new Map<string, string>();
     const roleMap = new Map<string, string>();
+    const filteredUsers = users.filter((user) => {
+      const mapping = user.userMappings[0];
+      const visibleAccesses = visibility.isGlobal
+        ? user.userAccesses
+        : user.userAccesses.filter((access) =>
+            visibleNodePathSet.has(access.orgStructure.nodePath),
+          );
+      const primary = visibleAccesses
+        .filter(
+          (access) => access.isGlobalAccess === true || access.accessType === 'PRIMARY',
+        )
+        .map((access) => ({
+          roleCategory: access.role?.category || '',
+          roleSubCategory: access.role?.subCategory || '',
+          roleName: access.role?.roleName || '',
+          permissionLevel: access.role?.permissionLevel || '',
+          nodeName: access.orgStructure?.nodeName || '',
+          nodePath: access.orgStructure?.nodePath || '',
+          nodeType: access.orgStructure?.nodeType || null,
+          canView: access.role?.view || false,
+          canModify: access.role?.modify || false,
+          canApprove: access.role?.approve || false,
+          canInitiate: access.role?.initiate || false,
+        }));
+      const secondary = visibleAccesses
+        .filter(
+          (access) =>
+            access.isGlobalAccess !== true && access.accessType !== 'PRIMARY',
+        )
+        .map((access) => ({
+          roleCategory: access.role?.category || '',
+          roleSubCategory: access.role?.subCategory || '',
+          roleName: access.role?.roleName || '',
+          permissionLevel: access.role?.permissionLevel || '',
+          nodeName: access.orgStructure?.nodeName || '',
+          nodePath: access.orgStructure?.nodePath || '',
+          nodeType: access.orgStructure?.nodeType || null,
+          canView: access.role?.view || false,
+          canModify: access.role?.modify || false,
+          canApprove: access.role?.approve || false,
+          canInitiate: access.role?.initiate || false,
+        }));
+      const pendingSummary = eligibleCounts.get(user.id);
 
-    for (const user of users) {
+      return UserDbController.matchesAppliedUserFilters(
+        {
+          basicDetails: {
+            designation: mapping?.designation ?? null,
+            reportingManagerName: mapping?.manager?.name ?? null,
+            reportingManagerEmail: mapping?.manager?.email ?? null,
+            status: 'ACTIVE',
+          },
+          primary,
+          secondary,
+          isPending: false,
+        },
+        appliedFilters,
+        {
+          defaultStatus: 'ACTIVE',
+          hasPendingOverride: Boolean(pendingSummary?.count),
+          pendingApprovalSubCategories: pendingSummary
+            ? Array.from(pendingSummary.subCategories)
+            : [],
+        },
+      );
+    });
+
+    for (const user of filteredUsers) {
       const mapping = user.userMappings[0];
       const designation = UserDbController.normalizeFilterText(
         mapping?.designation,
@@ -3329,6 +3510,15 @@ export class UserDbController {
           );
 
       for (const access of visibleAccesses) {
+        const nodePath = UserDbController.normalizeFilterText(
+          access.orgStructure?.nodePath,
+        );
+        const nodeName = UserDbController.normalizeFilterText(
+          access.orgStructure?.nodeName,
+        );
+        const nodeType = UserDbController.normalizeFilterText(
+          access.orgStructure?.nodeType,
+        );
         const categoryLabel = UserDbController.humanizeFilterLabel(
           access.role?.category,
         );
@@ -3353,30 +3543,53 @@ export class UserDbController {
         if (roleName) {
           roleMap.set(roleName.toLowerCase(), roleName);
         }
+
+        const nodeTypeLabel = UserDbController.humanizeFilterLabel(nodeType);
+        if (nodeTypeLabel) {
+          const key = nodeTypeLabel.toLowerCase();
+          const current = nodeTypeCounts.get(key);
+          nodeTypeCounts.set(key, {
+            value: nodeTypeLabel,
+            count: (current?.count || 0) + 1,
+          });
+        }
+
+        if (nodePath) {
+          const level = Math.max(nodePath.split('.').filter(Boolean).length, 1);
+          const levelCount = level <= 1 ? 'root' : `level${level - 1}`;
+          const accessBucket = UserDbController.resolveAccessRoleBucket({
+            permissionLevel: access.role?.permissionLevel,
+            canView: access.role?.view,
+            canModify: access.role?.modify,
+            canApprove: access.role?.approve,
+            canInitiate: access.role?.initiate,
+          });
+          const existingNode = nodeNameMap.get(nodePath.toLowerCase());
+          nodeNameMap.set(nodePath.toLowerCase(), {
+            value: nodeName || nodePath,
+            path: nodePath,
+            level,
+            levelCount,
+            count: (existingNode?.count || 0) + 1,
+            permissionCount: (existingNode?.permissionCount || 0) + 1,
+            makerCount:
+              (existingNode?.makerCount || 0) +
+              (accessBucket === 'maker' ? 1 : 0),
+            checkerCount:
+              (existingNode?.checkerCount || 0) +
+              (accessBucket === 'checker' ? 1 : 0),
+            userCount:
+              (existingNode?.userCount || 0) +
+              (accessBucket === 'user' ? 1 : 0),
+          });
+        }
       }
     }
 
-    const nodeName: CompanyNodeFilterNodeOption[] = visibility.visibleNodes.map(
-      (node) => ({
-        value: node.nodeName,
-        path: node.nodePath,
-      }),
-    );
-    nodeName.sort((a, b) => a.value.localeCompare(b.value));
-
-    visibility.visibleNodes.forEach((node) => {
-      const label = UserDbController.humanizeFilterLabel(node.nodeType);
-      if (!label) return;
-
-      const key = label.toLowerCase();
-      const current = nodeTypeCounts.get(key);
-      nodeTypeCounts.set(key, {
-        value: label,
-        count: (current?.count || 0) + 1,
-      });
-    });
-
     const nodeType = Array.from(nodeTypeCounts.values()).sort((a, b) =>
+      a.value.localeCompare(b.value),
+    );
+    const nodeName = Array.from(nodeNameMap.values()).sort((a, b) =>
       a.value.localeCompare(b.value),
     );
 
@@ -3398,7 +3611,7 @@ export class UserDbController {
     subCategoryEntries.sort((left, right) => left[0].localeCompare(right[0]));
     const subCategory = Object.fromEntries(subCategoryEntries);
     const userStatusSummary: CompanyNodeFilterUserStatusSummary = {
-      active: activeCount,
+      active: appliedFilters ? filteredUsers.length : activeCount,
       pending: pendingUsers.pendingCount,
       inactive: inactiveCount,
     };
@@ -3419,9 +3632,19 @@ export class UserDbController {
   private static async buildWorkflowFilterDropdowns(
     userId: string,
     companyId: string,
+    applied?: unknown,
   ) {
-    const pendingOrgNodePaths =
-      await UserDbController.getPendingOrgNodePathsForFetch(companyId);
+    const [pendingOrgNodePaths, pendingWorkflowKeys, roles] = await Promise.all([
+      UserDbController.getPendingOrgNodePathsForFetch(companyId),
+      UserDbController.getPendingWorkflowKeysForFetch(companyId),
+      prisma.roles.findMany({
+        where: { isActive: true },
+        select: {
+          category: true,
+          subCategory: true,
+        },
+      }),
+    ]);
     const visibility = await UserDbController.getUserAccessVisibilityScope(
       userId,
       companyId,
@@ -3429,31 +3652,264 @@ export class UserDbController {
       'WORK_FLOW',
     );
 
-    const roles = await prisma.roles.findMany({
-      where: { isActive: true },
-      select: {
-        category: true,
-        subCategory: true,
+    const normalizedFilters =
+      UserDbController.normalizeWorkflowCompanyFilters(applied);
+
+    if (visibility.visibleNodeIds.length === 0) {
+      return {
+        filter: true,
+        workflowSubCategory: 'WORK_FLOW',
+        nodeName: [],
+        nodeType: [],
+        category: ['All'],
+        subCategory: ['Work Flow'],
+        module: [],
+        checker: [],
+        workflowLevels: [],
+        levels: [],
+        summary: {
+          nodeCount: 0,
+          workflowCount: 0,
+          moduleCount: 0,
+          checkerCount: 0,
+          totalLevelCount: 0,
+          uniqueLevelCount: 0,
+        },
+        nodes: [],
+      };
+    }
+
+    const workflows = await prisma.workflow.findMany({
+      where: {
+        companyId,
+        subModule: 'WORK_FLOW',
+        status: 'ACTIVE',
+        nodeId: { in: visibility.visibleNodeIds },
+        orgStructure: {
+          status: 'ACTIVE',
+          nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+        },
       },
+      select: {
+        id: true,
+        name: true,
+        alias: true,
+        module: true,
+        subModule: true,
+        status: true,
+        levelsHash: true,
+        orgStructure: {
+          select: {
+            id: true,
+            nodeName: true,
+            nodePath: true,
+            nodeType: true,
+          },
+        },
+        levels: {
+          orderBy: { level: 'asc' },
+          select: {
+            level: true,
+            approver2: true,
+            approverType: true,
+          },
+        },
+      },
+      orderBy: [{ orgStructure: { nodePath: 'asc' } }, { createdAt: 'desc' }],
     });
 
-    const nodeName: CompanyNodeFilterNodeOption[] = visibility.visibleNodes
-      .map((node) => ({
-        value: node.nodeName,
-        path: node.nodePath,
-      }))
-      .sort((a, b) => a.value.localeCompare(b.value));
+    const visibleWorkflows = workflows
+      .filter((workflow) => {
+        const nodePath = workflow.orgStructure?.nodePath || null;
+        return !pendingWorkflowKeys.has(
+          UserDbController.workflowIdentityKey({
+            module: workflow.module,
+            subModule: workflow.subModule,
+            nodePath,
+            levelsHash: workflow.levelsHash,
+          }) || '',
+        );
+      })
+      .map((workflow) => {
+        const nodePath = workflow.orgStructure?.nodePath || '';
+        const nodeSegments = nodePath.split('.').filter(Boolean);
+        const hierarchyLevel = Math.max(nodeSegments.length, 1);
+        const hierarchyLabel =
+          hierarchyLevel <= 1 ? 'ROOT' : `LEVEL${hierarchyLevel - 1}`;
+        const checkerCount = workflow.levels.reduce((count, level) => {
+          const hasSecondApprover =
+            Boolean(level.approver2) && String(level.approverType) === 'AND';
+          return count + (hasSecondApprover ? 2 : 1);
+        }, 0);
+        const levelNumbers = workflow.levels
+          .map((level) => Number(level.level))
+          .filter((level) => Number.isInteger(level) && level > 0);
 
+        return {
+          nodeId: workflow.orgStructure?.id || '',
+          nodeName: workflow.orgStructure?.nodeName || '',
+          nodePath,
+          nodeType: String(workflow.orgStructure?.nodeType || ''),
+          nodeTypeLabel:
+            UserDbController.humanizeFilterLabel(
+              String(workflow.orgStructure?.nodeType || ''),
+            ) || String(workflow.orgStructure?.nodeType || ''),
+          hierarchyLevel,
+          hierarchyLabel,
+          levelsHash: workflow.levelsHash,
+          name: workflow.name,
+          alias: workflow.alias,
+          module: workflow.module,
+          moduleLabel:
+            UserDbController.humanizeFilterLabel(workflow.module) ||
+            workflow.module,
+          subModule: workflow.subModule,
+          subModuleLabel:
+            UserDbController.humanizeFilterLabel(workflow.subModule) ||
+            workflow.subModule,
+          status: workflow.status,
+          checkerCount,
+          levelCount: levelNumbers.length,
+          levelNumbers,
+        };
+      });
+
+    const filteredWorkflows = normalizedFilters
+      ? visibleWorkflows.filter((workflow) => {
+          const matchesTextFilter = (
+            acceptedValues: string[],
+            ...values: Array<string | null | undefined>
+          ) => {
+            if (acceptedValues.length === 0) return true;
+            return values.some((value) => {
+              const normalizedValue =
+                UserDbController.compactFilterValue(value) || '';
+              return acceptedValues.includes(normalizedValue);
+            });
+          };
+
+          if (
+            !matchesTextFilter(
+              normalizedFilters.nodeValues,
+              workflow.nodeName,
+              workflow.nodePath,
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            !matchesTextFilter(
+              normalizedFilters.nodeType,
+              workflow.nodeType,
+              workflow.nodeTypeLabel,
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            !matchesTextFilter(
+              normalizedFilters.module,
+              workflow.module,
+              workflow.moduleLabel,
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            !matchesTextFilter(
+              normalizedFilters.subCategory,
+              workflow.subModule,
+              workflow.subModuleLabel,
+            )
+          ) {
+            return false;
+          }
+
+          if (
+            normalizedFilters.checkerCounts.length > 0 &&
+            !normalizedFilters.checkerCounts.includes(workflow.checkerCount)
+          ) {
+            return false;
+          }
+
+          if (
+            normalizedFilters.workflowLevels.length > 0 &&
+            !normalizedFilters.workflowLevels.includes(workflow.levelCount)
+          ) {
+            return false;
+          }
+
+          if (normalizedFilters.levels.length > 0) {
+            const levelLabels = workflow.levelNumbers.map(
+              (level) => `LEVEL${level}`,
+            );
+            const matchesLevel = levelLabels.some((levelLabel) =>
+              normalizedFilters.levels.includes(
+                UserDbController.compactFilterValue(levelLabel) || '',
+              ),
+            );
+            if (!matchesLevel) return false;
+          }
+
+          return true;
+        })
+      : visibleWorkflows;
+
+    const nodeNameMap = new Map<string, CompanyNodeFilterNodeOption>();
     const nodeTypeCounts = new Map<string, CompanyNodeFilterNodeTypeOption>();
-    visibility.visibleNodes.forEach((node) => {
-      const label = UserDbController.humanizeFilterLabel(node.nodeType);
-      if (!label) return;
+    const moduleCounts = new Map<string, { value: string; count: number }>();
+    const checkerCounts = new Map<number, { value: number; count: number }>();
+    const workflowLevelCounts = new Map<number, { value: number; count: number }>();
+    const levelPresenceCounts = new Map<
+      number,
+      { value: string; level: number; count: number }
+    >();
 
-      const key = label.toLowerCase();
-      const current = nodeTypeCounts.get(key);
-      nodeTypeCounts.set(key, {
-        value: label,
-        count: (current?.count || 0) + 1,
+    filteredWorkflows.forEach((workflow) => {
+      const nodeKey = workflow.nodePath.toLowerCase();
+      const existingNode = nodeNameMap.get(nodeKey);
+      nodeNameMap.set(nodeKey, {
+        value: workflow.nodeName,
+        path: workflow.nodePath,
+        count: (existingNode?.count || 0) + 1,
+      });
+
+      const nodeTypeKey = workflow.nodeTypeLabel.toLowerCase();
+      const existingNodeType = nodeTypeCounts.get(nodeTypeKey);
+      nodeTypeCounts.set(nodeTypeKey, {
+        value: workflow.nodeTypeLabel,
+        count: (existingNodeType?.count || 0) + 1,
+      });
+
+      const moduleKey = workflow.moduleLabel.toLowerCase();
+      const existingModule = moduleCounts.get(moduleKey);
+      moduleCounts.set(moduleKey, {
+        value: workflow.moduleLabel,
+        count: (existingModule?.count || 0) + 1,
+      });
+
+      const existingChecker = checkerCounts.get(workflow.checkerCount);
+      checkerCounts.set(workflow.checkerCount, {
+        value: workflow.checkerCount,
+        count: (existingChecker?.count || 0) + 1,
+      });
+
+      const existingLevelCount = workflowLevelCounts.get(workflow.levelCount);
+      workflowLevelCounts.set(workflow.levelCount, {
+        value: workflow.levelCount,
+        count: (existingLevelCount?.count || 0) + 1,
+      });
+
+      workflow.levelNumbers.forEach((level) => {
+        const existingLevel = levelPresenceCounts.get(level);
+        levelPresenceCounts.set(level, {
+          value: `LEVEL${level}`,
+          level,
+          count: (existingLevel?.count || 0) + 1,
+        });
       });
     });
 
@@ -3475,22 +3931,127 @@ export class UserDbController {
       }
     });
 
+    const nodes = Array.from(
+      filteredWorkflows.reduce(
+        (
+          map,
+          workflow,
+        ) => {
+          const existing = map.get(workflow.nodePath) || {
+            nodeName: workflow.nodeName,
+            nodePath: workflow.nodePath,
+            nodeType: workflow.nodeTypeLabel,
+            level: workflow.hierarchyLevel,
+            levelLabel: workflow.hierarchyLabel,
+            modules: new Set<string>(),
+            workflows: [],
+          };
+
+          existing.modules.add(workflow.moduleLabel);
+          existing.workflows.push({
+            levelsHash: workflow.levelsHash,
+            name: workflow.name,
+            alias: workflow.alias,
+            module: workflow.moduleLabel,
+            subModule: workflow.subModuleLabel,
+            status: workflow.status,
+            checkerCount: workflow.checkerCount,
+            levelCount: workflow.levelCount,
+            levels: workflow.levelNumbers.map((level) => ({
+              level,
+              label: `LEVEL${level}`,
+            })),
+          });
+
+          map.set(workflow.nodePath, existing);
+          return map;
+        },
+        new Map<
+          string,
+          {
+            nodeName: string;
+            nodePath: string;
+            nodeType: string;
+            level: number;
+            levelLabel: string;
+            modules: Set<string>;
+            workflows: Array<{
+              levelsHash: string;
+              name: string;
+              alias: string;
+              module: string;
+              subModule: string;
+              status: string;
+              checkerCount: number;
+              levelCount: number;
+              levels: Array<{ level: number; label: string }>;
+            }>;
+          }
+        >(),
+      ).values(),
+    )
+      .map((node) => ({
+        nodeName: node.nodeName,
+        nodePath: node.nodePath,
+        nodeType: node.nodeType,
+        level: node.level,
+        levelLabel: node.levelLabel,
+        workflowCount: node.workflows.length,
+        moduleCount: node.modules.size,
+        workflows: node.workflows.sort((left, right) =>
+          left.name.localeCompare(right.name),
+        ),
+      }))
+      .sort((left, right) => left.nodePath.localeCompare(right.nodePath));
+
     const category = Array.from(categoryMap.values()).sort((left, right) => {
       if (left === 'All') return -1;
       if (right === 'All') return 1;
       return left.localeCompare(right);
     });
+
     const subCategory = Array.from(subCategoryMap.values()).sort((a, b) =>
       a.localeCompare(b),
     );
 
     return {
-      nodeName,
+      filter: true,
+      workflowSubCategory: 'WORK_FLOW',
+      nodeName: Array.from(nodeNameMap.values()).sort((a, b) =>
+        a.value.localeCompare(b.value),
+      ),
       nodeType: Array.from(nodeTypeCounts.values()).sort((a, b) =>
         a.value.localeCompare(b.value),
       ),
       category,
       subCategory,
+      module: Array.from(moduleCounts.values()).sort((a, b) =>
+        a.value.localeCompare(b.value),
+      ),
+      checker: Array.from(checkerCounts.values()).sort(
+        (a, b) => a.value - b.value,
+      ),
+      workflowLevels: Array.from(workflowLevelCounts.values()).sort(
+        (a, b) => a.value - b.value,
+      ),
+      levels: Array.from(levelPresenceCounts.values()).sort(
+        (a, b) => a.level - b.level,
+      ),
+      summary: {
+        nodeCount: nodes.length,
+        workflowCount: filteredWorkflows.length,
+        moduleCount: moduleCounts.size,
+        checkerCount: filteredWorkflows.reduce(
+          (count, workflow) => count + workflow.checkerCount,
+          0,
+        ),
+        totalLevelCount: filteredWorkflows.reduce(
+          (count, workflow) => count + workflow.levelCount,
+          0,
+        ),
+        uniqueLevelCount: levelPresenceCounts.size,
+      },
+      nodes,
     };
   }
 
@@ -8864,7 +9425,7 @@ export class UserDbController {
     next: NextFunction,
   ) {
     try {
-      const { userId, companyId, subCategory, filter } = req.body;
+      const { userId, companyId, subCategory, filter, applied } = req.body;
       const workflowSubCategory =
         UserDbController.normalizeFilterText(subCategory);
 
@@ -8872,6 +9433,7 @@ export class UserDbController {
         const dropdowns = await UserDbController.buildUserAccFilterDropdowns(
           userId,
           companyId,
+          applied,
         );
 
         return res.status(200).json({
@@ -8886,6 +9448,7 @@ export class UserDbController {
         const dropdowns = await UserDbController.buildWorkflowFilterDropdowns(
           userId,
           companyId,
+          applied,
         );
 
         return res.status(200).json({

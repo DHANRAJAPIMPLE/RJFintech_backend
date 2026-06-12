@@ -44,6 +44,13 @@ export type UserCompanyNodeFilterNodeTypeOption = {
 export type UserCompanyNodeFilterNodeOption = {
   value: string;
   path: string;
+  count?: number;
+  level?: number;
+  levelCount?: string;
+  permissionCount?: number;
+  makerCount?: number;
+  checkerCount?: number;
+  userCount?: number;
 };
 
 export type UserCompanyNodeFilterUserStatusSummary = {
@@ -70,10 +77,60 @@ export type FetchCompanyNodeFilterResponse = {
 };
 
 export type FetchCompanyWorkflowFilterResponse = {
+  filter?: true;
+  workflowSubCategory?: 'WORK_FLOW';
   nodeName: UserCompanyNodeFilterNodeOption[];
   nodeType: UserCompanyNodeFilterNodeTypeOption[];
   category: string[];
   subCategory: string[];
+  module?: Array<{
+    value: string;
+    count: number;
+  }>;
+  checker?: Array<{
+    value: number;
+    count: number;
+  }>;
+  workflowLevels?: Array<{
+    value: number;
+    count: number;
+  }>;
+  levels?: Array<{
+    value: string;
+    level: number;
+    count: number;
+  }>;
+  summary?: {
+    nodeCount: number;
+    workflowCount: number;
+    moduleCount: number;
+    checkerCount: number;
+    totalLevelCount: number;
+    uniqueLevelCount: number;
+  };
+  nodes?: Array<{
+    nodeName: string;
+    nodePath: string;
+    nodeType: string;
+    level: number;
+    levelLabel: string;
+    workflowCount: number;
+    moduleCount: number;
+    workflows: Array<{
+      levelsHash: string;
+      name: string;
+      alias: string;
+      module: string;
+      subModule: string;
+      status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
+      checkerCount: number;
+      levelCount: number;
+      levels: Array<{
+        level: number;
+        label: string;
+      }>;
+    }>;
+  }>;
 };
 
 export type FetchCompanyNodesInternalResponse =

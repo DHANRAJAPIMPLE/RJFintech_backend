@@ -183,7 +183,7 @@ const monitoringAppliedFiltersSchema = z
 export const monitoringFetchAllSchema = z
   .object({
     ...cursorPaginationFields,
-    filter: z.boolean().optional(),
+    filter: z.union([z.boolean(), monitoringAppliedFiltersSchema]).optional(),
     applied: monitoringAppliedFiltersSchema.nullable().optional(),
     date: monitoringDateRangeSchema,
     data: monitoringDateRangeSchema,
@@ -227,6 +227,11 @@ export const monitoringFetchAllSchema = z
   })
   .transform((value) => ({
     ...value,
+    applied:
+      value.applied ??
+      (value.filter && typeof value.filter === 'object' && !Array.isArray(value.filter)
+        ? value.filter
+        : undefined),
     dateRange: value.dateRange ?? value.date ?? value.data,
     fromDate: value.fromDate ?? value.formDate,
     responseSizeSort:

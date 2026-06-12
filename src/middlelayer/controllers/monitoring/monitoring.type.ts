@@ -23,10 +23,47 @@ export type MonitoringListPageInfo = {
   newCount: number;
 };
 
+export type MonitoringFilterCountItem = {
+  count: number;
+};
+
+export type MonitoringUserFilterItem = MonitoringFilterCountItem & {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+};
+
+export type MonitoringIpFilterItem = MonitoringFilterCountItem & {
+  ip: string;
+};
+
+export type MonitoringUrlFilterItem = MonitoringFilterCountItem & {
+  apiUrl: string;
+};
+
+export type MonitoringStatusFilterItem = MonitoringFilterCountItem & {
+  statusCode: number;
+};
+
+export type MonitoringResponseSizeFilterItem = MonitoringFilterCountItem & {
+  label: string;
+  minBytes: number;
+  maxBytes: number | null;
+};
+
+export type MonitoringFilterSummary = {
+  users: MonitoringUserFilterItem[];
+  ips: MonitoringIpFilterItem[];
+  urls: MonitoringUrlFilterItem[];
+  statusCodes: MonitoringStatusFilterItem[];
+  responseSizeRanges: MonitoringResponseSizeFilterItem[];
+};
+
 export type FetchMonitoringSpansResponse = {
   data: FetchMonitoringSpanItem[];
   totalCount: number;
   pageInfo: MonitoringListPageInfo;
+  filter: MonitoringFilterSummary;
 };
 
 export type FetchMonitoringSpanInternalItem = FetchMonitoringSpanItem & {
@@ -95,6 +132,7 @@ export type FetchMonitoringSpansInternalResponse =
       data: FetchMonitoringSpanInternalItem[];
       totalCount: number;
       pageInfo: MonitoringListPageInfo;
+      filter: MonitoringFilterSummary;
     }
   | MonitoringApiErrorResponse;
 
