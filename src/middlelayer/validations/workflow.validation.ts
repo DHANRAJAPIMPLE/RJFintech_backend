@@ -94,13 +94,12 @@ const optionalWorkflowSearchQuerySchema = z.preprocess((value) => {
   return query || undefined;
 }, z.string().max(150, 'Query is too long').optional());
 
-const optionalStringArraySchema = z.preprocess(
-  (value) => {
-    if (value === undefined || value === null) return undefined;
-    return value;
-  },
-  z.array(z.string().trim().min(1)).nullable().optional(),
-);
+const optionalStringArraySchema = z.preprocess((value) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') return [value];
+  return value;
+}, z.array(z.string().trim().min(1)).nullable().optional());
 
 const optionalDateStringSchema = z.preprocess(
   (value) => {

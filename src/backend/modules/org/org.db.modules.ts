@@ -70,6 +70,16 @@ type AutoUserAccessAuditEntry = {
   isGlobalAccess: boolean;
 };
 
+type PendingUserPermissionSnapshot = {
+  accessType: 'PRIMARY' | 'SECONDARY';
+  roleName: string;
+  roleCategory: string;
+  roleSubCategory: string;
+  nodeName: string;
+  nodePath: string;
+  accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
+};
+
 type OrgLinkedStructureNode = {
   nodePath: string;
   nodeName: string;
@@ -175,6 +185,364 @@ export class OrgStructureDbController {
     if (!value) return 'N/A';
     const date = value instanceof Date ? value : new Date(value);
     return Number.isNaN(date.getTime()) ? 'N/A' : date.toISOString();
+  }
+
+  private static normalizePendingUserPermission(
+    permission: any,
+  ): PendingUserPermissionSnapshot {
+    return {
+      accessType:
+        permission?.accessType === 'PRIMARY' ? 'PRIMARY' : 'SECONDARY',
+      roleName:
+        typeof permission?.roleName === 'string' ? permission.roleName : '',
+      roleCategory:
+        typeof permission?.roleCategory === 'string'
+          ? permission.roleCategory
+          : '',
+      roleSubCategory:
+        typeof permission?.roleSubCategory === 'string'
+          ? permission.roleSubCategory
+          : '',
+      nodeName:
+        typeof permission?.nodeName === 'string' ? permission.nodeName : '',
+      nodePath:
+        typeof permission?.nodePath === 'string' ? permission.nodePath : '',
+      accessCategory:
+        permission?.accessCategory === 'ALL_CHILD' ||
+        permission?.accessCategory === 'IMMEDIATE_CHILD' ||
+        permission?.accessCategory === 'NODE'
+          ? permission.accessCategory
+          : null,
+    };
+  }
+
+  private static pendingUserPermissionsEqual(
+    left: PendingUserPermissionSnapshot,
+    right: PendingUserPermissionSnapshot,
+  ) {
+    return (
+      left.accessType === right.accessType &&
+      left.roleName === right.roleName &&
+      left.roleCategory === right.roleCategory &&
+      left.roleSubCategory === right.roleSubCategory &&
+      left.nodeName === right.nodeName &&
+      left.nodePath === right.nodePath &&
+      left.accessCategory === right.accessCategory
+    );
+  }
+
+  private static pendingUserPermissionReplacementKey(
+    permission: PendingUserPermissionSnapshot,
+  ) {
+    if (permission.accessType === 'PRIMARY') return 'PRIMARY';
+
+    return [
+      permission.accessType,
+      permission.roleName,
+      permission.nodePath,
+    ].join('|');
+  }
+
+  private static mergePendingUserPermissionMutations(
+    existing: PendingUserPermissionSnapshot[],
+    requested: any[],
+  ): PendingUserPermissionSnapshot[] {
+    const proposed = existing.map((permission) => ({ ...permission }));
+
+    for (const request of requested) {
+      const permission =
+        OrgStructureDbController.normalizePendingUserPermission(request);
+      const operation =
+        request?.remove === true
+          ? 'REMOVE'
+          : typeof request?.operation === 'string'
+            ? request.operation.trim().toUpperCase()
+            : null;
+      const exactIndex = proposed.findIndex((stored) =>
+        OrgStructureDbController.pendingUserPermissionsEqual(stored, permission),
+      );
+      const replacementIndex = proposed.findIndex(
+        (stored) =>
+          OrgStructureDbController.pendingUserPermissionReplacementKey(
+            stored,
+          ) ===
+          OrgStructureDbController.pendingUserPermissionReplacementKey(
+            permission,
+          ),
+      );
+
+      if (operation === 'REMOVE') {
+        if (permission.accessType === 'PRIMARY') continue;
+        const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+        if (index >= 0) proposed.splice(index, 1);
+        continue;
+      }
+
+      if (permission.accessType === 'PRIMARY') {
+        for (let index = proposed.length - 1; index >= 0; index--) {
+          if (proposed[index]?.accessType === 'PRIMARY') {
+            proposed.splice(index, 1);
+          }
+        }
+        proposed.push(permission);
+        continue;
+      }
+
+      const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+      if (index >= 0) {
+        proposed[index] = permission;
+      } else {
+        proposed.push(permission);
+      }
+    }
+
+    return proposed;
+  }
+
+  private static getPendingWorkflowTargetNodePath(request: any) {
+    const requestData = request?.data as any;
+    const target = requestData?.target;
+
+    return (
+      (typeof target?.nodePath === 'string' && target.nodePath) ||
+      (typeof requestData?.nodePath === 'string' && requestData.nodePath) ||
+      (typeof request?.orgStructure?.nodePath === 'string' &&
+        request.orgStructure.nodePath) ||
+      null
+    );
+  }
+
+  private static async resolvePendingUserPermissions(tx: any, request: any) {
+    const requestData = (request?.data || {}) as any;
+    const requestedPermissions = Array.isArray(requestData.permissions)
+      ? requestData.permissions
+      : [];
+    const requestType = String(request?.type || 'INITIATE').toUpperCase();
+
+    if (requestType === 'INITIATE') {
+      return OrgStructureDbController.mergePendingUserPermissionMutations(
+        [],
+        requestedPermissions,
+      );
+    }
+
+    const targetEmail =
+      (typeof requestData?.targetUserEmail === 'string' &&
+        requestData.targetUserEmail) ||
+      (typeof requestData?.basicDetails?.email === 'string' &&
+        requestData.basicDetails.email) ||
+      null;
+    if (!targetEmail) {
+      return OrgStructureDbController.mergePendingUserPermissionMutations(
+        [],
+        requestedPermissions,
+      );
+    }
+
+    const targetUser = await tx.user.findUnique({
+      where: { email: targetEmail },
+      select: { id: true },
+    });
+    if (!targetUser) {
+      return OrgStructureDbController.mergePendingUserPermissionMutations(
+        [],
+        requestedPermissions,
+      );
+    }
+
+    const currentPermissions = await tx.userAccess.findMany({
+      where: {
+        companyId: request.companyId,
+        userId: targetUser.id,
+      },
+      select: {
+        accessType: true,
+        accessCategory: true,
+        role: {
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+          },
+        },
+        orgStructure: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+          },
+        },
+      },
+    });
+
+    return OrgStructureDbController.mergePendingUserPermissionMutations(
+      currentPermissions.map((permission: any) => ({
+        accessType: permission.accessType,
+        roleName: permission.role?.roleName || '',
+        roleCategory: permission.role?.category || '',
+        roleSubCategory: permission.role?.subCategory || '',
+        nodeName: permission.orgStructure?.nodeName || '',
+        nodePath: permission.orgStructure?.nodePath || '',
+        accessCategory: permission.accessCategory || null,
+      })),
+      requestedPermissions,
+    );
+  }
+
+  private static async rejectPendingUserRequestsForOrgInactivation(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+      nodeName: string;
+      actorId?: string;
+    },
+  ) {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: { in: ['INITIATE', 'UPDATE'] },
+      },
+      select: {
+        id: true,
+        type: true,
+        companyId: true,
+        data: true,
+      },
+    });
+
+    for (const request of pendingRequests) {
+      const resolvedPermissions =
+        await OrgStructureDbController.resolvePendingUserPermissions(
+          tx,
+          request,
+        );
+      const primaryPermission = resolvedPermissions.find(
+        (permission) =>
+          permission.accessType === 'PRIMARY' &&
+          typeof permission.nodePath === 'string' &&
+          permission.nodePath &&
+          OrgStructureDbController.pathsOverlap(
+            permission.nodePath,
+            params.nodePath,
+          ),
+      );
+      if (!primaryPermission) continue;
+
+      const currentPendingLevel = await tx.workflowApprover.findFirst({
+        where: {
+          reqId: request.id,
+          reqTable: 'user_onboarding',
+          status: 'PENDING',
+        },
+        orderBy: { level: 'asc' },
+        select: { level: true },
+      });
+      const remark = `Auto-rejected because organization ${params.nodeName} (${params.nodePath}) was inactivated and this request includes PRIMARY access for node ${primaryPermission.nodePath}.`;
+
+      await WorkflowApproverUtil.rejectAllLevels(
+        tx,
+        request.id,
+        'user_onboarding',
+      );
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          status: 'REJECTED',
+          approvalRemark: remark,
+        },
+      });
+
+      const requestData = request.data as any;
+      const historyEmail =
+        request.type === 'INITIATE'
+          ? requestData?.basicDetails?.email
+          : requestData?.targetUserEmail || requestData?.basicDetails?.email;
+      if (params.actorId && typeof historyEmail === 'string' && historyEmail) {
+        await tx.userHistory.create({
+          data: {
+            email: historyEmail,
+            event: 'REJECTED',
+            eventUserId: params.actorId,
+            companyId: params.companyId,
+            reqId: request.id,
+            level: currentPendingLevel?.level || null,
+            remarks: remark,
+          },
+        });
+      }
+    }
+  }
+
+  private static async rejectPendingWorkflowRequestsForOrgInactivation(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+      nodeName: string;
+      actorId?: string;
+    },
+  ) {
+    const pendingRequests = await tx.workflowReq.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+      },
+      select: {
+        id: true,
+        companyId: true,
+        data: true,
+        orgStructure: {
+          select: {
+            nodePath: true,
+          },
+        },
+      },
+    });
+
+    for (const request of pendingRequests) {
+      const targetNodePath =
+        OrgStructureDbController.getPendingWorkflowTargetNodePath(request);
+      if (
+        !targetNodePath ||
+        !OrgStructureDbController.pathsOverlap(targetNodePath, params.nodePath)
+      ) {
+        continue;
+      }
+
+      const currentPendingLevel = await tx.workflowApprover.findFirst({
+        where: {
+          reqId: request.id,
+          reqTable: 'workflow_req',
+          status: 'PENDING',
+        },
+        orderBy: { level: 'asc' },
+        select: { level: true },
+      });
+      const remark = `Auto-rejected because organization ${params.nodeName} (${params.nodePath}) was inactivated and this workflow request targets node ${targetNodePath}.`;
+
+      await WorkflowApproverUtil.rejectAllLevels(tx, request.id, 'workflow_req');
+      await tx.workflowReq.update({
+        where: { id: request.id },
+        data: {
+          status: 'REJECTED',
+          approvalRemark: remark,
+        },
+      });
+
+      if (params.actorId) {
+        await tx.workflowReqHistory.create({
+          data: {
+            workflowReqId: request.id,
+            companyId: params.companyId,
+            event: 'REJECTED',
+            eventUserId: params.actorId,
+            level: currentPendingLevel?.level || null,
+            remarks: remark,
+          },
+        });
+      }
+    }
   }
 
   private static async notifyConflict(
@@ -2048,6 +2416,24 @@ export class OrgStructureDbController {
       tx,
       request.companyId,
       targetNodePath,
+    );
+    await OrgStructureDbController.rejectPendingUserRequestsForOrgInactivation(
+      tx,
+      {
+        companyId: request.companyId,
+        nodePath: targetNodePath,
+        nodeName: node.nodeName,
+        actorId: actorId || undefined,
+      },
+    );
+    await OrgStructureDbController.rejectPendingWorkflowRequestsForOrgInactivation(
+      tx,
+      {
+        companyId: request.companyId,
+        nodePath: targetNodePath,
+        nodeName: node.nodeName,
+        actorId: actorId || undefined,
+      },
     );
 
     const subtree = await OrgStructureDbController.getSubtreeNodes(

@@ -85,6 +85,11 @@ export class WorkflowDbController {
   }
 
   private static normalizeAppliedFilterValues(values: unknown) {
+    if (typeof values === 'string') {
+      const normalized = WorkflowDbController.compactFilterValue(values);
+      return normalized ? [normalized] : [];
+    }
+
     if (!Array.isArray(values)) return [];
 
     return Array.from(
@@ -202,6 +207,8 @@ export class WorkflowDbController {
       source.nodeName && typeof source.nodeName === 'object'
         ? (source.nodeName as Record<string, unknown>)
         : null;
+    const nodeNameValues =
+      typeof source.nodeName === 'string' ? [source.nodeName] : nodeName?.values;
     const levels = Array.isArray(source.levels)
       ? source.levels
           .map((level: any) => {
@@ -243,7 +250,7 @@ export class WorkflowDbController {
 
     const normalized: NormalizedWorkflowListAppliedFilters = {
       nodeValues: WorkflowDbController.normalizeAppliedFilterValues(
-        nodeName?.values,
+        nodeNameValues,
       ),
       nodeType: WorkflowDbController.normalizeAppliedFilterValues(
         source.nodeType,
