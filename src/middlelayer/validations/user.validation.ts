@@ -54,10 +54,37 @@ const optionalUserSearchQuerySchema = z.preprocess((value) => {
 const optionalStringArraySchema = z.preprocess(
   (value) => {
     if (value === undefined || value === null) return undefined;
+    if (Array.isArray(value)) {
+      return value.map((item) => {
+        if (item && typeof item === 'object') {
+          const source = item as Record<string, unknown>;
+          return source.value ?? source.label ?? source.name ?? item;
+        }
+
+        return item;
+      });
+    }
     return value;
   },
   z.array(z.string().trim().min(1)).nullable().optional(),
 );
+
+const optionalNodeFilterOptionArraySchema = z
+  .array(
+    z
+      .object({
+        value: z.string().trim().min(1),
+        path: z.string().trim().min(1).optional(),
+        nodeName: z.string().trim().min(1).optional(),
+        nodePath: z.string().trim().min(1).optional(),
+        label: z.string().trim().min(1).optional(),
+        count: z.coerce.number().int().nonnegative().optional(),
+        levelCount: z.coerce.number().int().positive().optional(),
+      })
+      .passthrough(),
+  )
+  .nullable()
+  .optional();
 
 const optionalIntegerArraySchema = ({
   min,
@@ -71,6 +98,16 @@ const optionalIntegerArraySchema = ({
   z.preprocess(
     (value) => {
       if (value === undefined || value === null) return undefined;
+      if (Array.isArray(value)) {
+        return value.map((item) => {
+          if (item && typeof item === 'object') {
+            const source = item as Record<string, unknown>;
+            return source.value ?? item;
+          }
+
+          return item;
+        });
+      }
       return value;
     },
     z
@@ -212,11 +249,22 @@ const fetchAllUserAppliedSchema = z
 const workflowCompanyNodeAppliedSchema = z
   .object({
     nodeName: z
-      .object({
-        values: optionalStringArraySchema,
-      })
-      .strict()
-      .nullable()
+      .union([
+        z
+          .object({
+            values: z
+              .union([
+                optionalNodeFilterOptionArraySchema,
+                optionalStringArraySchema,
+              ])
+              .optional(),
+          })
+          .strict()
+          .nullable()
+          .optional(),
+        optionalNodeFilterOptionArraySchema,
+        optionalStringArraySchema,
+      ])
       .optional(),
     nodeType: optionalStringArraySchema,
     workflowType: optionalStringArraySchema,

@@ -46,7 +46,7 @@ export type UserCompanyNodeFilterNodeOption = {
   path: string;
   count?: number;
   level?: number;
-  levelCount?: string;
+  levelCount?: string | number;
   permissionCount?: number;
 };
 

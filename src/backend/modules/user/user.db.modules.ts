@@ -45,7 +45,7 @@ type CompanyNodeFilterNodeOption = {
   nodeType?: string | null;
   count?: number;
   level?: number;
-  levelCount?: string;
+  levelCount?: string | number;
   permissionCount?: number;
 };
 
@@ -1707,18 +1707,69 @@ export class UserDbController {
   }
 
   private static normalizeAppliedFilterValues(values: unknown) {
+    const normalizeItem = (value: unknown) => {
+      if (value && typeof value === 'object') {
+        const source = value as Record<string, unknown>;
+        return (
+          UserDbController.compactFilterValue(source.value) ||
+          UserDbController.compactFilterValue(source.label) ||
+          UserDbController.compactFilterValue(source.name)
+        );
+      }
+
+      return UserDbController.compactFilterValue(value);
+    };
+
     if (typeof values === 'string') {
-      const normalized = UserDbController.compactFilterValue(values);
+      const normalized = normalizeItem(values);
       return normalized ? [normalized] : [];
     }
 
-    if (!Array.isArray(values)) return [];
+    if (!Array.isArray(values)) {
+      const normalized = normalizeItem(values);
+      return normalized ? [normalized] : [];
+    }
 
     return Array.from(
       new Set(
         values
-          .map((value) => UserDbController.compactFilterValue(value))
+          .map((value) => normalizeItem(value))
           .filter((value): value is string => Boolean(value)),
+      ),
+    );
+  }
+
+  private static normalizeAppliedNodeValues(values: unknown) {
+    const normalizeItem = (value: unknown) => {
+      if (value && typeof value === 'object') {
+        const source = value as Record<string, unknown>;
+        return [
+          source.value,
+          source.path,
+          source.nodeName,
+          source.nodePath,
+          source.label,
+        ]
+          .map((item) => UserDbController.compactFilterValue(item))
+          .filter((item): item is string => Boolean(item));
+      }
+
+      const normalized = UserDbController.compactFilterValue(value);
+      return normalized ? [normalized] : [];
+    };
+
+    const items =
+      Array.isArray(values) || typeof values === 'string'
+        ? values
+        : values === undefined || values === null
+          ? []
+          : [values];
+
+    return Array.from(
+      new Set(
+        (Array.isArray(items) ? items : [items]).flatMap((value) =>
+          normalizeItem(value),
+        ),
       ),
     );
   }
@@ -1827,7 +1878,9 @@ export class UserDbController {
     if (!source) return null;
 
     const nodeName =
-      source.nodeName && typeof source.nodeName === 'object'
+      source.nodeName &&
+      typeof source.nodeName === 'object' &&
+      !Array.isArray(source.nodeName)
         ? (source.nodeName as Record<string, unknown>)
         : null;
     const nodeValues =
@@ -1853,7 +1906,9 @@ export class UserDbController {
       .filter((level): level is string => Boolean(level));
 
     const normalized: CompanyWorkflowFilterApplied = {
-      nodeValues: UserDbController.normalizeAppliedFilterValues(nodeValues),
+      nodeValues: UserDbController.normalizeAppliedNodeValues(
+        nodeValues ?? source.nodeName,
+      ),
       nodeType: UserDbController.normalizeAppliedFilterValues(source.nodeType),
       module: UserDbController.normalizeAppliedFilterValues(source.module),
       subCategory: UserDbController.normalizeAppliedFilterValues(
@@ -3831,7 +3886,7 @@ export class UserDbController {
       nodeType:
         UserDbController.humanizeFilterLabel(node.nodeType) || node.nodeType,
       level: node.level || 1,
-      levelLabel: (node.levelCount || 'root').toUpperCase(),
+      levelLabel: String(node.levelCount || 'root').toUpperCase(),
       userCount: node.count || 0,
       permissionCount: node.permissionCount || 0,
     }));
@@ -3922,7 +3977,6 @@ export class UserDbController {
         module: [],
         checker: [],
         workflowLevels: [],
-        levels: [],
         summary: {
           nodeCount: 0,
           workflowCount: 0,
@@ -4137,6 +4191,7 @@ export class UserDbController {
       nodeNameMap.set(nodeKey, {
         value: workflow.nodeName,
         path: workflow.nodePath,
+        levelCount: workflow.levelCount,
         count: (existingNode?.count || 0) + 1,
       });
 
@@ -4294,9 +4349,6 @@ export class UserDbController {
       ),
       workflowLevels: Array.from(workflowLevelCounts.values()).sort(
         (a, b) => a.value - b.value,
-      ),
-      levels: Array.from(levelCounts.values()).sort(
-        (a, b) => a.level - b.level,
       ),
       summary: {
         nodeCount: nodes.length,
