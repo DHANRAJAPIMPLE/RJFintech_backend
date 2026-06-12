@@ -24,13 +24,56 @@ const emptyToUndefined = (value: unknown) => {
 };
 
 const optionalDateStringSchema = z.preprocess(
-  emptyToUndefined,
+  (value) => {
+    const normalized = emptyToUndefined(value);
+    if (normalized === undefined) return undefined;
+
+    if (typeof normalized === 'number' && Number.isFinite(normalized)) {
+      return new Date(normalized).toISOString();
+    }
+
+    if (typeof normalized === 'string' && /^\d+$/.test(normalized.trim())) {
+      const timestamp = Number(normalized.trim());
+      if (Number.isFinite(timestamp)) {
+        return new Date(timestamp).toISOString();
+      }
+    }
+
+    return normalized;
+  },
   z
     .string()
     .refine((value) => !Number.isNaN(new Date(value).getTime()), {
       message: 'Invalid date format',
     })
     .optional(),
+);
+
+const optionalStringArraySchema = z.preprocess(
+  (value) => {
+    const normalize = (item: unknown) => {
+      if (item === undefined || item === null) return null;
+      if (typeof item !== 'string') return item;
+
+      const trimmed = item.trim();
+      return trimmed === '' ||
+        ['null', 'undefined'].includes(trimmed.toLowerCase())
+        ? null
+        : trimmed;
+    };
+
+    if (Array.isArray(value)) return value.map(normalize).filter(Boolean);
+    if (typeof value === 'string' && value.includes(',')) {
+      return value
+        .split(',')
+        .map((item) => normalize(item))
+        .filter(Boolean);
+    }
+
+    const normalized = normalize(value);
+    return normalized === null ? undefined : [normalized];
+  },
+  z.array(z.string().trim().min(1)).optional(),
 );
 
 const monitoringDateRangeSchema = z.preprocess(
@@ -137,6 +180,9 @@ const monitoringAppliedFiltersSchema = z
     responseSizeRange: responseSizeRangeSchema,
     subtrack: subTrackSchema,
     subTrack: subTrackSchema,
+    ips: optionalStringArraySchema,
+    urls: optionalStringArraySchema,
+    users: optionalStringArraySchema,
     query: monitoringQuerySchema,
   })
   .strict()
@@ -201,6 +247,9 @@ export const monitoringFetchAllSchema = z
     responseSizeRange: responseSizeRangeSchema,
     subtrack: subTrackSchema,
     subTrack: subTrackSchema,
+    ips: optionalStringArraySchema,
+    urls: optionalStringArraySchema,
+    users: optionalStringArraySchema,
   })
   .strict()
   .superRefine((value, ctx) => {

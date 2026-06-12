@@ -48,15 +48,22 @@ export type UserCompanyNodeFilterNodeOption = {
   level?: number;
   levelCount?: string;
   permissionCount?: number;
-  makerCount?: number;
-  checkerCount?: number;
-  userCount?: number;
 };
 
 export type UserCompanyNodeFilterUserStatusSummary = {
   active: number;
   pending: number;
   inactive: number;
+};
+
+export type UserCompanyNodeFilterPermissionSummaryItem = {
+  count: number;
+};
+
+export type UserCompanyNodeFilterPermissionSummary = {
+  checker: UserCompanyNodeFilterPermissionSummaryItem;
+  maker: UserCompanyNodeFilterPermissionSummaryItem;
+  viewer: UserCompanyNodeFilterPermissionSummaryItem;
 };
 
 export type UserCompanyNodeFilterDropdowns = {
@@ -67,6 +74,16 @@ export type UserCompanyNodeFilterDropdowns = {
   subCategory: Record<string, string[]>;
   reportingManager: string[];
   userStatusSummary: UserCompanyNodeFilterUserStatusSummary;
+  permissionSummary: UserCompanyNodeFilterPermissionSummary;
+  nodes?: Array<{
+    nodeName: string;
+    nodePath: string;
+    nodeType: string;
+    level: number;
+    levelLabel: string;
+    userCount: number;
+    permissionCount: number;
+  }>;
 };
 
 export type FetchCompanyNodeFilterResponse = {

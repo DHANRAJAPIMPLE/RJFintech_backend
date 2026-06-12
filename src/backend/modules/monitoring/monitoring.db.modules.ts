@@ -65,6 +65,9 @@ type MonitoringFilters = {
     max?: number;
   } | null;
   subTrack: number[];
+  ips: string[];
+  urls: string[];
+  users: string[];
 };
 
 type MonitoringSummaryBucket = {
@@ -478,6 +481,25 @@ const normalizeString = (value: unknown): string | null => {
     : null;
 };
 
+const normalizeStringArray = (value: unknown): string[] => {
+  const source =
+    typeof value === 'string' && value.includes(',')
+      ? value.split(',')
+      : Array.isArray(value)
+        ? value
+        : value === undefined || value === null || value === ''
+          ? []
+          : [value];
+
+  return Array.from(
+    new Set(
+      source
+        .map((item) => normalizeString(item))
+        .filter((item): item is string => Boolean(item)),
+    ),
+  );
+};
+
 const normalizeNumberArray = (value: unknown): number[] => {
   const source =
     typeof value === 'string' && value.includes(',')
@@ -603,6 +625,9 @@ const resolveMonitoringFilters = (
     responseSizeSort,
     responseSizeRange,
     subTrack: normalizeNumberArray(applied.subTrack ?? applied.subtrack),
+    ips: normalizeStringArray(applied.ips),
+    urls: normalizeStringArray(applied.urls),
+    users: normalizeStringArray(applied.users),
   };
 };
 
@@ -612,8 +637,34 @@ const getDateBoundary = (
 ): Date | null => {
   if (!value) return null;
 
+  if (/^\d+$/.test(value.trim())) {
+    const timestamp = Number(value.trim());
+    if (Number.isFinite(timestamp)) {
+      return new Date(timestamp);
+    }
+  }
+
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
+
+  const hasExplicitTime =
+    typeof value === 'string' && /[tT ]\d{1,2}:\d{2}/.test(value);
+
+  if (hasExplicitTime) {
+    if (boundary === 'start') return date;
+
+    return new Date(
+      Date.UTC(
+        date.getUTCFullYear(),
+        date.getUTCMonth(),
+        date.getUTCDate(),
+        date.getUTCHours(),
+        date.getUTCMinutes(),
+        date.getUTCSeconds(),
+        date.getUTCMilliseconds(),
+      ),
+    );
+  }
 
   if (boundary === 'start') {
     return new Date(
@@ -767,11 +818,35 @@ const buildMonitoringWhere = async (input: Record<string, unknown>) => {
   const subTrackTrackingIds = await resolveSubTrackTrackingIds(
     filters.subTrack,
   );
+  const ipFilter = filters.ips.length
+    ? {
+        ipAddress: {
+          in: filters.ips,
+        },
+      }
+    : {};
+  const urlFilter = filters.urls.length
+    ? {
+        url: {
+          in: filters.urls,
+        },
+      }
+    : {};
+  const userFilter = filters.users.length
+    ? {
+        userId: {
+          in: filters.users,
+        },
+      }
+    : {};
 
   const filterParts = [
     queryFilter,
     statusFilter,
     responseSizeRangeFilter,
+    ipFilter,
+    urlFilter,
+    userFilter,
     createdAtFilter ? { createdAt: createdAtFilter } : {},
     subTrackTrackingIds
       ? {

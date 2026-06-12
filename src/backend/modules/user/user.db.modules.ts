@@ -47,15 +47,22 @@ type CompanyNodeFilterNodeOption = {
   level?: number;
   levelCount?: string;
   permissionCount?: number;
-  makerCount?: number;
-  checkerCount?: number;
-  userCount?: number;
 };
 
 type CompanyNodeFilterUserStatusSummary = {
   active: number;
   pending: number;
   inactive: number;
+};
+
+type CompanyNodeFilterPermissionSummaryItem = {
+  count: number;
+};
+
+type CompanyNodeFilterPermissionSummary = {
+  checker: CompanyNodeFilterPermissionSummaryItem;
+  maker: CompanyNodeFilterPermissionSummaryItem;
+  viewer: CompanyNodeFilterPermissionSummaryItem;
 };
 
 type CompanyWorkflowFilterApplied = {
@@ -3449,6 +3456,11 @@ export class UserDbController {
     const subCategoryMap = new Map<string, Set<string>>();
     const reportingManagerMap = new Map<string, string>();
     const roleMap = new Map<string, string>();
+    const permissionSummarySets = {
+      checker: new Set<string>(),
+      maker: new Set<string>(),
+      viewer: new Set<string>(),
+    };
     const filteredUsers = users.filter((user) => {
       const mapping = user.userMappings[0];
       const visibleAccesses = visibility.isGlobal
@@ -3543,6 +3555,30 @@ export class UserDbController {
             visibleNodePathSet.has(access.orgStructure.nodePath),
           );
 
+      const userPermissionBuckets = new Set<'checker' | 'maker' | 'viewer'>();
+
+      visibleAccesses.forEach((access) => {
+        const accessBucket = UserDbController.resolveAccessRoleBucket({
+          permissionLevel: access.role?.permissionLevel,
+          canView: access.role?.view,
+          canModify: access.role?.modify,
+          canApprove: access.role?.approve,
+          canInitiate: access.role?.initiate,
+        });
+
+        if (accessBucket === 'checker') {
+          userPermissionBuckets.add('checker');
+        } else if (accessBucket === 'maker') {
+          userPermissionBuckets.add('maker');
+        } else if (accessBucket === 'user') {
+          userPermissionBuckets.add('viewer');
+        }
+      });
+
+      userPermissionBuckets.forEach((bucket) => {
+        permissionSummarySets[bucket].add(user.id);
+      });
+
       for (const access of visibleAccesses) {
         const nodePath = UserDbController.normalizeFilterText(
           access.orgStructure?.nodePath,
@@ -3591,13 +3627,6 @@ export class UserDbController {
         if (nodePath) {
           const level = Math.max(nodePath.split('.').filter(Boolean).length, 1);
           const levelCount = level <= 1 ? 'root' : `level${level - 1}`;
-          const accessBucket = UserDbController.resolveAccessRoleBucket({
-            permissionLevel: access.role?.permissionLevel,
-            canView: access.role?.view,
-            canModify: access.role?.modify,
-            canApprove: access.role?.approve,
-            canInitiate: access.role?.initiate,
-          });
           const existingNode = nodeNameMap.get(nodePath.toLowerCase());
           nodeNameMap.set(nodePath.toLowerCase(), {
             value: nodeName || nodePath,
@@ -3607,15 +3636,6 @@ export class UserDbController {
             levelCount,
             count: (existingNode?.count || 0) + 1,
             permissionCount: (existingNode?.permissionCount || 0) + 1,
-            makerCount:
-              (existingNode?.makerCount || 0) +
-              (accessBucket === 'maker' ? 1 : 0),
-            checkerCount:
-              (existingNode?.checkerCount || 0) +
-              (accessBucket === 'checker' ? 1 : 0),
-            userCount:
-              (existingNode?.userCount || 0) +
-              (accessBucket === 'user' ? 1 : 0),
           });
         }
       }
@@ -3636,9 +3656,6 @@ export class UserDbController {
       levelLabel: (node.levelCount || 'root').toUpperCase(),
       userCount: node.count || 0,
       permissionCount: node.permissionCount || 0,
-      makerCount: node.makerCount || 0,
-      checkerCount: node.checkerCount || 0,
-      viewerCount: node.userCount || 0,
     }));
 
     const category = Array.from(categoryMap.values()).sort((a, b) =>
@@ -3663,6 +3680,11 @@ export class UserDbController {
       pending: pendingUsers.pendingCount,
       inactive: inactiveCount,
     };
+    const permissionSummary: CompanyNodeFilterPermissionSummary = {
+      checker: { count: permissionSummarySets.checker.size },
+      maker: { count: permissionSummarySets.maker.size },
+      viewer: { count: permissionSummarySets.viewer.size },
+    };
 
     return {
       designation: Array.from(designationCounts.values()).sort((a, b) =>
@@ -3674,6 +3696,7 @@ export class UserDbController {
       subCategory,
       reportingManager,
       userStatusSummary,
+      permissionSummary,
       nodes,
     };
   }
