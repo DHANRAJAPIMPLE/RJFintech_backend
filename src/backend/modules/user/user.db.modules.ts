@@ -2453,7 +2453,7 @@ export class UserDbController {
       : null;
     const statusCandidates = [
       options.defaultStatus,
-      basicDetails.status,
+      isPendingRecord ? null : basicDetails.status,
       isPendingRecord ? 'PENDING' : null,
     ]
       .map((value) => UserDbController.compactFilterValue(value))
@@ -3404,7 +3404,14 @@ export class UserDbController {
     const appliedFilters =
       UserDbController.normalizeUserListAppliedFilters(applied);
 
-    const [users, activeCount, inactiveCount, pendingUsers, eligibleCounts] =
+    const [
+      activeUsers,
+      inactiveUsers,
+      activeCount,
+      inactiveCount,
+      pendingUsers,
+      eligibleCounts,
+    ] =
       await Promise.all(
       [
         prisma.user.findMany({
@@ -3423,6 +3430,70 @@ export class UserDbController {
               where: {
                 companyId,
                 status: 'ACTIVE',
+              },
+              select: {
+                designation: true,
+                manager: {
+                  select: {
+                    name: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+            userAccesses: {
+              where: {
+                companyId,
+                role: {
+                  isActive: true,
+                },
+                orgStructure: {
+                  status: 'ACTIVE',
+                  nodePath: { notIn: Array.from(pendingOrgNodePaths) },
+                },
+              },
+              select: {
+                accessType: true,
+                isGlobalAccess: true,
+                role: {
+                  select: {
+                    roleName: true,
+                    category: true,
+                    subCategory: true,
+                    permissionLevel: true,
+                    view: true,
+                    modify: true,
+                    approve: true,
+                    initiate: true,
+                  },
+                },
+                orgStructure: {
+                  select: {
+                    nodeName: true,
+                    nodePath: true,
+                    nodeType: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+        prisma.user.findMany({
+          where: {
+            userMappings: {
+              some: {
+                companyId,
+                status: 'INACTIVE',
+              },
+            },
+            ...visibleUserWhere,
+          },
+          select: {
+            id: true,
+            userMappings: {
+              where: {
+                companyId,
+                status: 'INACTIVE',
               },
               select: {
                 designation: true,
@@ -3526,72 +3597,114 @@ export class UserDbController {
       maker: new Set<string>(),
       viewer: new Set<string>(),
     };
-    const filteredUsers = users.filter((user) => {
-      const mapping = user.userMappings[0];
-      const visibleAccesses = visibility.isGlobal
-        ? user.userAccesses
-        : user.userAccesses.filter((access) =>
-            visibleNodePathSet.has(access.orgStructure.nodePath),
-          );
-      const primary = visibleAccesses
-        .filter(
-          (access) => access.isGlobalAccess === true || access.accessType === 'PRIMARY',
-        )
-        .map((access) => ({
-          roleCategory: access.role?.category || '',
-          roleSubCategory: access.role?.subCategory || '',
-          roleName: access.role?.roleName || '',
-          permissionLevel: access.role?.permissionLevel || '',
-          nodeName: access.orgStructure?.nodeName || '',
-          nodePath: access.orgStructure?.nodePath || '',
-          nodeType: access.orgStructure?.nodeType || null,
-          canView: access.role?.view || false,
-          canModify: access.role?.modify || false,
-          canApprove: access.role?.approve || false,
-          canInitiate: access.role?.initiate || false,
-        }));
-      const secondary = visibleAccesses
-        .filter(
-          (access) =>
-            access.isGlobalAccess !== true && access.accessType !== 'PRIMARY',
-        )
-        .map((access) => ({
-          roleCategory: access.role?.category || '',
-          roleSubCategory: access.role?.subCategory || '',
-          roleName: access.role?.roleName || '',
-          permissionLevel: access.role?.permissionLevel || '',
-          nodeName: access.orgStructure?.nodeName || '',
-          nodePath: access.orgStructure?.nodePath || '',
-          nodeType: access.orgStructure?.nodeType || null,
-          canView: access.role?.view || false,
-          canModify: access.role?.modify || false,
-          canApprove: access.role?.approve || false,
-          canInitiate: access.role?.initiate || false,
-        }));
-      const pendingSummary = eligibleCounts.get(user.id);
+    const allUserEntries = [
+      ...activeUsers.map((user) => ({ user, defaultStatus: 'ACTIVE' as const })),
+      ...inactiveUsers.map((user) => ({
+        user,
+        defaultStatus: 'INACTIVE' as const,
+      })),
+    ];
 
-      return UserDbController.matchesAppliedUserFilters(
-        {
-          basicDetails: {
-            designation: mapping?.designation ?? null,
-            reportingManagerName: mapping?.manager?.name ?? null,
-            reportingManagerEmail: mapping?.manager?.email ?? null,
-            status: 'ACTIVE',
+    const filteredUserEntries = allUserEntries.filter(
+      ({ user, defaultStatus }) => {
+        const mapping = user.userMappings[0];
+        const visibleAccesses = visibility.isGlobal
+          ? user.userAccesses
+          : user.userAccesses.filter((access) =>
+              visibleNodePathSet.has(access.orgStructure.nodePath),
+            );
+        const primary = visibleAccesses
+          .filter(
+            (access) =>
+              access.isGlobalAccess === true || access.accessType === 'PRIMARY',
+          )
+          .map((access) => ({
+            roleCategory: access.role?.category || '',
+            roleSubCategory: access.role?.subCategory || '',
+            roleName: access.role?.roleName || '',
+            permissionLevel: access.role?.permissionLevel || '',
+            nodeName: access.orgStructure?.nodeName || '',
+            nodePath: access.orgStructure?.nodePath || '',
+            nodeType: access.orgStructure?.nodeType || null,
+            canView: access.role?.view || false,
+            canModify: access.role?.modify || false,
+            canApprove: access.role?.approve || false,
+            canInitiate: access.role?.initiate || false,
+          }));
+        const secondary = visibleAccesses
+          .filter(
+            (access) =>
+              access.isGlobalAccess !== true && access.accessType !== 'PRIMARY',
+          )
+          .map((access) => ({
+            roleCategory: access.role?.category || '',
+            roleSubCategory: access.role?.subCategory || '',
+            roleName: access.role?.roleName || '',
+            permissionLevel: access.role?.permissionLevel || '',
+            nodeName: access.orgStructure?.nodeName || '',
+            nodePath: access.orgStructure?.nodePath || '',
+            nodeType: access.orgStructure?.nodeType || null,
+            canView: access.role?.view || false,
+            canModify: access.role?.modify || false,
+            canApprove: access.role?.approve || false,
+            canInitiate: access.role?.initiate || false,
+          }));
+        const pendingSummary = eligibleCounts.get(user.id);
+
+        return UserDbController.matchesAppliedUserFilters(
+          {
+            basicDetails: {
+              designation: mapping?.designation ?? null,
+              reportingManagerName: mapping?.manager?.name ?? null,
+              reportingManagerEmail: mapping?.manager?.email ?? null,
+              status: defaultStatus,
+            },
+            primary,
+            secondary,
+            isPending: false,
           },
-          primary,
-          secondary,
-          isPending: false,
-        },
-        appliedFilters,
-        {
-          defaultStatus: 'ACTIVE',
-          hasPendingOverride: Boolean(pendingSummary?.count),
-          pendingApprovalSubCategories: pendingSummary
-            ? Array.from(pendingSummary.subCategories)
-            : [],
-        },
-      );
-    });
+          appliedFilters,
+          {
+            defaultStatus,
+            hasPendingOverride: Boolean(pendingSummary?.count),
+            pendingApprovalSubCategories: pendingSummary
+              ? Array.from(pendingSummary.subCategories)
+              : [],
+          },
+        );
+      },
+    );
+
+    const filteredUsers = filteredUserEntries.map((entry) => entry.user);
+    const filteredActiveUsers = filteredUserEntries.filter(
+      (entry) => entry.defaultStatus === 'ACTIVE',
+    );
+    const filteredInactiveUsers = filteredUserEntries.filter(
+      (entry) => entry.defaultStatus === 'INACTIVE',
+    );
+
+    const pendingOnboardingRows = (pendingUsers.pendingOnboardings || []) as any[];
+    const filteredPendingCount = appliedFilters
+      ? (
+          await UserDbController.formatPendingUsers(
+            pendingOnboardingRows,
+            companyId,
+            { detail: true },
+          )
+        ).filter(
+          (pendingUser, index) =>
+            pendingUser &&
+            UserDbController.matchesAppliedUserFilters(
+              pendingUser,
+              appliedFilters,
+              {
+                defaultStatus: 'PENDING',
+                isPendingRecord: true,
+                pendingRequestType: pendingOnboardingRows[index]?.type ?? null,
+              },
+            ),
+        ).length
+      : pendingUsers.pendingCount;
 
     for (const user of filteredUsers) {
       const mapping = user.userMappings[0];
@@ -3741,9 +3854,9 @@ export class UserDbController {
     subCategoryEntries.sort((left, right) => left[0].localeCompare(right[0]));
     const subCategory = Object.fromEntries(subCategoryEntries);
     const userStatusSummary: CompanyNodeFilterUserStatusSummary = {
-      active: appliedFilters ? filteredUsers.length : activeCount,
-      pending: pendingUsers.pendingCount,
-      inactive: inactiveCount,
+      active: appliedFilters ? filteredActiveUsers.length : activeCount,
+      pending: filteredPendingCount,
+      inactive: appliedFilters ? filteredInactiveUsers.length : inactiveCount,
     };
     const permissionSummary: CompanyNodeFilterPermissionSummary = {
       checker: { count: permissionSummarySets.checker.size },
