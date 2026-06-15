@@ -7531,7 +7531,7 @@ export class UserDbController {
           reqTable: 'user_onboarding',
         },
       );
-      notificationRecipients = workflow.eligibleApprovers;
+      notificationRecipients = workflow.currentLevelApprovers;
       await tx.userOnboarding.update({
         where: { id: request.id },
         data: {
@@ -8040,7 +8040,7 @@ export class UserDbController {
         if (nodeId && initiatorId) {
           const {
             workflowId: resolvedWorkflowId,
-            eligibleApprovers: resolvedApprovers,
+            currentLevelApprovers,
           } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
             levelsHash: levelsHash || null,
             module: 'SYSTEM_ACCESS',
@@ -8051,7 +8051,7 @@ export class UserDbController {
             reqId: onb.id,
             reqTable: 'user_onboarding',
           });
-          notificationRecipients = resolvedApprovers;
+          notificationRecipients = currentLevelApprovers;
 
           // Store the resolved workflowId in the onboarding record
           await tx.userOnboarding.update({

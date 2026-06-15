@@ -218,10 +218,14 @@ export class WorkflowApproverUtil {
       Array.from(requestEligibleApprovers),
     );
 
+    const currentLevelApprovers = approverRows
+      .sort((left, right) => left.level - right.level)[0]?.approversList || [];
+
     return {
       workflowId: workflow.id,
       approvers: created,
       eligibleApprovers: Array.from(requestEligibleApprovers),
+      currentLevelApprovers: this.unique(currentLevelApprovers),
     };
   }
 

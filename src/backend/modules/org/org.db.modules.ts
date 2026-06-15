@@ -2296,7 +2296,7 @@ export class OrgStructureDbController {
             reqTable: 'org_structure_req',
           },
         );
-        notificationRecipients = workflow.eligibleApprovers;
+        notificationRecipients = workflow.currentLevelApprovers;
         await tx.orgStructureReq.update({
           where: { id: requestRecord.id },
           data: {
@@ -3355,7 +3355,7 @@ export class OrgStructureDbController {
         if (nodeId && initiatorId) {
           const {
             workflowId: resolvedWorkflowId,
-            eligibleApprovers: resolvedApprovers,
+            currentLevelApprovers,
           } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
             levelsHash: levelsHash || null,
             module: 'SYSTEM_ACCESS',
@@ -3366,7 +3366,7 @@ export class OrgStructureDbController {
             reqId: reqRecord.id,
             reqTable: 'org_structure_req',
           });
-          notificationRecipients = resolvedApprovers;
+          notificationRecipients = currentLevelApprovers;
 
           // Store the resolved workflowId in the request record
           await tx.orgStructureReq.update({

@@ -778,7 +778,7 @@ export class NotificationService {
     const isPending =
       input.isPending ?? NotificationService.isPendingNotificationType(input.type);
     const shouldClearPreviousPending =
-      !isPending && Boolean(input.referenceType) && Boolean(input.referenceId);
+      Boolean(input.referenceType) && Boolean(input.referenceId);
     const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);
     const requestedRecipients = NotificationService.unique(
       [

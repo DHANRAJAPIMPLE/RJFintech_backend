@@ -3152,7 +3152,7 @@ export class WorkflowDbController {
           reqTable: 'workflow_req',
         },
       );
-      notificationRecipients = approval.eligibleApprovers;
+      notificationRecipients = approval.currentLevelApprovers;
       const requestWithApprovalWorkflow = await tx.workflowReq.update({
         where: { id: created.id },
         data: { approvalWorkflowId: approval.workflowId },
@@ -3750,7 +3750,7 @@ export class WorkflowDbController {
         if (initiatorId) {
           const {
             workflowId: resolvedWorkflowId,
-            eligibleApprovers: resolvedApprovers,
+            currentLevelApprovers,
           } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
             levelsHash: parentLevelsHash || null,
             module: 'SYSTEM_ACCESS',
@@ -3761,7 +3761,7 @@ export class WorkflowDbController {
             reqId: request.id,
             reqTable: 'workflow_req',
           });
-          notificationRecipients = resolvedApprovers;
+          notificationRecipients = currentLevelApprovers;
 
           // Keep workflowId for the business workflow; store approval config separately.
           await tx.workflowReq.update({
