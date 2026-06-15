@@ -329,6 +329,112 @@ export class CompanyDbController {
     return mapping?.companyId || null;
   }
 
+  private static getCompanyProvisioningUserLabel(user: {
+    name?: string | null;
+    email?: string | null;
+  }) {
+    const name =
+      typeof user.name === 'string' && user.name.trim() ? user.name.trim() : '';
+    const email =
+      typeof user.email === 'string' && user.email.trim()
+        ? user.email.trim()
+        : '';
+
+    if (name && email) return `${name} (${email})`;
+    if (name) return name;
+    if (email) return email;
+    return 'Unknown user';
+  }
+
+  private static async sendCompanyProvisioningNotifications(params: {
+    companyId: string;
+    companyName: string;
+    approverId: string;
+    rootNodeReqId: string;
+    rootNodeName: string;
+    rootNodePath: string;
+    createdUsers: Array<{
+      userId: string;
+      name?: string | null;
+      email?: string | null;
+    }>;
+    workflows: Array<{
+      workflowReqId: string;
+      name: string;
+      subModule: string;
+    }>;
+  }) {
+    const {
+      companyId,
+      companyName,
+      approverId,
+      rootNodeReqId,
+      rootNodeName,
+      rootNodePath,
+      createdUsers,
+      workflows,
+    } = params;
+
+    const corpAdminUserIds =
+      await NotificationService.getCorpAdminUserIds(companyId);
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      corpAdminUserIds,
+      createdUsers.map((user) => user.userId),
+    );
+    const notificationTasks: Promise<unknown>[] = [];
+
+    for (const user of createdUsers) {
+      const userLabel = CompanyDbController.getCompanyProvisioningUserLabel(
+        user,
+      );
+      notificationTasks.push(
+        NotificationService.createRequestNotification({
+          companyId,
+          type: 'ONBOARDED',
+          createdBy: approverId,
+          recipientUserIds,
+          isPending: false,
+          name: 'Company user added',
+          message: `${companyName} added user ${userLabel}`,
+        }),
+      );
+    }
+
+    notificationTasks.push(
+      NotificationService.createRequestNotification({
+        companyId,
+        type: 'ONBOARDED',
+        referenceType: 'ORG',
+        referenceId: rootNodeReqId,
+        referenceName: `${rootNodeName} (${rootNodePath})`,
+        createdBy: approverId,
+        recipientUserIds,
+        isPending: false,
+        name: 'Company organization added',
+        message: `${companyName} added organization ${rootNodeName} (${rootNodePath})`,
+      }),
+    );
+
+    for (const workflow of workflows) {
+      notificationTasks.push(
+        NotificationService.createRequestNotification({
+          companyId,
+          type: 'ONBOARDED',
+          referenceType: 'WORKFLOW',
+          referenceId: workflow.workflowReqId,
+          referenceName: workflow.name,
+          createdBy: approverId,
+          recipientUserIds,
+          isPending: false,
+          name: 'Company workflow added',
+          message: `${companyName} added workflow ${workflow.name} for ${workflow.subModule}`,
+        }),
+      );
+    }
+
+    await Promise.all(notificationTasks);
+  }
+
   private static async getPendingInitiationMetaByCompanyCodes(
     companyCodes: string[],
     viewerUserId?: string | null,
@@ -1243,6 +1349,7 @@ export class CompanyDbController {
           return {
             message: 'Onboarding rejected successfully',
             status: 'REJECTED',
+            provisioningSummary: null,
           };
         }
 
@@ -1366,6 +1473,11 @@ export class CompanyDbController {
             roleCode: 'WORK_FLOW_MGR',
           },
         ];
+        const createdWorkflowNotifications: Array<{
+          workflowReqId: string;
+          name: string;
+          subModule: string;
+        }> = [];
 
         for (const dwf of defaultWorkflows) {
           const levelsHash = `DEFAULT_${dwf.subModule}_1M_1C_1`;
@@ -1454,9 +1566,20 @@ export class CompanyDbController {
               eventUserId: approverId,
             },
           });
+
+          createdWorkflowNotifications.push({
+            workflowReqId: workflowReq.id,
+            name: workflow.name,
+            subModule: workflow.subModule,
+          });
         }
 
         // 5. Signatories Setup
+        const createdUserNotifications: Array<{
+          userId: string;
+          name?: string | null;
+          email?: string | null;
+        }> = [];
         for (const sig of signatories) {
           let user = await tx.user.findUnique({
             where: { email: sig.email },
@@ -1524,6 +1647,12 @@ export class CompanyDbController {
               companyId: newCompany.id,
             },
           });
+
+          createdUserNotifications.push({
+            userId: user.id,
+            name: user.name,
+            email: user.email,
+          });
         }
 
         // 6. Finalize request
@@ -1546,9 +1675,20 @@ export class CompanyDbController {
           });
         }
 
+        const provisioningSummary = {
+          companyId: newCompany.id,
+          companyName: newCompany.legalName,
+          rootNodeReqId: rootNodeReq.id,
+          rootNodeName: rootNode.nodeName,
+          rootNodePath: rootNode.nodePath,
+          createdUsers: createdUserNotifications,
+          workflows: createdWorkflowNotifications,
+        };
+
         return {
           message: 'Onboarding approved and company created successfully',
           status: 'APPROVED',
+          provisioningSummary,
         };
       });
 
@@ -1572,6 +1712,19 @@ export class CompanyDbController {
           createdBy: approverId,
           recipientUserIds: notificationRecipientUserIds,
           isPending: false,
+        });
+      }
+
+      if (
+        result.status === 'APPROVED' &&
+        approverId &&
+        result.provisioningSummary
+      ) {
+        const provisioningSummary = result.provisioningSummary;
+
+        await CompanyDbController.sendCompanyProvisioningNotifications({
+          ...provisioningSummary,
+          approverId,
         });
       }
 
