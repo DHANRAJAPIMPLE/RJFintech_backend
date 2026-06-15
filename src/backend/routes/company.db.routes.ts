@@ -14,5 +14,7 @@ router.post('/action', CompanyDbController.handleCompanyOnboardingStatus);
 router.post('/history', CompanyDbController.fetchCompanyHistory);
 router.post('/check-company', CompanyDbController.checkCompany);
 router.post('/check-signatories', CompanyDbController.checkSignatories);
+router.post('/templates/upsert', CompanyDbController.upsertTemplates);
+router.post('/templates/fetch', CompanyDbController.fetchTemplates);
 
 export default router;

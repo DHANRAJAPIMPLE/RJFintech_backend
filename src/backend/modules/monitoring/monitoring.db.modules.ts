@@ -67,6 +67,7 @@ type MonitoringFilters = {
   subTrack: number[];
   ips: string[];
   urls: string[];
+  companies: string[];
   users: string[];
 };
 
@@ -627,6 +628,7 @@ const resolveMonitoringFilters = (
     subTrack: normalizeNumberArray(applied.subTrack ?? applied.subtrack),
     ips: normalizeStringArray(applied.ips),
     urls: normalizeStringArray(applied.urls),
+    companies: normalizeStringArray(applied.companies),
     users: normalizeStringArray(applied.users),
   };
 };
@@ -832,6 +834,20 @@ const buildMonitoringWhere = async (input: Record<string, unknown>) => {
         },
       }
     : {};
+  const companyFilter = filters.companies.length
+    ? {
+        company: {
+          is: {
+            OR: filters.companies.map((companyCode) => ({
+              companyCode: {
+                equals: companyCode,
+                mode: 'insensitive' as const,
+              },
+            })),
+          },
+        },
+      }
+    : {};
   const userFilter = filters.users.length
     ? {
         user: {
@@ -850,6 +866,7 @@ const buildMonitoringWhere = async (input: Record<string, unknown>) => {
     responseSizeRangeFilter,
     ipFilter,
     urlFilter,
+    companyFilter,
     userFilter,
     createdAtFilter ? { createdAt: createdAtFilter } : {},
     subTrackTrackingIds
@@ -895,16 +912,27 @@ const buildMonitoringResponseSizeBucketWhere = (
 });
 
 const fetchMonitoringFilterSummary = async (where: Record<string, unknown>) => {
-  const userCounts = await prisma.apiSpan.groupBy({
-    by: ['userId'],
-    where: {
-      AND: [where as any, { userId: { not: null } }],
-    },
-    _count: {
-      _all: true,
-    },
-  });
-  const [users, ipCounts, urlCounts, statusCounts, bucketCounts] =
+  const [userCounts, companyCounts] = await Promise.all([
+    prisma.apiSpan.groupBy({
+      by: ['userId'],
+      where: {
+        AND: [where as any, { userId: { not: null } }],
+      },
+      _count: {
+        _all: true,
+      },
+    }),
+    prisma.apiSpan.groupBy({
+      by: ['companyId'],
+      where: {
+        AND: [where as any, { companyId: { not: null } }],
+      },
+      _count: {
+        _all: true,
+      },
+    }),
+  ]);
+  const [users, companies, ipCounts, urlCounts, statusCounts, bucketCounts] =
     await Promise.all([
       prisma.user.findMany({
         where: {
@@ -918,6 +946,20 @@ const fetchMonitoringFilterSummary = async (where: Record<string, unknown>) => {
           id: true,
           name: true,
           email: true,
+        },
+      }),
+      prisma.company.findMany({
+        where: {
+          id: {
+            in: companyCounts
+              .map((item) => item.companyId)
+              .filter((item): item is string => Boolean(item)),
+          },
+        },
+        select: {
+          id: true,
+          legalName: true,
+          companyCode: true,
         },
       }),
       prisma.apiSpan.groupBy({
@@ -956,8 +998,22 @@ const fetchMonitoringFilterSummary = async (where: Record<string, unknown>) => {
     ]);
 
   const userById = new Map(users.map((user) => [user.id, user]));
+  const companyById = new Map(companies.map((company) => [company.id, company]));
 
   return {
+    companies: companyCounts
+      .map((item) => {
+        if (!item.companyId) return null;
+
+        const company = companyById.get(item.companyId);
+        return {
+          companyName: company?.legalName ?? null,
+          companyCode: company?.companyCode ?? null,
+          count: item._count._all,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .sort((left, right) => right.count - left.count),
     users: userCounts
       .map((item) => {
         if (!item.userId) return null;

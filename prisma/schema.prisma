@@ -554,3 +554,21 @@ enum UserCategory {
   IMMEDIATE_CHILD
   NODE
 }
+
+model Template {
+  id         String   @id @default(uuid())
+
+  userId     String   @map("user_id")
+  companyId  String   @map("company_id")
+
+  module     String
+  event      String
+
+  isEnabled  Boolean  @default(true) @map("is_enabled")
+
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, companyId, module, event])
+  @@map("template")
+}

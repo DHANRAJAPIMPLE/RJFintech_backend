@@ -32,6 +32,11 @@ export type MonitoringUserFilterItem = MonitoringFilterCountItem & {
   userEmail: string | null;
 };
 
+export type MonitoringCompanyFilterItem = MonitoringFilterCountItem & {
+  companyName: string | null;
+  companyCode: string | null;
+};
+
 export type MonitoringIpFilterItem = MonitoringFilterCountItem & {
   ip: string;
 };
@@ -51,6 +56,7 @@ export type MonitoringResponseSizeFilterItem = MonitoringFilterCountItem & {
 };
 
 export type MonitoringFilterSummary = {
+  companies: MonitoringCompanyFilterItem[];
   users: MonitoringUserFilterItem[];
   ips: MonitoringIpFilterItem[];
   urls: MonitoringUrlFilterItem[];

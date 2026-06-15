@@ -19,6 +19,7 @@ import { EditLockController } from '../controllers/edit-lock/edit-lock.controlle
 import { HistoryController } from '../controllers/history/history.controller';
 import { OrgController } from '../controllers/org/org.controller';
 import { RoleController } from '../controllers/role/role.controller';
+import { TemplateController } from '../controllers/template/template.controller';
 import { UserController } from '../controllers/user/user.controller';
 import { WorkflowController } from '../controllers/workflow/workflow.controller';
 
@@ -236,6 +237,11 @@ router.post(
 // --------------roles routes--------------------------------
 // router.post('/role/create', RoleController.createRoles);
 router.post('/role/fetch-all', RoleController.fetchAllRoles); //done
+// ----------------------------------------------------------
+
+// --------------template routes-----------------------------
+router.post('/template/upsert', TemplateController.upsert);
+router.post('/template/fetch', TemplateController.fetch);
 // ----------------------------------------------------------
 
 export default router;

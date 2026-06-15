@@ -182,6 +182,7 @@ const monitoringAppliedFiltersSchema = z
     subTrack: subTrackSchema,
     ips: optionalStringArraySchema,
     urls: optionalStringArraySchema,
+    companies: optionalStringArraySchema,
     users: optionalStringArraySchema,
     query: monitoringQuerySchema,
   })
@@ -249,6 +250,7 @@ export const monitoringFetchAllSchema = z
     subTrack: subTrackSchema,
     ips: optionalStringArraySchema,
     urls: optionalStringArraySchema,
+    companies: optionalStringArraySchema,
     users: optionalStringArraySchema,
   })
   .strict()
