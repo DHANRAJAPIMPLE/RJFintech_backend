@@ -4115,14 +4115,6 @@ export class UserDbController {
         module: [],
         checker: [],
         workflowLevel: [],
-        summary: {
-          nodeCount: 0,
-          workflowCount: 0,
-          moduleCount: 0,
-          checkerCount: 0,
-          totalLevelCount: 0,
-          uniqueLevelCount: 0,
-        },
         nodes: [],
       };
     }
@@ -4377,10 +4369,6 @@ export class UserDbController {
     const moduleCounts = new Map<string, { value: string; count: number }>();
     const checkerCounts = new Map<number, { value: number; count: number }>();
     const workflowLevelCounts = new Map<number, { value: number; count: number }>();
-    const levelCounts = new Map<
-      number,
-      { value: string; level: number; count: number }
-    >();
 
       filteredWorkflows.forEach((workflow) => {
         const nodeKey = workflow.nodePath.toLowerCase();
@@ -4417,13 +4405,6 @@ export class UserDbController {
       workflowLevelCounts.set(workflow.levelCount, {
         value: workflow.levelCount,
         count: (existingLevelCount?.count || 0) + 1,
-      });
-
-      const existingLevel = levelCounts.get(workflow.levelCount);
-      levelCounts.set(workflow.levelCount, {
-        value: `LEVEL${workflow.levelCount}`,
-        level: workflow.levelCount,
-        count: (existingLevel?.count || 0) + 1,
       });
     });
 
@@ -4526,20 +4507,6 @@ export class UserDbController {
       workflowLevel: Array.from(workflowLevelCounts.values()).sort(
         (a, b) => a.value - b.value,
       ),
-      summary: {
-        nodeCount: nodes.length,
-        workflowCount: filteredWorkflows.length,
-        moduleCount: moduleCounts.size,
-        checkerCount: filteredWorkflows.reduce(
-          (count, workflow) => count + workflow.checkerCount,
-          0,
-        ),
-        totalLevelCount: filteredWorkflows.reduce(
-          (count, workflow) => count + workflow.levelCount,
-          0,
-        ),
-        uniqueLevelCount: levelCounts.size,
-      },
       nodes,
     };
   }
