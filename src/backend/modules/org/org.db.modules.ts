@@ -159,6 +159,7 @@ export class OrgStructureDbController {
     displayEvent: string,
     options: {
       approvalLevel?: number | null;
+      approvalStep?: number | null;
       isChangeRequestStart?: boolean;
       modificationSequence?: number | null;
     } = {},
@@ -168,11 +169,13 @@ export class OrgStructureDbController {
     }
 
     if (displayEvent === 'INITIATE') return 'I';
-    if (displayEvent === 'APPROVED' && options.approvalLevel) {
-      return `A${options.approvalLevel}`;
+    if (displayEvent === 'APPROVED') {
+      const step = options.approvalStep ?? options.approvalLevel;
+      if (step) return `A${step}`;
     }
-    if (displayEvent === 'REJECTED' && options.approvalLevel) {
-      return `R${options.approvalLevel}`;
+    if (displayEvent === 'REJECTED') {
+      const step = options.approvalStep ?? options.approvalLevel;
+      if (step) return `R${step}`;
     }
     if (displayEvent === 'ACTIVE') return 'AC';
     if (displayEvent === 'INACTIVE') return 'IN';
@@ -3717,6 +3720,7 @@ export class OrgStructureDbController {
           const key = `${h.orgReqId}:${h.level}`;
           const existing = approvedEventsByReqLevel.get(key) || [];
           existing.push({
+            historyId: h.id,
             user: historyUserMap.get(h.eventUserId),
             createdAt: h.createdAt,
           });
@@ -3736,38 +3740,103 @@ export class OrgStructureDbController {
           }
         }
       });
+      const getMandatoryApprovalCount = (level: any) =>
+        Math.max(Number(level?.mandatoryCount || 1), 1);
       const getLevelRule = (level: any) =>
-        Number(level?.mandatoryCount || 1) > 1 ? 'AND' : null;
+        getMandatoryApprovalCount(level) > 1 ? 'AND' : null;
+      const getSortedApprovedEvents = (
+        reqId: string,
+        level: number,
+        direction: 'asc' | 'desc' = 'asc',
+      ) => {
+        const sortedEvents = [
+          ...(approvedEventsByReqLevel.get(`${reqId}:${level}`) || []),
+        ].sort((left: any, right: any) => {
+          const leftTime = left.createdAt
+            ? new Date(left.createdAt).getTime()
+            : 0;
+          const rightTime = right.createdAt
+            ? new Date(right.createdAt).getTime()
+            : 0;
+          if (leftTime !== rightTime) {
+            return leftTime - rightTime;
+          }
+          return String(left.historyId).localeCompare(String(right.historyId));
+        });
+        return direction === 'desc' ? sortedEvents.reverse() : sortedEvents;
+      };
+      const approvalStepMetaByReqId = new Map<
+        string,
+        {
+          levelStartByLevel: Map<number, number>;
+          totalApprovalSteps: number;
+        }
+      >();
+      const approvedEventStepByHistoryId = new Map<string, number>();
+      for (const [reqId, levels] of workflowMap.entries()) {
+        const sortedLevels = [...levels].sort(
+          (left: any, right: any) => left.level - right.level,
+        );
+        const levelStartByLevel = new Map<number, number>();
+        let nextStep = 1;
+        sortedLevels.forEach((level: any) => {
+          levelStartByLevel.set(level.level, nextStep);
+          getSortedApprovedEvents(reqId, level.level).forEach(
+            (event: any, index: number) => {
+              approvedEventStepByHistoryId.set(event.historyId, nextStep + index);
+            },
+          );
+          nextStep += getMandatoryApprovalCount(level);
+        });
+        approvalStepMetaByReqId.set(reqId, {
+          levelStartByLevel,
+          totalApprovalSteps: nextStep - 1,
+        });
+      }
+      const getLevelStartStep = (reqId: string, level: number) =>
+        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ?? null;
+      const getApprovedEventStep = (
+        reqId: string,
+        level: number,
+        historyId?: string | null,
+      ) => {
+        if (historyId) {
+          const directStep = approvedEventStepByHistoryId.get(historyId);
+          if (directStep) return directStep;
+        }
+        const startStep = getLevelStartStep(reqId, level);
+        if (!startStep) return null;
+        const approvedCount = getSortedApprovedEvents(reqId, level).length;
+        return approvedCount > 0 ? startStep + approvedCount - 1 : startStep;
+      };
+      const getNextPendingApprovalStep = (reqId: string, level: number) => {
+        const startStep = getLevelStartStep(reqId, level);
+        if (!startStep) return null;
+        return startStep + getSortedApprovedEvents(reqId, level).length;
+      };
+      const getRejectedApprovalStep = (reqId: string, level: number) => {
+        const startStep = getLevelStartStep(reqId, level);
+        if (!startStep) return null;
+        const approvedCount = getSortedApprovedEvents(reqId, level).length;
+        return startStep + approvedCount;
+      };
       const toApprovedUserSummary = (
         event: any,
-        level: number,
-        nameKey = 'name',
+        approvalStep: number | null,
       ) =>
         event?.user
           ? {
-              levelCount: `A${level}`,
-              [nameKey]: event.user.name,
+              levelCount: `A${approvalStep || 1}`,
+              name: event.user.name,
               email: event.user.email,
               approvedAt: event.createdAt,
             }
           : null;
-      const getApprovedEvents = (reqId: string, level: number) =>
-        (approvedEventsByReqLevel.get(`${reqId}:${level}`) || []).sort(
-          (left: any, right: any) => {
-            const leftTime = left.createdAt
-              ? new Date(left.createdAt).getTime()
-              : 0;
-            const rightTime = right.createdAt
-              ? new Date(right.createdAt).getTime()
-              : 0;
-            return rightTime - leftTime;
-          },
-        );
       const getLevelApprovalCount = (reqId: string, level: number) =>
-        getApprovedEvents(reqId, level).length;
+        getSortedApprovedEvents(reqId, level).length;
       const isLevelApproved = (reqId: string, level: any) =>
         getLevelApprovalCount(reqId, level.level) >=
-        Number(level?.mandatoryCount || 1);
+        getMandatoryApprovalCount(level);
       const buildApprovalSummary = (reqId: string) => {
         const levels = workflowMap.get(reqId) || [];
         const request = histories.find((history) => history.orgReqId === reqId);
@@ -3795,6 +3864,10 @@ export class OrgStructureDbController {
             ? levels.find((level: any) => !isLevelApproved(reqId, level))
                 ?.level ?? null
             : null;
+        const currentPendingStep =
+          currentPendingLevel && normalizedRequestStatus === 'PENDING'
+            ? getNextPendingApprovalStep(reqId, currentPendingLevel)
+            : null;
         const isRejected = normalizedRequestStatus === 'REJECTED';
         const allApproved = levels.length > 0 && completedLevels === levels.length;
 
@@ -3808,18 +3881,18 @@ export class OrgStructureDbController {
           completedLevels,
           ...(rejectedLevel ? { rejectedAtLevel: rejectedLevel } : {}),
           ...(currentPendingLevel ? { currentPendingLevel } : {}),
+          ...(currentPendingStep ? { currentPendingStep } : {}),
         };
       };
       const buildApprovedBy = (reqId: string) =>
         (workflowMap.get(reqId) || [])
           .map((level: any) => {
             const rule = getLevelRule(level);
-            const approvers = getApprovedEvents(reqId, level.level)
-              .map((event, index) =>
+            const approvers = getSortedApprovedEvents(reqId, level.level)
+              .map((event) =>
                 toApprovedUserSummary(
                   event,
-                  level.level,
-                  rule === 'AND' ? `name${index + 1}` : 'name',
+                  getApprovedEventStep(reqId, level.level, event.historyId),
                 ),
               )
               .filter(Boolean);
@@ -3906,10 +3979,19 @@ export class OrgStructureDbController {
             : approvalSummary.currentStatus === 'PENDING'
               ? (approvalSummary as any).currentPendingLevel ?? null
               : null;
+        const approvalStep =
+          displayEvent === 'APPROVED' && h.orgReqId && h.level
+            ? getApprovedEventStep(h.orgReqId, h.level, h.id)
+            : displayEvent === 'REJECTED' && h.orgReqId && h.level
+              ? getRejectedApprovalStep(h.orgReqId, h.level)
+              : approvalSummary.currentStatus === 'PENDING'
+                ? ((approvalSummary as any).currentPendingStep ?? null)
+                : null;
         const levelCount = OrgStructureDbController.getOrgHistoryLevelCount(
           displayEvent || '',
           {
             approvalLevel,
+            approvalStep,
             isChangeRequestStart,
             modificationSequence: h.orgReqId
               ? modificationSequenceByReqId.get(h.orgReqId) || 1
@@ -4008,7 +4090,7 @@ export class OrgStructureDbController {
             oldData: null,
             newData: null,
             event: 'APPROVED',
-            levelCount: `A${approvalSummary.totalLevels}`,
+            levelCount: `A${approvalStepMetaByReqId.get(h.orgReqId)?.totalApprovalSteps || approvalSummary.totalLevels}`,
             createdAt: latestEvent?.createdAt ?? null,
             remarks: null,
             user: HistoryUserUtil.formatAuditUser(
@@ -4087,6 +4169,8 @@ export class OrgStructureDbController {
 
         if (isPending && (approvalSummary as any).currentPendingLevel) {
           const pendingLevel = (approvalSummary as any).currentPendingLevel;
+          const pendingStep =
+            (approvalSummary as any).currentPendingStep ?? pendingLevel;
           const eligibleApprovers = buildEligibleApprovers(h.orgReqId);
 
           syntheticEvents.push({
@@ -4098,7 +4182,7 @@ export class OrgStructureDbController {
             oldData: null,
             newData: null,
             event: `L${pendingLevel} Pending Approval`,
-            levelCount: `A${pendingLevel}`,
+            levelCount: `A${pendingStep}`,
             createdAt: null,
             remarks: null,
             user: HistoryUserUtil.formatAuditUser(

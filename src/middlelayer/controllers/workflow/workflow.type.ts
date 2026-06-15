@@ -206,6 +206,7 @@ export type WorkflowHistoryAuditUser = {
 };
 
 export type WorkflowHistoryApprovedAuditUser = WorkflowHistoryAuditUser & {
+  levelCount: `A${number}`;
   approvedAt: string;
 };
 
@@ -259,7 +260,15 @@ export type WorkflowHistoryEvent =
   | 'AUTO_DELETE';
 
 export type WorkflowHistoryPendingApprovalEvent = `L${number} Pending Approval`;
-export type WorkflowHistoryLevelCount = 'I' | `M${number}` | `A${number}` | null;
+export type WorkflowHistoryLevelCount =
+  | 'I'
+  | `M${number}`
+  | `A${number}`
+  | `R${number}`
+  | 'AC'
+  | 'IN'
+  | 'AR'
+  | null;
 
 export type WorkflowHistoryBaseItem = {
   id: string;
