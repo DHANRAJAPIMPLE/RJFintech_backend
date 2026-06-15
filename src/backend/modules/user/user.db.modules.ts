@@ -4379,15 +4379,16 @@ export class UserDbController {
       { value: string; level: number; count: number }
     >();
 
-    filteredWorkflows.forEach((workflow) => {
-      const nodeKey = workflow.nodePath.toLowerCase();
-      const existingNode = nodeNameMap.get(nodeKey);
-      nodeNameMap.set(nodeKey, {
-        value: workflow.nodeName,
-        path: workflow.nodePath,
-        levelCount: workflow.levelCount,
-        count: (existingNode?.count || 0) + 1,
-      });
+      filteredWorkflows.forEach((workflow) => {
+        const nodeKey = workflow.nodePath.toLowerCase();
+        const existingNode = nodeNameMap.get(nodeKey);
+        nodeNameMap.set(nodeKey, {
+          value: workflow.nodeName,
+          path: workflow.nodePath,
+          // Node filter levelCount should represent hierarchy depth, not workflow approval levels.
+          levelCount: workflow.hierarchyLevel,
+          count: (existingNode?.count || 0) + 1,
+        });
 
       const nodeTypeKey = workflow.nodeTypeLabel.toLowerCase();
       const existingNodeType = nodeTypeCounts.get(nodeTypeKey);
