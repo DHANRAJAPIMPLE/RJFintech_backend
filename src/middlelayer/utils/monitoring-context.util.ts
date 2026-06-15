@@ -63,18 +63,11 @@ export const attachTrackingHeaders = (
     asUuid(req.body?.userId) ||
     asUuid(backendBody?.userId);
 
-  const cookieAccessToken = (req.cookies?.accessToken || req.get('cookie')?.includes('accessToken=')) ? 'true' : 'false';
-  const cookieRefreshToken = (req.cookies?.refreshToken || req.get('cookie')?.includes('refreshToken=')) ? 'true' : 'false';
-  const cookieHashVersion = (req.cookies?.versionHash || req.get('cookie')?.includes('versionHash=')) ? 'true' : 'false';
-
   return {
     ...headers,
     'x-tracking-id': trackingId,
     'x-sub-count': subCount,
     ...(companyId ? { 'x-company-id': companyId } : {}),
     ...(userId ? { 'x-user-id': userId } : {}),
-    'x-cookie-accesstoken': cookieAccessToken,
-    'x-cookie-refreshtoken': cookieRefreshToken,
-    'x-cookies-hashversion': cookieHashVersion,
   };
 };
