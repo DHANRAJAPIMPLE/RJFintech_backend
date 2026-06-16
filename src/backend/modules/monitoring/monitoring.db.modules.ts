@@ -1126,22 +1126,30 @@ export class MonitoringService {
       };
     }
 
-    const hasCursorNavigation = [
-      input.cursor,
-      input.prevCursor,
-      input.nextCursor,
-      input.cursorId,
-    ].some(
-      (value) => typeof value === 'string' && value.trim().length > 0,
-    );
-    const pagination = resolveCursorPagination({
-      ...input,
-      ...(hasCursorNavigation ? { page: undefined } : {}),
-    });
+    const rawPage = Number(input.page);
+    const hasDirectPageNavigation =
+      input.page !== null &&
+      input.page !== undefined &&
+      Number.isFinite(rawPage) &&
+      rawPage > 0;
+    const paginationInput = hasDirectPageNavigation
+      ? {
+          ...input,
+          cursor: undefined,
+          prevCursor: undefined,
+          nextCursor: undefined,
+          cursorId: undefined,
+          topCursor: undefined,
+          direction: undefined,
+        }
+      : input;
+    const pagination = resolveCursorPagination(paginationInput);
     const monitoringCursor = decodeMonitoringCursor(
-      getMonitoringRawCursor(input, pagination),
+      getMonitoringRawCursor(paginationInput, pagination),
     );
-    const monitoringTopCursor = decodeMonitoringCursor(input.topCursor);
+    const monitoringTopCursor = decodeMonitoringCursor(
+      paginationInput.topCursor,
+    );
 
     const pageWhere = pagination.cursor
       ? appendResponseSizeCursorWhere(
