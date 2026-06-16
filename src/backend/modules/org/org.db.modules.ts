@@ -1634,10 +1634,12 @@ export class OrgStructureDbController {
       type: 'MODIFICATION',
       name: 'Organization access updated',
       message: `System added ${accessChanges.length} user role access(es) for new organization node ${params.nodeName} (${params.nodePath}). Impacted: ${impactedNames}.`,
+      referenceType: 'ORG',
       referenceId: params.orgReqId,
       referenceName: params.nodeName,
       createdBy: params.createdBy,
       recipientUserIds,
+      isPending: false,
     });
   }
 
@@ -1665,6 +1667,7 @@ export class OrgStructureDbController {
       createdBy: params.createdBy,
       recipientUserIds,
       requiredRecipientUserIds: recipientUserIds,
+      isPending: false,
     });
   }
 
