@@ -124,6 +124,7 @@ export class UserController {
     const primary = user.primary || [];
     return {
       isPending: user.isPending ?? false,
+      ...(user.levelCount !== undefined ? { levelCount: user.levelCount } : {}),
       ...(typeof user.pendingApprovalCount === 'number'
         ? { pendingApprovalCount: user.pendingApprovalCount }
         : {}),
@@ -174,6 +175,7 @@ export class UserController {
       id: user.id,
       type: user.type,
       impact: user.impact ?? null,
+      ...(user.levelCount !== undefined ? { levelCount: user.levelCount } : {}),
       ...(detail
         ? {
             oldData: isInitiate ? null : (user.oldData ?? null),

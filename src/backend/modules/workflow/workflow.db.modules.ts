@@ -1214,7 +1214,19 @@ export class WorkflowDbController {
       }));
   }
 
+  private static getNodeHierarchyLevelCount(nodePath: unknown) {
+    if (typeof nodePath !== 'string') return null;
+
+    const segments = nodePath
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    return Math.max(segments.length, 1);
+  }
+
   private static formatWorkflowSummary(row: any) {
+    const nodePath = row.orgStructure?.nodePath ?? null;
     return {
       id: row.id,
       name: row.name,
@@ -1226,8 +1238,9 @@ export class WorkflowDbController {
       workflowType: row.type ?? row.workflowType ?? 'NODE',
       module: row.module,
       subModule: row.subModule,
+      levelCount: WorkflowDbController.getNodeHierarchyLevelCount(nodePath),
       orgStructure: {
-        nodePath: row.orgStructure?.nodePath ?? null,
+        nodePath,
         nodeName: row.orgStructure?.nodeName ?? null,
         nodeType: row.orgStructure?.nodeType ?? null,
       },
@@ -1250,6 +1263,12 @@ export class WorkflowDbController {
       rowData?.subModule ??
       rowTarget?.subModule ??
       null;
+    const nodePath =
+      row?.nodePath ??
+      row?.newData?.nodePath ??
+      rowData?.nodePath ??
+      rowTarget?.nodePath ??
+      null;
 
     return {
       id: row.id,
@@ -1260,12 +1279,8 @@ export class WorkflowDbController {
       alias: row.alias,
       module,
       subModule,
-      nodePath:
-        row?.nodePath ??
-        row?.newData?.nodePath ??
-        rowData?.nodePath ??
-        rowTarget?.nodePath ??
-        null,
+      nodePath,
+      levelCount: WorkflowDbController.getNodeHierarchyLevelCount(nodePath),
       nodeType: row.nodeType ?? null,
       nodeName: row.nodeName ?? null,
       workflowName: row.workflowName,

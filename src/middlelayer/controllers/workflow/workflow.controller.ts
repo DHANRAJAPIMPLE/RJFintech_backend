@@ -75,6 +75,9 @@ export class WorkflowController {
       module: workflow.module,
       subModule: workflow.subModule,
       nodePath: workflow.orgStructure.nodePath,
+      ...(workflow.levelCount !== undefined
+        ? { levelCount: workflow.levelCount }
+        : {}),
       orgStructure: {
         nodePath: workflow.orgStructure.nodePath,
         nodeName: workflow.orgStructure.nodeName,
@@ -123,6 +126,9 @@ export class WorkflowController {
         nextData?.subModule ??
         null,
       nodePath: workflow.nodePath ?? workflow.data?.nodePath ?? null,
+      ...(workflow.levelCount !== undefined
+        ? { levelCount: workflow.levelCount }
+        : {}),
       nodeType: workflow.nodeType,
       nodeName: workflow.nodeName,
       workflowName: workflow.workflowName,

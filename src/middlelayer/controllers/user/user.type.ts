@@ -339,6 +339,7 @@ export type PendingRequestSnapshot = {
 
 export type UserListItem = {
   isPending: boolean;
+  levelCount?: number | null;
   pendingApprovalCount?: number;
   basicDetails: UserListBasicDetails;
   primary?: UserListAccess[];
@@ -367,6 +368,7 @@ export type PendingUserListItem = {
   id: string;
   type?: string;
   impact?: string | null;
+  levelCount?: number | null;
   oldData?: unknown | null;
   newData?: unknown | null;
   basicDetails: PendingUserBasicDetails;

@@ -72,6 +72,7 @@ export type WorkflowActiveItem = {
   module: WorkflowModule;
   subModule: WorkflowSubModule;
   nodePath?: string;
+  levelCount?: number | null;
   orgStructure: WorkflowOrgStructure;
   levelsHash?: string;
   levels?: WorkflowActiveLevel[];
@@ -122,6 +123,7 @@ export type WorkflowPendingItem = {
   alias: string;
   module?: WorkflowModule | null;
   subModule?: WorkflowSubModule | null;
+  levelCount?: number | null;
   approvalRemark?: string | null;
   levelsHash?: string;
   createdAt?: string;

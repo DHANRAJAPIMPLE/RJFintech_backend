@@ -5024,6 +5024,17 @@ export class UserDbController {
     };
   }
 
+  private static getNodeHierarchyLevelCount(nodePath: unknown) {
+    if (typeof nodePath !== 'string') return null;
+
+    const segments = nodePath
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    return Math.max(segments.length, 1);
+  }
+
   private static formatProductionUser(
     u: any,
     pendingRequest?: any,
@@ -5049,9 +5060,14 @@ export class UserDbController {
           .filter((a: any) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
           .map((access: any) => UserDbController.formatUserAccess(access, true))
       : [];
+    const resolvedNodePath =
+      primary[0]?.nodePath ?? summaryPrimaryAccess?.orgStructure?.nodePath ?? null;
+    const levelCount =
+      UserDbController.getNodeHierarchyLevelCount(resolvedNodePath);
 
     return {
       isPending: Boolean(pendingRequest),
+      levelCount,
       ...(includePendingApprovalCount ? { pendingApprovalCount } : {}),
       basicDetails: {
         name: u.name,
@@ -5065,10 +5081,7 @@ export class UserDbController {
                 primary[0]?.nodeName ??
                 summaryPrimaryAccess?.orgStructure?.nodeName ??
                 null,
-              nodePath:
-                primary[0]?.nodePath ??
-                summaryPrimaryAccess?.orgStructure?.nodePath ??
-                null,
+              nodePath: resolvedNodePath,
             }
           : {}),
         ...(detail
@@ -5761,11 +5774,16 @@ export class UserDbController {
             permission.isGlobalAccess === true ||
             permission.accessType === 'PRIMARY',
         );
+        const resolvedNodePath =
+          primary[0]?.nodePath ?? summaryPrimaryAccess?.nodePath ?? null;
+        const levelCount =
+          UserDbController.getNodeHierarchyLevelCount(resolvedNodePath);
 
         return {
           id: onb.id,
           type,
           impact: onb.impact || null,
+          levelCount,
           ...(detail
             ? {
                 oldData: responseOldData,
@@ -5788,10 +5806,7 @@ export class UserDbController {
                     primary[0]?.nodeName ??
                     summaryPrimaryAccess?.nodeName ??
                     null,
-                  nodePath:
-                    primary[0]?.nodePath ??
-                    summaryPrimaryAccess?.nodePath ??
-                    null,
+                  nodePath: resolvedNodePath,
                 }
               : {}),
             ...(detail
