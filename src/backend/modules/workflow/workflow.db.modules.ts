@@ -1260,6 +1260,12 @@ export class WorkflowDbController {
       alias: row.alias,
       module,
       subModule,
+      nodePath:
+        row?.nodePath ??
+        row?.newData?.nodePath ??
+        rowData?.nodePath ??
+        rowTarget?.nodePath ??
+        null,
       nodeType: row.nodeType ?? null,
       nodeName: row.nodeName ?? null,
       workflowName: row.workflowName,
@@ -7274,14 +7280,20 @@ export class WorkflowDbController {
         };
         const initiatorTimestamp = historyEntry?.createdAt || req.createdAt;
         const node = nodeMap.get(req.nodeId);
+        const requestData = (req.data as any) || {};
+        const target = requestData?.target || {};
+        const resolvedNodePath =
+          node?.nodePath ||
+          requestData?.nodePath ||
+          target?.nodePath ||
+          null;
         const nodeType = node?.nodeType || null;
         const linkedOrgStructure = WorkflowDbController.buildLinkedOrgStructure(
           allOrgNodes,
-          node?.nodePath || (req.data as any)?.nodePath || null,
+          resolvedNodePath,
         );
 
         // Resolve workflow name, alias, and master data (target match first)
-        const target = (req.data as any)?.target;
         const targetKey = [
           target?.module,
           target?.subModule,
@@ -7296,7 +7308,6 @@ export class WorkflowDbController {
           ? workflowMap.get(req.approvalWorkflowId)
           : null;
         const associatedWorkflow = targetWorkflow || linkedWorkflow || null;
-        const requestData = (req.data as any) || {};
         const targetModule = target?.module || null;
         const targetSubModule = target?.subModule || null;
         const rowModule =
@@ -7350,8 +7361,7 @@ export class WorkflowDbController {
             ...masterData,
             nodePath:
               associatedWorkflow?.orgStructure?.nodePath ||
-              node?.nodePath ||
-              requestData?.nodePath ||
+              resolvedNodePath ||
               null,
           };
         }
@@ -7374,7 +7384,7 @@ export class WorkflowDbController {
           subModule: rowSubModule,
           nodeType,
           nodeName: node?.nodeName || (req.data as any)?.nodeName || null,
-          nodePath: node?.nodePath || (req.data as any)?.nodePath || null,
+          nodePath: resolvedNodePath,
           workflowName,
           alias,
           associateAlias: {
