@@ -74,6 +74,7 @@ export class WorkflowController {
         'type' in workflow ? workflow.type : (workflow.workflowType ?? 'NODE'),
       module: workflow.module,
       subModule: workflow.subModule,
+      nodePath: workflow.orgStructure.nodePath,
       orgStructure: {
         nodePath: workflow.orgStructure.nodePath,
         nodeName: workflow.orgStructure.nodeName,
@@ -121,6 +122,7 @@ export class WorkflowController {
         workflow.data?.subModule ??
         nextData?.subModule ??
         null,
+      nodePath: workflow.nodePath ?? workflow.data?.nodePath ?? null,
       nodeType: workflow.nodeType,
       nodeName: workflow.nodeName,
       workflowName: workflow.workflowName,
@@ -155,7 +157,6 @@ export class WorkflowController {
               email: workflow.initiator?.email ?? '',
             },
             initiatorTimestamp: workflow.initiatorTimestamp,
-            nodePath: workflow.nodePath,
             linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map(
               (child) => WorkflowController.formatLinkedOrgStructure(child),
             ),

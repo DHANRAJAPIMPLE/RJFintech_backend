@@ -64,6 +64,7 @@ export type UserCompanyNodeFilterPermissionSummary = {
   checker: UserCompanyNodeFilterPermissionSummaryItem;
   maker: UserCompanyNodeFilterPermissionSummaryItem;
   viewer: UserCompanyNodeFilterPermissionSummaryItem;
+  corpAdmin: UserCompanyNodeFilterPermissionSummaryItem;
 };
 
 export type UserCompanyNodeFilterDropdowns = {

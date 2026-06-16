@@ -71,6 +71,7 @@ export type WorkflowActiveItem = {
   workflowType: WorkflowType;
   module: WorkflowModule;
   subModule: WorkflowSubModule;
+  nodePath?: string;
   orgStructure: WorkflowOrgStructure;
   levelsHash?: string;
   levels?: WorkflowActiveLevel[];

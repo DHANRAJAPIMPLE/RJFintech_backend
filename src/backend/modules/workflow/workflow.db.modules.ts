@@ -2697,6 +2697,7 @@ export class WorkflowDbController {
       referenceName: generatedWorkflows[0]?.sourceWorkflowName || 'workflow',
       createdBy: params.createdBy,
       recipientUserIds,
+      isPending: false,
     });
   }
 

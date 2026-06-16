@@ -1141,6 +1141,7 @@ export class OrgStructureDbController {
       referenceName: generatedWorkflows[0]?.nodeName || 'workflow',
       createdBy: params.createdBy,
       recipientUserIds,
+      isPending: false,
     });
   }
 

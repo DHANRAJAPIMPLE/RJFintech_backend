@@ -63,6 +63,7 @@ type CompanyNodeFilterPermissionSummary = {
   checker: CompanyNodeFilterPermissionSummaryItem;
   maker: CompanyNodeFilterPermissionSummaryItem;
   viewer: CompanyNodeFilterPermissionSummaryItem;
+  corpAdmin: CompanyNodeFilterPermissionSummaryItem;
 };
 
 type CompanyWorkflowFilterApplied = {
@@ -3573,9 +3574,24 @@ export class UserDbController {
       companyId,
       pendingOrgNodePaths,
     );
+    const viewerScope = await UserDbController.getFetchUserViewerScope(
+      userId,
+      companyId,
+    );
+    const canViewCorpAdminUsers =
+      viewerScope.isSaasAdmin || viewerScope.isCorpAdmin;
     const visibleNodePathSet = new Set(visibility.visibleNodePaths);
     const visibleUserWhere = visibility.isGlobal
-      ? {}
+      ? canViewCorpAdminUsers
+        ? {}
+        : {
+            userAccesses: {
+              none: {
+                companyId,
+                roleCode: 'CORP_ADMIN',
+              },
+            },
+          }
       : visibility.visibleNodeIds.length > 0
         ? {
             AND: [
@@ -3595,6 +3611,18 @@ export class UserDbController {
                   },
                 },
               },
+              ...(canViewCorpAdminUsers
+                ? []
+                : [
+                    {
+                      userAccesses: {
+                        none: {
+                          companyId,
+                          roleCode: 'CORP_ADMIN',
+                        },
+                      },
+                    },
+                  ]),
             ],
           }
         : {
@@ -3791,11 +3819,11 @@ export class UserDbController {
     const categoryMap = new Map<string, string>();
     const subCategoryMap = new Map<string, Set<string>>();
     const reportingManagerMap = new Map<string, string>();
-    const roleMap = new Map<string, string>();
     const permissionSummarySets = {
       checker: new Set<string>(),
       maker: new Set<string>(),
       viewer: new Set<string>(),
+      corpAdmin: new Set<string>(),
     };
     const allUserEntries = [
       ...activeUsers.map((user) => ({ user, defaultStatus: 'ACTIVE' as const })),
@@ -3951,6 +3979,10 @@ export class UserDbController {
         } else if (accessBucket === 'user') {
           userPermissionBuckets.add('viewer');
         }
+
+        if (canViewCorpAdminUsers && access.role?.roleName === 'Corp Admin') {
+          permissionSummarySets.corpAdmin.add(user.id);
+        }
       });
 
       userPermissionBuckets.forEach((bucket) => {
@@ -3986,10 +4018,6 @@ export class UserDbController {
           const current = subCategoryMap.get(categoryKey) || new Set<string>();
           current.add(subCategoryLabel);
           subCategoryMap.set(categoryKey, current);
-        }
-
-        if (roleName) {
-          roleMap.set(roleName.toLowerCase(), roleName);
         }
 
         const nodeTypeLabel = UserDbController.humanizeFilterLabel(nodeType);
@@ -4042,9 +4070,6 @@ export class UserDbController {
     const reportingManager = Array.from(reportingManagerMap.values()).sort(
       (a, b) => a.localeCompare(b),
     );
-    const role = Array.from(roleMap.values()).sort((a, b) =>
-      a.localeCompare(b),
-    );
     const subCategoryEntries: Array<[string, string[]]> = Array.from(
       subCategoryMap.entries(),
     ).map(([categoryKey, values]) => [
@@ -4062,6 +4087,7 @@ export class UserDbController {
       checker: { count: permissionSummarySets.checker.size },
       maker: { count: permissionSummarySets.maker.size },
       viewer: { count: permissionSummarySets.viewer.size },
+      corpAdmin: { count: permissionSummarySets.corpAdmin.size },
     };
 
     return {
@@ -5898,6 +5924,8 @@ export class UserDbController {
       const allVisibleNodePaths = viewerScope.visibleNodePaths;
       const excludeSaasAdminsForViewer =
         viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
+      const excludeCorpAdminsForViewer =
+        !viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
 
       const buildUserWhere = (status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE') => ({
         userMappings: {
@@ -5936,7 +5964,16 @@ export class UserDbController {
                   },
                 },
               }
-            : {}
+            : excludeCorpAdminsForViewer
+              ? {
+                  userAccesses: {
+                    none: {
+                      companyId: resolvedCompanyId,
+                      roleCode: 'CORP_ADMIN',
+                    },
+                  },
+                }
+              : {}
           : {
               AND: [
                 {
@@ -5962,6 +5999,18 @@ export class UserDbController {
                           none: {
                             companyId: resolvedCompanyId,
                             roleCode: 'SAAS_ADMIN',
+                          },
+                        },
+                      },
+                    ]
+                  : []),
+                ...(excludeCorpAdminsForViewer
+                  ? [
+                      {
+                        userAccesses: {
+                          none: {
+                            companyId: resolvedCompanyId,
+                            roleCode: 'CORP_ADMIN',
                           },
                         },
                       },
@@ -6654,6 +6703,8 @@ export class UserDbController {
       const visibleNodePaths = viewerScope.visibleNodePaths;
       const excludeSaasAdminsForViewer =
         viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
+      const excludeCorpAdminsForViewer =
+        !viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
 
       if (id) {
         const pendingOnboarding = await prisma.userOnboarding.findFirst({
@@ -6717,7 +6768,16 @@ export class UserDbController {
                 },
               },
             }
-          : {}
+          : excludeCorpAdminsForViewer
+            ? {
+                userAccesses: {
+                  none: {
+                    companyId: resolvedCompanyId,
+                    roleCode: 'CORP_ADMIN',
+                  },
+                },
+              }
+            : {}
         : {
             AND: [
               {
@@ -6743,6 +6803,18 @@ export class UserDbController {
                         none: {
                           companyId: resolvedCompanyId,
                           roleCode: 'SAAS_ADMIN',
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              ...(excludeCorpAdminsForViewer
+                ? [
+                    {
+                      userAccesses: {
+                        none: {
+                          companyId: resolvedCompanyId,
+                          roleCode: 'CORP_ADMIN',
                         },
                       },
                     },

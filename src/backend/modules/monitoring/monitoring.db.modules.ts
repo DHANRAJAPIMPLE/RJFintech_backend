@@ -1126,7 +1126,18 @@ export class MonitoringService {
       };
     }
 
-    const pagination = resolveCursorPagination(input);
+    const hasCursorNavigation = [
+      input.cursor,
+      input.prevCursor,
+      input.nextCursor,
+      input.cursorId,
+    ].some(
+      (value) => typeof value === 'string' && value.trim().length > 0,
+    );
+    const pagination = resolveCursorPagination({
+      ...input,
+      ...(hasCursorNavigation ? { page: undefined } : {}),
+    });
     const monitoringCursor = decodeMonitoringCursor(
       getMonitoringRawCursor(input, pagination),
     );
