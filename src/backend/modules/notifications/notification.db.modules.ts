@@ -396,6 +396,56 @@ export class NotificationService {
     return false;
   }
 
+  private static async hidePendingNotificationUsers(
+    tx: any,
+    params: {
+      companyId: string;
+      referenceType?: string | null;
+      referenceId?: string | null;
+      now: Date;
+      excludeNotificationId?: string | null;
+    },
+  ) {
+    const pendingNotifications = await tx.notification.findMany({
+      where: {
+        companyId: params.companyId,
+        referenceType: params.referenceType || null,
+        referenceId: params.referenceId || null,
+        isPending: true,
+        ...(params.excludeNotificationId
+          ? { id: { not: params.excludeNotificationId } }
+          : {}),
+      },
+      select: { id: true },
+    });
+    const pendingNotificationIds = pendingNotifications.map(
+      (notification: any) => notification.id,
+    );
+
+    if (pendingNotificationIds.length === 0) return;
+
+    await tx.notificationUser.updateMany({
+      where: {
+        notificationId: { in: pendingNotificationIds },
+        status: { not: 'HIDDEN' },
+      },
+      data: {
+        status: 'HIDDEN',
+        updatedAt: params.now,
+      },
+    });
+
+    await tx.notification.updateMany({
+      where: {
+        id: { in: pendingNotificationIds },
+      },
+      data: {
+        isPending: false,
+        updatedAt: params.now,
+      },
+    });
+  }
+
   private static async formatNotification(
     row: any,
     target?: string | null,
@@ -1447,18 +1497,12 @@ export class NotificationService {
 
       if (existingNotification) {
         if (shouldClearPreviousPending) {
-          await tx.notification.updateMany({
-            where: {
-              companyId: input.companyId,
-              referenceType: input.referenceType || null,
-              referenceId: input.referenceId || null,
-              isPending: true,
-              id: { not: existingNotification.id },
-            },
-            data: {
-              isPending: false,
-              updatedAt: now,
-            },
+          await NotificationService.hidePendingNotificationUsers(tx, {
+            companyId: input.companyId,
+            referenceType: input.referenceType,
+            referenceId: input.referenceId,
+            now,
+            excludeNotificationId: existingNotification.id,
           });
         }
 
@@ -1486,17 +1530,11 @@ export class NotificationService {
       }
 
       if (shouldClearPreviousPending) {
-        await tx.notification.updateMany({
-          where: {
-            companyId: input.companyId,
-            referenceType: input.referenceType || null,
-            referenceId: input.referenceId || null,
-            isPending: true,
-          },
-          data: {
-            isPending: false,
-            updatedAt: now,
-          },
+        await NotificationService.hidePendingNotificationUsers(tx, {
+          companyId: input.companyId,
+          referenceType: input.referenceType,
+          referenceId: input.referenceId,
+          now,
         });
       }
 
