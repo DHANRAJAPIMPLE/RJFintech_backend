@@ -36,6 +36,7 @@ import type {
   AuthLoginResponse,
   AuthLogoutResponse,
   AuthMeResponse,
+  AuthReporteeResponse,
   AuthUserGroup,
 } from './auth.type';
 
@@ -425,14 +426,65 @@ export class AuthController {
   static async getAccessRights(
     req: Request<
       Record<string, never>,
-      AuthAccessRightsResponse,
+      AuthAccessRightsResponse | AuthReporteeResponse,
       AuthAccessRightsRequest
     >,
-    res: Response<AuthAccessRightsResponse>,
+    res: Response<AuthAccessRightsResponse | AuthReporteeResponse>,
     next: NextFunction,
   ) {
     try {
-      const { email, companyCode } = zodParse(accessRightsSchema, req.body);
+      const { email, companyCode, reportee } = zodParse(
+        accessRightsSchema,
+        req.body,
+      );
+
+      if (reportee) {
+        const accessToken =
+          req.cookies?.accessToken ||
+          req.headers.authorization?.split(' ')[1] ||
+          null;
+
+        if (!accessToken) {
+          throw new AppError('Unauthorized - Access token missing', 401);
+        }
+
+        let decodedToken: { userId: string; companyId: string } | null = null;
+        try {
+          decodedToken = TokenUtil.verifyAccessToken(accessToken) as {
+            userId: string;
+            companyId: string;
+          };
+        } catch {
+          decodedToken = TokenUtil.decodeToken(accessToken) as {
+            userId: string;
+            companyId: string;
+          } | null;
+        }
+
+        if (!decodedToken?.userId || !decodedToken?.companyId) {
+          throw new AppError('Unauthorized - Invalid access token', 401);
+        }
+
+        const backendRes = await internalPost<
+          AuthReporteeResponse | AuthApiErrorResponse
+        >(`${config.backendAuthUrl}/access-rights`, {
+          reportee: true,
+          userId: decodedToken.userId,
+          companyId: decodedToken.companyId,
+        });
+
+        if (!backendRes.ok) {
+          const errorData = backendRes.data as AuthApiErrorResponse;
+          throw new AppError(
+            errorData?.message ||
+              errorData?.error ||
+              'Failed to fetch reportee users',
+            backendRes.status || 500,
+          );
+        }
+
+        return res.status(200).json(backendRes.data as AuthReporteeResponse);
+      }
 
       const backendRes = await internalPost<
         AuthAccessRightsResponse | AuthApiErrorResponse

@@ -235,7 +235,43 @@ export class AuthDbController {
     next: NextFunction,
   ) {
     try {
-      const { email, companyCode } = req.body;
+      const { email, companyCode, reportee, userId, companyId } = req.body;
+
+      if (reportee) {
+        if (!userId || !companyId) {
+          return res.status(400).json({
+            error: 'userId and companyId are required when reportee is true',
+          });
+        }
+
+        const reporteeMappings = await prisma.userMapping.findMany({
+          where: {
+            reportingManager: userId,
+            companyId,
+            status: Status.ACTIVE,
+          },
+          select: {
+            user: {
+              select: {
+                name: true,
+                email: true,
+              },
+            },
+          },
+          orderBy: {
+            user: {
+              name: 'asc',
+            },
+          },
+        });
+
+        return res.status(200).json({
+          users: reporteeMappings.map((mapping) => ({
+            name: mapping.user.name,
+            email: mapping.user.email,
+          })),
+        });
+      }
 
       if (!email || !companyCode) {
         return res

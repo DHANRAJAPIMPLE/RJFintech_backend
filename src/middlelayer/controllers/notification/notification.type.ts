@@ -19,9 +19,9 @@ export type NotificationFetchDateRange =
   | '1_MONTH'
   | 'CUSTOM';
 
-export type NotificationUserStatus = 'READ' | 'UNREAD' | 'ARCHIVED';
+export type NotificationUserStatus = 'READ' | 'UNREAD' | 'ARCHIVED' | 'HIDDEN';
 
-export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'ALL';
+export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'HIDDEN' | 'ALL';
 
 export type NotificationFetchRequest = {
   status?: NotificationFetchStatus;
@@ -104,3 +104,44 @@ export type NotificationSseEventPayloadMap = {
 };
 
 export type NotificationSseEventName = keyof NotificationSseEventPayloadMap;
+
+export type NotificationSettingsModule = 'USER' | 'WORKFLOW' | 'ORG';
+
+export type FetchNotificationSettingsResponse = {
+  success: true;
+  data: Array<{
+    companyName: string | null;
+    companyCode: string;
+    nodes: Array<{
+      nodePath: string;
+      nodeName: string;
+      levelCount: number;
+      settings: Array<{
+        module: NotificationSettingsModule;
+        isEnabled: boolean;
+      }>;
+    }>;
+  }>;
+};
+
+export type UpdateNotificationSettingsRequest = Array<{
+  companyCode: string;
+  settings: Array<{
+    nodePath: string;
+    module: NotificationSettingsModule;
+    isEnabled: boolean;
+    remarks?: string | null;
+  }>;
+}>;
+
+export type UpdateNotificationSettingsResponse = {
+  success: true;
+  message: string;
+  data: Array<{
+    companyCode: string;
+    nodePath: string;
+    nodeName: string;
+    module: NotificationSettingsModule;
+    isEnabled: boolean;
+  }>;
+};

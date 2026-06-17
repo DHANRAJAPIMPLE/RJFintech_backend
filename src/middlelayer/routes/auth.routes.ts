@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/auth/auth.controller';
 import { validate } from '../middlewares/validate.middleware';
-import { registerSchema, loginSchema } from '../validations/auth.validation';
+import {
+  registerSchema,
+  loginSchema,
+  accessRightsRequestSchema,
+} from '../validations/auth.validation';
 import { authMiddleware } from '../middlewares/auth.middleware';
 
 /**
@@ -31,6 +35,10 @@ router.post('/me', authMiddleware, AuthController.me);  //done
 router.post('/logout', AuthController.logout);  //done
 
 // Logic: Public/Semi — Fetch user access rights (primary/secondary) by email and companyCode
-router.post('/access-rights', AuthController.getAccessRights);  //done
+router.post(
+  '/access-rights',
+  validate(accessRightsRequestSchema),
+  AuthController.getAccessRights,
+);  //done
 
 export default router;

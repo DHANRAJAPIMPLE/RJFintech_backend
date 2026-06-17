@@ -5,11 +5,6 @@ import { AppError } from '../../middlewares/error.middleware';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
 import {
-  buildTemplateMatrix,
-  normalizeTemplateEvent,
-  normalizeTemplateModule,
-} from '../../../shared/utils/template.util';
-import {
   appendCursorWhere,
   buildPage,
   getInMemoryPageRows,
@@ -33,42 +28,6 @@ type NormalizedCompanyListAppliedFilters = {
  * Handles the transition from a pending company request to a live production environment.
  */
 export class CompanyDbController {
-  private static normalizeTemplatePayload(
-    templates: unknown,
-  ): Array<{
-    module: string;
-    event: string;
-    isEnabled: boolean;
-  }> {
-    if (!Array.isArray(templates) || templates.length === 0) {
-      throw new AppError('At least one template entry is required', 400);
-    }
-
-    return templates.map((template, index) => {
-      if (!template || typeof template !== 'object') {
-        throw new AppError(`Invalid template entry at index ${index}`, 400);
-      }
-
-      const module = normalizeTemplateModule((template as any).module);
-      const event = normalizeTemplateEvent((template as any).event);
-      const isEnabled = (template as any).isEnabled;
-
-      if (!module) {
-        throw new AppError(`Invalid module at index ${index}`, 400);
-      }
-
-      if (!event) {
-        throw new AppError(`Invalid event at index ${index}`, 400);
-      }
-
-      if (typeof isEnabled !== 'boolean') {
-        throw new AppError(`isEnabled must be boolean at index ${index}`, 400);
-      }
-
-      return { module, event, isEnabled };
-    });
-  }
-
   private static normalizeFilterText(value: unknown) {
     if (typeof value !== 'string') return null;
 
@@ -504,123 +463,6 @@ export class CompanyDbController {
       res.status(200).json(userMappings);
     } catch (error) {
       next(error);
-    }
-  }
-
-  static async upsertTemplates(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const { userId, companyId } = req.body;
-      const templates = CompanyDbController.normalizeTemplatePayload(
-        req.body?.templates,
-      );
-
-      if (typeof userId !== 'string' || !userId.trim()) {
-        throw new AppError('userId is required', 400);
-      }
-
-      if (typeof companyId !== 'string' || !companyId.trim()) {
-        throw new AppError('companyId is required', 400);
-      }
-
-      const dedupedTemplates = Array.from(
-        new Map(
-          templates.map((template) => [
-            `${template.module}:${template.event}`,
-            template,
-          ]),
-        ).values(),
-      );
-
-      await prisma.$transaction(
-        dedupedTemplates.map((template) =>
-          prisma.template.upsert({
-            where: {
-              userId_companyId_module_event: {
-                userId,
-                companyId,
-                module: template.module,
-                event: template.event,
-              },
-            },
-            update: {
-              isEnabled: template.isEnabled,
-              companyId,
-            },
-            create: {
-              userId,
-              companyId,
-              module: template.module,
-              event: template.event,
-              isEnabled: template.isEnabled,
-            },
-          }),
-        ),
-      );
-
-      const savedTemplates = await prisma.template.findMany({
-        where: { userId, companyId },
-        select: {
-          module: true,
-          event: true,
-          isEnabled: true,
-          updatedAt: true,
-        },
-        orderBy: [{ module: 'asc' }, { event: 'asc' }],
-      });
-
-      return res.status(200).json({
-        message: 'Templates saved successfully',
-        userId,
-        companyId,
-        templates: savedTemplates,
-        modules: buildTemplateMatrix(savedTemplates),
-      });
-    } catch (error) {
-      return next(error);
-    }
-  }
-
-  static async fetchTemplates(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const { userId, companyId } = req.body;
-
-      if (typeof userId !== 'string' || !userId.trim()) {
-        throw new AppError('userId is required', 400);
-      }
-
-      if (typeof companyId !== 'string' || !companyId.trim()) {
-        throw new AppError('companyId is required', 400);
-      }
-
-      const templates = await prisma.template.findMany({
-        where: { userId, companyId },
-        select: {
-          id: true,
-          module: true,
-          event: true,
-          isEnabled: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-        orderBy: [{ module: 'asc' }, { event: 'asc' }],
-      });
-
-      return res.status(200).json({
-        userId,
-        companyId,
-        templates,
-        modules: buildTemplateMatrix(templates),
-      });
-    } catch (error) {
-      return next(error);
     }
   }
 

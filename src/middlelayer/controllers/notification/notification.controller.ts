@@ -8,8 +8,11 @@ import { zodParse } from '../../utils/zod-parse.util';
 import {
   notificationFetchSchema,
   notificationReadSchema,
+  notificationSettingsFetchSchema,
+  notificationSettingsUpdateSchema,
 } from '../../validations/notification.validation';
 import type {
+  FetchNotificationSettingsResponse,
   FetchNotificationsInternalResponse,
   FetchNotificationsResponse,
   MarkNotificationReadInternalResponse,
@@ -19,6 +22,8 @@ import type {
   NotificationSseEventName,
   NotificationSseEventPayloadMap,
   NotificationSseNotificationEvent,
+  UpdateNotificationSettingsRequest,
+  UpdateNotificationSettingsResponse,
 } from './notification.type';
 
 export class NotificationController {
@@ -147,6 +152,97 @@ export class NotificationController {
       const response = data as FetchNotificationsResponse;
 
       return res.status(200).json(response);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  static async fetchSettings(
+    req: AuthRequest,
+    res: Response<FetchNotificationSettingsResponse>,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = req.user?.id;
+      const companyId = req.user?.companyId;
+      if (!userId || !companyId) {
+        throw new AppError('Unauthorized', 401);
+      }
+
+      zodParse(notificationSettingsFetchSchema, req.body ?? {});
+      const includeAllCompanies =
+        await NotificationController.isSaasAdmin(userId);
+
+      const { data, ok, status } =
+        await internalPost<FetchNotificationSettingsResponse | NotificationApiErrorResponse>(
+          `${config.backendUrl}/internal/notifications/fetch-settings`,
+          {
+            userId,
+            companyId,
+            includeAllCompanies,
+          },
+        );
+
+      if (!ok) {
+        const errorData = data as NotificationApiErrorResponse;
+        throw new AppError(
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to fetch notification settings',
+          status,
+        );
+      }
+
+      return res.status(200).json(data as FetchNotificationSettingsResponse);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  static async updateSettings(
+    req: AuthRequest,
+    res: Response<UpdateNotificationSettingsResponse>,
+    next: NextFunction,
+  ) {
+    try {
+      const userId = req.user?.id;
+      const companyId = req.user?.companyId;
+      if (!userId || !companyId) {
+        throw new AppError('Unauthorized', 401);
+      }
+
+      const body = zodParse(notificationSettingsUpdateSchema, req.body ?? {});
+      const includeAllCompanies =
+        await NotificationController.isSaasAdmin(userId);
+
+      const { data, ok, status } =
+        await internalPost<
+          UpdateNotificationSettingsResponse | NotificationApiErrorResponse
+        >(`${config.backendUrl}/internal/notifications/settings`, {
+          userId,
+          companyId,
+          eventUserId: userId,
+          companies: body,
+          includeAllCompanies,
+        } satisfies {
+          userId: string;
+          companyId: string;
+          eventUserId: string;
+          companies: UpdateNotificationSettingsRequest;
+          includeAllCompanies: boolean;
+        });
+
+      if (!ok) {
+        const errorData = data as NotificationApiErrorResponse;
+        throw new AppError(
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to update notification settings',
+          status,
+        );
+      }
+
+      return res.status(200).json(data as UpdateNotificationSettingsResponse);
     } catch (error) {
       return next(error);
     }

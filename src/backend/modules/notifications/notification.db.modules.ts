@@ -15,6 +15,8 @@ type NotificationType =
   | 'ARCHIVE'
   | 'AUTO_DELETE';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
+type NotificationModule = 'USER' | 'WORKFLOW' | 'ORG';
+type NotificationVisibilityStatus = 'UNREAD' | 'READ' | 'ARCHIVED' | 'HIDDEN';
 type NotificationFetchDateRange =
   | 'ALL'
   | '7_DAYS'
@@ -35,6 +37,35 @@ type CreateNotificationInput = {
   requiredRecipientUserIds?: string[];
   includeCreatedBy?: boolean;
   isPending?: boolean;
+};
+
+type NotificationSettingsFetchParams = {
+  userId: string;
+  companyId: string;
+  includeAllCompanies?: boolean;
+};
+
+type NotificationSettingsUpdateParams = {
+  userId: string;
+  companyId: string;
+  eventUserId: string;
+  companies: Array<{
+    companyCode: string;
+    settings: Array<{
+      nodePath: string;
+      module: NotificationModule;
+      isEnabled: boolean;
+      remarks?: string | null;
+    }>;
+  }>;
+  includeAllCompanies?: boolean;
+};
+
+type NotificationAccessNode = {
+  id: string;
+  nodeName: string;
+  nodePath: string;
+  levelCount: number;
 };
 
 const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
@@ -61,6 +92,7 @@ const PENDING_NOTIFICATION_TYPES: NotificationType[] = [
   'INACTIVE',
   'ARCHIVE',
 ];
+const NOTIFICATION_MODULES: NotificationModule[] = ['USER', 'WORKFLOW', 'ORG'];
 
 const normalizeStatus = (value: unknown) => {
   const status = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
@@ -71,7 +103,16 @@ const normalizeStatus = (value: unknown) => {
 
 const normalizeFetchStatus = (value: unknown) => {
   const status = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
-  return ['READ', 'UNREAD', 'ALL'].includes(status) ? status : 'ALL';
+  return ['READ', 'UNREAD', 'HIDDEN', 'ALL'].includes(status) ? status : 'ALL';
+};
+
+const getNodeLevelCount = (nodePath: unknown) => {
+  if (typeof nodePath !== 'string') return 1;
+  const segments = nodePath
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  return Math.max(segments.length, 1);
 };
 
 const normalizeReferenceType = (value: unknown) => {
@@ -303,6 +344,10 @@ export class NotificationService {
     referenceId?: string | null;
     isPending?: boolean | null;
   }) {
+    if (row.isPending !== true) {
+      return false;
+    }
+
     const referenceType =
       typeof row.referenceType === 'string'
         ? row.referenceType.trim().toUpperCase()
@@ -310,9 +355,7 @@ export class NotificationService {
     const referenceId =
       typeof row.referenceId === 'string' ? row.referenceId.trim() : '';
 
-    if (!referenceType || !referenceId) {
-      return row.isPending ?? false;
-    }
+    if (!referenceType || !referenceId) return false;
 
     if (referenceType === 'USER') {
       const onboarding = await prisma.userOnboarding.findUnique({
@@ -350,7 +393,7 @@ export class NotificationService {
       return request?.status === 'PENDING';
     }
 
-    return row.isPending ?? false;
+    return false;
   }
 
   private static async formatNotification(
@@ -632,6 +675,497 @@ export class NotificationService {
     return Boolean(access);
   }
 
+  private static normalizeNotificationModule(
+    value: unknown,
+  ): NotificationModule | null {
+    const moduleName =
+      typeof value === 'string' ? value.trim().toUpperCase() : '';
+    return NOTIFICATION_MODULES.includes(moduleName as NotificationModule)
+      ? (moduleName as NotificationModule)
+      : null;
+  }
+
+  private static getNotificationModuleForReferenceType(
+    referenceType?: string | null,
+  ): NotificationModule | null {
+    const normalized = String(referenceType || '').trim().toUpperCase();
+    if (normalized === 'USER') return 'USER';
+    if (normalized === 'WORKFLOW') return 'WORKFLOW';
+    if (normalized === 'ORG') return 'ORG';
+    return null;
+  }
+
+  private static buildNotificationSettingsHistoryPayload(input: {
+    nodePath: string;
+    nodeName: string;
+    module: NotificationModule;
+    isEnabled: boolean;
+    remarks?: string | null;
+  }) {
+    return {
+      nodePath: input.nodePath,
+      nodeName: input.nodeName,
+      module: input.module,
+      isEnabled: input.isEnabled,
+      remarks: input.remarks ?? null,
+    };
+  }
+
+  private static buildNotificationSettingsHistoryRemark(input: {
+    module: NotificationModule;
+    nodeName: string;
+    nodePath: string;
+    isEnabled: boolean;
+  }) {
+    const action = input.isEnabled ? 'enabled' : 'disabled';
+    return `Notification setting ${action} for ${input.module} on ${input.nodeName} (${input.nodePath}).`;
+  }
+
+  private static async getAccessibleCompanyRows(
+    userId: string,
+    companyId: string,
+    includeAllCompanies?: boolean,
+  ) {
+    const allowAll =
+      await NotificationService.canReadAllCompanyNotifications(
+        userId,
+        includeAllCompanies,
+      );
+
+    return prisma.userMapping.findMany({
+      where: {
+        userId,
+        status: 'ACTIVE',
+        ...(allowAll ? {} : { companyId }),
+      },
+      select: {
+        companyId: true,
+        company: {
+          select: {
+            id: true,
+            companyCode: true,
+            legalName: true,
+            brandName: true,
+          },
+        },
+      },
+      orderBy: {
+        company: { companyCode: 'asc' },
+      },
+    });
+  }
+
+  private static async getAccessibleNotificationNodes(
+    tx: any,
+    companyId: string,
+    userId: string,
+  ): Promise<NotificationAccessNode[]> {
+    const hasGlobalAccess = Boolean(
+      await tx.userAccess.findFirst({
+        where: {
+          companyId,
+          userId,
+          isGlobalAccess: true,
+          orgStructure: {
+            status: 'ACTIVE',
+          },
+        },
+        select: { id: true },
+      }),
+    );
+
+    if (hasGlobalAccess) {
+      const nodes = await tx.orgStructure.findMany({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+        },
+        select: {
+          id: true,
+          nodeName: true,
+          nodePath: true,
+        },
+        orderBy: { nodePath: 'asc' },
+      });
+
+      return nodes.map((node: any) => ({
+        ...node,
+        levelCount: getNodeLevelCount(node.nodePath),
+      }));
+    }
+
+    const accesses = await tx.userAccess.findMany({
+      where: {
+        companyId,
+        userId,
+        orgStructure: {
+          status: 'ACTIVE',
+        },
+      },
+      select: {
+        nodeId: true,
+        orgStructure: {
+          select: {
+            id: true,
+            nodeName: true,
+            nodePath: true,
+          },
+        },
+      },
+      orderBy: {
+        orgStructure: { nodePath: 'asc' },
+      },
+    });
+
+    const uniqueNodes = new Map<string, NotificationAccessNode>();
+    accesses.forEach((access: any) => {
+      const node = access.orgStructure;
+      if (!node?.id) return;
+      uniqueNodes.set(node.id, {
+        id: node.id,
+        nodeName: node.nodeName,
+        nodePath: node.nodePath,
+        levelCount: getNodeLevelCount(node.nodePath),
+      });
+    });
+
+    return Array.from(uniqueNodes.values()).sort((left, right) =>
+      left.nodePath.localeCompare(right.nodePath),
+    );
+  }
+
+  static async syncNotificationSettingsForUserAccess(
+    tx: any,
+    params: {
+      companyId: string;
+      userId: string;
+      eventUserId: string;
+      createReason: string;
+      removeReason: string;
+    },
+  ) {
+    const mapping = await tx.userMapping.findFirst({
+      where: {
+        companyId: params.companyId,
+        userId: params.userId,
+      },
+      select: { status: true },
+    });
+
+    const nodeRows =
+      mapping?.status === 'ACTIVE'
+        ? await NotificationService.getAccessibleNotificationNodes(
+            tx,
+            params.companyId,
+            params.userId,
+          )
+        : [];
+    const nodeMap = new Map(nodeRows.map((node) => [node.id, node]));
+
+    const existingRows = await (tx as any).notificationSetting.findMany({
+      where: {
+        companyId: params.companyId,
+        userId: params.userId,
+      },
+      include: {
+        node: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+          },
+        },
+      },
+    });
+
+    const desiredKeys = new Set<string>();
+    nodeRows.forEach((node) => {
+      NOTIFICATION_MODULES.forEach((module) => {
+        desiredKeys.add(`${node.id}:${module}`);
+      });
+    });
+
+    for (const existing of existingRows) {
+      const node = existing.node;
+      const existingKey = `${existing.nodeId}:${existing.module}`;
+      if (desiredKeys.has(existingKey)) continue;
+
+      const oldData = node
+        ? NotificationService.buildNotificationSettingsHistoryPayload({
+            nodePath: node.nodePath,
+            nodeName: node.nodeName,
+            module: NotificationService.normalizeNotificationModule(
+              existing.module,
+            ) || 'USER',
+            isEnabled: Boolean(existing.isEnabled),
+            remarks: existing.remarks,
+          })
+        : null;
+
+      await (tx as any).notificationSettingHistory.create({
+        data: {
+          notificationSettingId: existing.id,
+          companyId: params.companyId,
+          eventUserId: params.eventUserId,
+          oldData,
+          newData: null,
+          remarks: params.removeReason,
+        },
+      });
+
+      await (tx as any).notificationSetting.delete({
+        where: { id: existing.id },
+      });
+    }
+
+    const existingKeySet = new Set(
+      existingRows.map((row: any) => `${row.nodeId}:${row.module}`),
+    );
+
+    for (const node of nodeRows) {
+      for (const module of NOTIFICATION_MODULES) {
+        const key = `${node.id}:${module}`;
+        if (existingKeySet.has(key)) continue;
+
+        const created = await (tx as any).notificationSetting.create({
+          data: {
+            companyId: params.companyId,
+            userId: params.userId,
+            nodeId: node.id,
+            module,
+            isEnabled: true,
+            remarks: params.createReason,
+          },
+        });
+
+        await (tx as any).notificationSettingHistory.create({
+          data: {
+            notificationSettingId: created.id,
+            companyId: params.companyId,
+            eventUserId: params.eventUserId,
+            oldData: null,
+            newData: NotificationService.buildNotificationSettingsHistoryPayload(
+              {
+                nodePath: node.nodePath,
+                nodeName: node.nodeName,
+                module,
+                isEnabled: true,
+                remarks: params.createReason,
+              },
+            ),
+            remarks: params.createReason,
+          },
+        });
+      }
+    }
+  }
+
+  private static async resolveNotificationNodeIds(
+    tx: any,
+    input: {
+      companyId: string;
+      referenceType?: string | null;
+      referenceId?: string | null;
+    },
+  ) {
+    const module = NotificationService.getNotificationModuleForReferenceType(
+      input.referenceType,
+    );
+    if (!module) {
+      return { module: null, nodeIds: [] as string[] };
+    }
+
+    const referenceId =
+      typeof input.referenceId === 'string' ? input.referenceId.trim() : '';
+    if (!referenceId) {
+      return { module, nodeIds: [] as string[] };
+    }
+
+    if (module === 'WORKFLOW') {
+      if (isUuidLike(referenceId)) {
+        const request = await tx.workflowReq.findUnique({
+          where: { id: referenceId },
+          select: {
+            nodeId: true,
+            data: true,
+          },
+        });
+        const nodeId =
+          typeof request?.nodeId === 'string' && request.nodeId
+            ? request.nodeId
+            : null;
+        if (nodeId) {
+          return { module, nodeIds: [nodeId] };
+        }
+
+        const nodePath = (request?.data as any)?.nodePath;
+        if (typeof nodePath === 'string' && nodePath.trim()) {
+          const node = await tx.orgStructure.findFirst({
+            where: {
+              companyId: input.companyId,
+              nodePath: nodePath.trim(),
+            },
+            select: { id: true },
+          });
+          return { module, nodeIds: node?.id ? [node.id] : [] };
+        }
+      }
+
+      return { module, nodeIds: [] as string[] };
+    }
+
+    if (module === 'ORG') {
+      const request = await tx.orgStructureReq.findUnique({
+        where: { id: referenceId },
+        select: { data: true },
+      });
+      const data = request?.data as any;
+      const nodePath =
+        (typeof data?.targetNodePath === 'string' && data.targetNodePath) ||
+        (typeof data?.nodePath === 'string' && data.nodePath) ||
+        (typeof data?.currentData?.nodePath === 'string' &&
+          data.currentData.nodePath) ||
+        null;
+      if (!nodePath) return { module, nodeIds: [] as string[] };
+
+      const node = await tx.orgStructure.findFirst({
+        where: {
+          companyId: input.companyId,
+          nodePath,
+        },
+        select: { id: true },
+      });
+
+      return { module, nodeIds: node?.id ? [node.id] : [] };
+    }
+
+    const request = await tx.userOnboarding.findUnique({
+      where: { id: referenceId },
+      select: {
+        data: true,
+        oldData: true,
+      },
+    });
+
+    const candidatePaths = new Set<string>();
+    const collectPermissionPaths = (value: unknown) => {
+      if (!Array.isArray(value)) return;
+      value.forEach((permission: any) => {
+        const path =
+          typeof permission?.nodePath === 'string' ? permission.nodePath.trim() : '';
+        if (path) candidatePaths.add(path);
+      });
+    };
+
+    const data = request?.data as any;
+    const oldData = request?.oldData as any;
+    collectPermissionPaths(data?.permissions);
+    collectPermissionPaths(oldData?.permissions);
+
+    if (candidatePaths.size === 0) {
+      const targetEmail =
+        (typeof data?.targetUserEmail === 'string' && data.targetUserEmail) ||
+        (typeof data?.basicDetails?.email === 'string' &&
+          data.basicDetails.email) ||
+        null;
+
+      if (targetEmail) {
+        const targetUser = await tx.user.findUnique({
+          where: { email: targetEmail },
+          select: { id: true },
+        });
+
+        if (targetUser?.id) {
+          const accesses = await tx.userAccess.findMany({
+            where: {
+              companyId: input.companyId,
+              userId: targetUser.id,
+            },
+            select: { nodeId: true },
+          });
+
+          return {
+            module,
+            nodeIds: NotificationService.unique(
+              accesses.map((access: any) => access.nodeId),
+            ),
+          };
+        }
+      }
+    }
+
+    if (candidatePaths.size === 0) {
+      return { module, nodeIds: [] as string[] };
+    }
+
+    const nodes = await tx.orgStructure.findMany({
+      where: {
+        companyId: input.companyId,
+        nodePath: { in: Array.from(candidatePaths) },
+      },
+      select: { id: true },
+    });
+
+    return {
+      module,
+      nodeIds: NotificationService.unique(nodes.map((node: any) => node.id)),
+    };
+  }
+
+  private static async resolveHiddenRecipientUserIds(
+    tx: any,
+    params: {
+      companyId: string;
+      recipientUserIds: string[];
+      referenceType?: string | null;
+      referenceId?: string | null;
+    },
+  ) {
+    const context = await NotificationService.resolveNotificationNodeIds(tx, {
+      companyId: params.companyId,
+      referenceType: params.referenceType,
+      referenceId: params.referenceId,
+    });
+
+    if (!context.module || context.nodeIds.length === 0) {
+      return new Set<string>();
+    }
+
+    const disabledRows = await (tx as any).notificationSetting.findMany({
+      where: {
+        companyId: params.companyId,
+        userId: { in: params.recipientUserIds },
+        nodeId: { in: context.nodeIds },
+        module: context.module,
+        isEnabled: false,
+      },
+      select: {
+        userId: true,
+        nodeId: true,
+      },
+    });
+
+    const disabledByUser = new Map<string, Set<string>>();
+    disabledRows.forEach((row: any) => {
+      const current = disabledByUser.get(row.userId) || new Set<string>();
+      current.add(row.nodeId);
+      disabledByUser.set(row.userId, current);
+    });
+
+    const hiddenUserIds = new Set<string>();
+    params.recipientUserIds.forEach((userId) => {
+      const disabledNodeIds = disabledByUser.get(userId);
+      if (!disabledNodeIds) return;
+      const isHiddenForAllNodes = context.nodeIds.every((nodeId) =>
+        disabledNodeIds.has(nodeId),
+      );
+      if (isHiddenForAllNodes) {
+        hiddenUserIds.add(userId);
+      }
+    });
+
+    return hiddenUserIds;
+  }
+
   static async getCorpAdminUserIds(companyId: string) {
     const accesses = await prisma.userAccess.findMany({
       where: {
@@ -873,31 +1407,25 @@ export class NotificationService {
 
     const notificationId = randomUUID();
     const now = new Date();
-    const notificationUsers = recipientUserIds.map((userId) => ({
-      id: randomUUID(),
-      companyId: input.companyId,
-      userId,
-      notificationId,
-      status: 'UNREAD',
-      updatedAt: now,
-    }));
 
     const notification = await prisma.$transaction(async (tx) => {
-      if (shouldClearPreviousPending) {
-        await tx.notification.updateMany({
-          where: {
-            companyId: input.companyId,
-            referenceType: input.referenceType || null,
-            referenceId: input.referenceId || null,
-            isPending: true,
-          },
-          data: {
-            isPending: false,
-            updatedAt: now,
-          },
+      const hiddenRecipientUserIds =
+        await NotificationService.resolveHiddenRecipientUserIds(tx, {
+          companyId: input.companyId,
+          recipientUserIds,
+          referenceType: input.referenceType,
+          referenceId: input.referenceId,
         });
-      }
-
+      const notificationUsers = recipientUserIds.map((userId) => ({
+        id: randomUUID(),
+        companyId: input.companyId,
+        userId,
+        notificationId,
+        status: (
+          hiddenRecipientUserIds.has(userId) ? 'HIDDEN' : 'UNREAD'
+        ) as NotificationVisibilityStatus,
+        updatedAt: now,
+      }));
       const existingNotification = await tx.notification.findFirst({
         where: {
           companyId: input.companyId,
@@ -918,7 +1446,58 @@ export class NotificationService {
       });
 
       if (existingNotification) {
-        return { notification: existingNotification, shouldEmit: false };
+        if (shouldClearPreviousPending) {
+          await tx.notification.updateMany({
+            where: {
+              companyId: input.companyId,
+              referenceType: input.referenceType || null,
+              referenceId: input.referenceId || null,
+              isPending: true,
+              id: { not: existingNotification.id },
+            },
+            data: {
+              isPending: false,
+              updatedAt: now,
+            },
+          });
+        }
+
+        const updatedNotification =
+          existingNotification.isPending === isPending
+            ? existingNotification
+            : await tx.notification.update({
+                where: { id: existingNotification.id },
+                data: {
+                  isPending,
+                  updatedAt: now,
+                },
+                include: {
+                  createdByUser: {
+                    select: { name: true, email: true },
+                  },
+                },
+              });
+
+        return {
+          notification: updatedNotification,
+          shouldEmit: false,
+          notificationUsers: [] as typeof notificationUsers,
+        };
+      }
+
+      if (shouldClearPreviousPending) {
+        await tx.notification.updateMany({
+          where: {
+            companyId: input.companyId,
+            referenceType: input.referenceType || null,
+            referenceId: input.referenceId || null,
+            isPending: true,
+          },
+          data: {
+            isPending: false,
+            updatedAt: now,
+          },
+        });
       }
 
       const createdNotification = await tx.notification.create({
@@ -946,7 +1525,11 @@ export class NotificationService {
         skipDuplicates: true,
       });
 
-      return { notification: createdNotification, shouldEmit: true };
+      return {
+        notification: createdNotification,
+        shouldEmit: true,
+        notificationUsers,
+      };
     });
 
     const target = await NotificationService.resolveNotificationTarget(
@@ -954,7 +1537,8 @@ export class NotificationService {
     );
 
     if (notification.shouldEmit) {
-      for (const notificationUser of notificationUsers) {
+      for (const notificationUser of notification.notificationUsers) {
+        if (notificationUser.status === 'HIDDEN') continue;
         const formattedNotification = await NotificationService.formatNotification(
           {
             ...notificationUser,
@@ -1046,6 +1630,7 @@ export class NotificationService {
     const baseWhere: any = {
       userId: params.userId,
       ...(includeAllCompanies ? {} : { companyId: params.companyId }),
+      status: status === 'HIDDEN' ? 'HIDDEN' : { not: 'HIDDEN' },
       ...(Object.keys(notificationWhere).length
         ? { notification: notificationWhere }
         : {}),
@@ -1171,9 +1756,343 @@ export class NotificationService {
       rows.map((row) => NotificationService.formatNotification(row)),
     );
   }
+
+  static async fetchSettingsForUser(params: NotificationSettingsFetchParams) {
+    const mappings = await NotificationService.getAccessibleCompanyRows(
+      params.userId,
+      params.companyId,
+      params.includeAllCompanies,
+    );
+    if (mappings.length === 0) {
+      return { success: true, data: [] as any[] };
+    }
+
+    const companyIds = mappings.map((mapping) => mapping.companyId);
+    const [settingsRows, globalAccessRows, accessRows, allOrgNodes] =
+      await Promise.all([
+        (prisma as any).notificationSetting.findMany({
+          where: {
+            userId: params.userId,
+            companyId: { in: companyIds },
+          },
+          include: {
+            node: {
+              select: {
+                id: true,
+                nodeName: true,
+                nodePath: true,
+              },
+            },
+          },
+        }),
+        prisma.userAccess.findMany({
+          where: {
+            userId: params.userId,
+            companyId: { in: companyIds },
+            isGlobalAccess: true,
+            orgStructure: { status: 'ACTIVE' },
+          },
+          select: { companyId: true },
+        }),
+        prisma.userAccess.findMany({
+          where: {
+            userId: params.userId,
+            companyId: { in: companyIds },
+            orgStructure: { status: 'ACTIVE' },
+          },
+          select: {
+            companyId: true,
+            nodeId: true,
+            orgStructure: {
+              select: {
+                id: true,
+                nodeName: true,
+                nodePath: true,
+              },
+            },
+          },
+        }),
+        prisma.orgStructure.findMany({
+          where: {
+            companyId: { in: companyIds },
+            status: 'ACTIVE',
+          },
+          select: {
+            companyId: true,
+            id: true,
+            nodeName: true,
+            nodePath: true,
+          },
+          orderBy: { nodePath: 'asc' },
+        }),
+      ]);
+
+    const globalCompanyIds = new Set(
+      globalAccessRows.map((row) => String(row.companyId || '').trim()),
+    );
+    const settingsByKey = new Map<string, any>();
+    settingsRows.forEach((row: any) => {
+      settingsByKey.set(
+        `${row.companyId}:${row.nodeId}:${row.module}`,
+        row,
+      );
+    });
+
+    const directNodesByCompany = new Map<string, Map<string, NotificationAccessNode>>();
+    accessRows.forEach((row: any) => {
+      const companyKey = String(row.companyId || '').trim();
+      const node = row.orgStructure;
+      if (!companyKey || !node?.id) return;
+      const companyNodes =
+        directNodesByCompany.get(companyKey) || new Map<string, NotificationAccessNode>();
+      companyNodes.set(node.id, {
+        id: node.id,
+        nodeName: node.nodeName,
+        nodePath: node.nodePath,
+        levelCount: getNodeLevelCount(node.nodePath),
+      });
+      directNodesByCompany.set(companyKey, companyNodes);
+    });
+
+    const allNodesByCompany = new Map<string, NotificationAccessNode[]>();
+    allOrgNodes.forEach((node: any) => {
+      const companyKey = String(node.companyId || '').trim();
+      const current = allNodesByCompany.get(companyKey) || [];
+      current.push({
+        id: node.id,
+        nodeName: node.nodeName,
+        nodePath: node.nodePath,
+        levelCount: getNodeLevelCount(node.nodePath),
+      });
+      allNodesByCompany.set(companyKey, current);
+    });
+
+    const data = mappings.map((mapping) => {
+      const companyKey = mapping.companyId;
+      const visibleNodes = globalCompanyIds.has(companyKey)
+        ? allNodesByCompany.get(companyKey) || []
+        : Array.from(directNodesByCompany.get(companyKey)?.values() || []).sort(
+            (left, right) => left.nodePath.localeCompare(right.nodePath),
+          );
+
+      return {
+        companyName:
+          mapping.company.brandName || mapping.company.legalName || null,
+        companyCode: mapping.company.companyCode,
+        nodes: visibleNodes.map((node) => ({
+          nodePath: node.nodePath,
+          nodeName: node.nodeName,
+          levelCount: node.levelCount,
+          settings: NOTIFICATION_MODULES.map((module) => {
+            const row = settingsByKey.get(
+              `${companyKey}:${node.id}:${module}`,
+            );
+            return {
+              module,
+              isEnabled:
+                typeof row?.isEnabled === 'boolean' ? row.isEnabled : true,
+            };
+          }),
+        })),
+      };
+    });
+
+    return { success: true, data };
+  }
+
+  static async updateSettingsForUser(params: NotificationSettingsUpdateParams) {
+    const mappings = await NotificationService.getAccessibleCompanyRows(
+      params.userId,
+      params.companyId,
+      params.includeAllCompanies,
+    );
+    const mappingByCode = new Map(
+      mappings.map((mapping) => [mapping.company.companyCode, mapping]),
+    );
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const results: any[] = [];
+
+      for (const companyEntry of params.companies) {
+        const mapping = mappingByCode.get(companyEntry.companyCode);
+        if (!mapping) {
+          throw new Error(
+            `Company ${companyEntry.companyCode} is not accessible for this user`,
+          );
+        }
+
+        const accessibleNodes =
+          await NotificationService.getAccessibleNotificationNodes(
+            tx,
+            mapping.companyId,
+            params.userId,
+          );
+        const accessibleNodeByPath = new Map(
+          accessibleNodes.map((node) => [node.nodePath, node]),
+        );
+
+        for (const setting of companyEntry.settings) {
+          const module = NotificationService.normalizeNotificationModule(
+            setting.module,
+          );
+          if (!module) {
+            throw new Error(`Unsupported notification module: ${setting.module}`);
+          }
+
+          const node = accessibleNodeByPath.get(setting.nodePath);
+          if (!node) {
+            throw new Error(
+              `Node path ${setting.nodePath} is not accessible for company ${companyEntry.companyCode}`,
+            );
+          }
+
+          const existing = await (tx as any).notificationSetting.findFirst({
+            where: {
+              companyId: mapping.companyId,
+              userId: params.userId,
+              nodeId: node.id,
+              module,
+            },
+          });
+
+          const oldData = existing
+            ? NotificationService.buildNotificationSettingsHistoryPayload({
+                nodePath: node.nodePath,
+                nodeName: node.nodeName,
+                module,
+                isEnabled: Boolean(existing.isEnabled),
+                remarks: existing.remarks,
+              })
+            : null;
+
+          if (
+            existing &&
+            Boolean(existing.isEnabled) === setting.isEnabled &&
+            (existing.remarks || null) === (setting.remarks || null)
+          ) {
+            continue;
+          }
+
+          if (!existing && setting.isEnabled === true && !setting.remarks) {
+            continue;
+          }
+
+          const saved = existing
+            ? await (tx as any).notificationSetting.update({
+                where: { id: existing.id },
+                data: {
+                  isEnabled: setting.isEnabled,
+                  remarks: setting.remarks || null,
+                },
+              })
+            : await (tx as any).notificationSetting.create({
+                data: {
+                  companyId: mapping.companyId,
+                  userId: params.userId,
+                  nodeId: node.id,
+                  module,
+                  isEnabled: setting.isEnabled,
+                  remarks: setting.remarks || null,
+                },
+              });
+
+          const newData =
+            NotificationService.buildNotificationSettingsHistoryPayload({
+              nodePath: node.nodePath,
+              nodeName: node.nodeName,
+              module,
+              isEnabled: setting.isEnabled,
+              remarks: setting.remarks || null,
+            });
+          const historyRemark =
+            NotificationService.buildNotificationSettingsHistoryRemark({
+              module,
+              nodeName: node.nodeName,
+              nodePath: node.nodePath,
+              isEnabled: setting.isEnabled,
+            });
+
+          await (tx as any).notificationSettingHistory.create({
+            data: {
+              notificationSettingId: saved.id,
+              companyId: mapping.companyId,
+              eventUserId: params.eventUserId,
+              oldData,
+              newData,
+              remarks: historyRemark,
+            },
+          });
+
+          results.push({
+            companyCode: companyEntry.companyCode,
+            nodePath: node.nodePath,
+            nodeName: node.nodeName,
+            module,
+            isEnabled: setting.isEnabled,
+          });
+        }
+      }
+
+      return results;
+    });
+
+    return {
+      success: true,
+      message: 'Notification settings updated successfully',
+      data: updated,
+    };
+  }
 }
 
 export class NotificationDbController {
+  static async fetchSettings(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { userId, companyId } = req.body;
+
+      if (!userId || !companyId) {
+        return res.status(400).json({ error: 'userId and companyId required' });
+      }
+
+      const result = await NotificationService.fetchSettingsForUser({
+        userId,
+        companyId,
+        includeAllCompanies: req.body?.includeAllCompanies === true,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  static async updateSettings(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { userId, companyId, eventUserId, companies } = req.body;
+
+      if (!userId || !companyId || !eventUserId) {
+        return res
+          .status(400)
+          .json({ error: 'userId, companyId and eventUserId required' });
+      }
+
+      if (!Array.isArray(companies) || companies.length === 0) {
+        return res.status(400).json({ error: 'companies array is required' });
+      }
+
+      const result = await NotificationService.updateSettingsForUser({
+        userId,
+        companyId,
+        eventUserId,
+        companies,
+        includeAllCompanies: req.body?.includeAllCompanies === true,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   static async fetch(req: Request, res: Response, next: NextFunction) {
     try {
       const {

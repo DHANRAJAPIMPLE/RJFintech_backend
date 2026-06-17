@@ -443,7 +443,7 @@ export class UserController {
     next: NextFunction,
   ) {
     try {
-      const { id, email } = zodParse(userDetailsSchema, req.body ?? {});
+      const { id, email, reportee } = zodParse(userDetailsSchema, req.body ?? {});
       const companyId = req.user?.companyId;
       const userId = req.user?.id;
 
@@ -457,6 +457,7 @@ export class UserController {
           {
             id,
             email,
+            reportee: reportee === true,
             companyId,
             userId,
           },

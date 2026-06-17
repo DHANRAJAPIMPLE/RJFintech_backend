@@ -9,7 +9,7 @@ const normalizedFetchStatusSchema = z.preprocess(
 
     return typeof value === 'string' ? value.trim().toUpperCase() : value;
   },
-  z.enum(['READ', 'UNREAD', 'ALL']).optional().default('ALL'),
+  z.enum(['READ', 'UNREAD', 'HIDDEN', 'ALL']).optional().default('ALL'),
 );
 
 const normalizedReferenceTypeSchema = z.preprocess(
@@ -118,3 +118,27 @@ export const notificationReadSchema = z
     message: 'notificationUserId or notificationId is required',
     path: ['notificationUserId'],
   });
+
+export const notificationSettingsFetchSchema = z.object({}).strict();
+
+export const notificationSettingsUpdateSchema = z
+  .array(
+    z
+      .object({
+        companyCode: z.string().trim().min(1, 'Company code is required'),
+        settings: z
+          .array(
+            z
+              .object({
+                nodePath: z.string().trim().min(1, 'Node path is required'),
+                module: z.enum(['USER', 'WORKFLOW', 'ORG']),
+                isEnabled: z.boolean(),
+                remarks: z.string().trim().min(1).nullable().optional(),
+              })
+              .strict(),
+          )
+          .min(1, 'At least one setting is required'),
+      })
+      .strict(),
+  )
+  .min(1, 'At least one company settings payload is required');

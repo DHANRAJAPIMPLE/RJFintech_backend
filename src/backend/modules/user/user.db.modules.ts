@@ -6881,7 +6881,7 @@ export class UserDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, userId, id } = req.body;
+      const { companyCode, companyId, userId, id, reportee } = req.body;
       const email = UserDbController.normalizeFilterText(req.body?.email);
 
       if (!id && !email) {
@@ -6912,6 +6912,7 @@ export class UserDbController {
         viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
       const excludeCorpAdminsForViewer =
         !viewerScope.isCorpAdmin && !viewerScope.isSaasAdmin;
+      let canViewAsReporteeManager = false;
 
       if (id) {
         const pendingOnboarding = await prisma.userOnboarding.findFirst({
@@ -6965,70 +6966,91 @@ export class UserDbController {
         throw new AppError('email is required', 400);
       }
 
-      const visibilityWhere = isGlobal
-        ? excludeSaasAdminsForViewer
-          ? {
-              userAccesses: {
-                none: {
-                  companyId: resolvedCompanyId,
-                  roleCode: 'SAAS_ADMIN',
-                },
+      if (reportee === true && userId) {
+        const reporteeMapping = await prisma.userMapping.findFirst({
+          where: {
+            companyId: resolvedCompanyId,
+            reportingManager: userId,
+            status: 'ACTIVE',
+            user: {
+              email: {
+                equals: email,
+                mode: 'insensitive',
               },
-            }
-          : excludeCorpAdminsForViewer
+            },
+          },
+          select: { id: true },
+        });
+
+        canViewAsReporteeManager = Boolean(reporteeMapping);
+      }
+
+      const visibilityWhere = canViewAsReporteeManager
+        ? {}
+        : isGlobal
+          ? excludeSaasAdminsForViewer
             ? {
                 userAccesses: {
                   none: {
                     companyId: resolvedCompanyId,
-                    roleCode: 'CORP_ADMIN',
+                    roleCode: 'SAAS_ADMIN',
                   },
                 },
               }
-            : {}
-        : {
-            AND: [
-              {
-                userAccesses: {
-                  some: {
-                    companyId: resolvedCompanyId,
-                    nodeId: { in: visibleNodeIds },
+            : excludeCorpAdminsForViewer
+              ? {
+                  userAccesses: {
+                    none: {
+                      companyId: resolvedCompanyId,
+                      roleCode: 'CORP_ADMIN',
+                    },
+                  },
+                }
+              : {}
+          : {
+              AND: [
+                {
+                  userAccesses: {
+                    some: {
+                      companyId: resolvedCompanyId,
+                      nodeId: { in: visibleNodeIds },
+                    },
                   },
                 },
-              },
-              {
-                userAccesses: {
-                  none: {
-                    isGlobalAccess: true,
-                    companyId: resolvedCompanyId,
+                {
+                  userAccesses: {
+                    none: {
+                      isGlobalAccess: true,
+                      companyId: resolvedCompanyId,
+                    },
                   },
                 },
-              },
-              ...(excludeSaasAdminsForViewer
-                ? [
-                    {
-                      userAccesses: {
-                        none: {
-                          companyId: resolvedCompanyId,
-                          roleCode: 'SAAS_ADMIN',
+                ...(excludeSaasAdminsForViewer
+                  ? [
+                      {
+                        userAccesses: {
+                          none: {
+                            companyId: resolvedCompanyId,
+                            roleCode: 'SAAS_ADMIN',
+                          },
                         },
                       },
-                    },
-                  ]
-                : []),
-              ...(excludeCorpAdminsForViewer
-                ? [
-                    {
-                      userAccesses: {
-                        none: {
-                          companyId: resolvedCompanyId,
-                          roleCode: 'CORP_ADMIN',
+                    ]
+                  : []),
+                ...(excludeCorpAdminsForViewer
+                  ? [
+                      {
+                        userAccesses: {
+                          none: {
+                            companyId: resolvedCompanyId,
+                            roleCode: 'CORP_ADMIN',
+                          },
                         },
                       },
-                    },
-                  ]
-                : []),
-            ],
-          };
+                    ]
+                  : []),
+              ],
+            };
 
       const user = await prisma.user.findFirst({
         where: {
@@ -7945,7 +7967,11 @@ export class UserDbController {
     });
   }
 
-  private static async applyApprovedUserModification(tx: any, onboarding: any) {
+  private static async applyApprovedUserModification(
+    tx: any,
+    onboarding: any,
+    eventUserId: string,
+  ) {
     const requestData = onboarding.data as any;
     const targetEmail = requestData.targetUserEmail;
     const target = targetEmail
@@ -8107,6 +8133,19 @@ export class UserDbController {
         },
       });
     }
+
+    await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+      companyId: onboarding.companyId,
+      userId: targetUserId,
+      eventUserId,
+      createReason: 'Default notification setting created because access was granted.',
+      removeReason:
+        onboarding.type === 'ARCHIVE'
+          ? 'Notification setting removed because user was archived.'
+          : onboarding.type === 'INACTIVE'
+            ? 'Notification setting removed because user was inactivated.'
+            : 'Notification setting removed because access was removed.',
+    });
   }
 
   /**
@@ -8690,6 +8729,7 @@ export class UserDbController {
             await UserDbController.applyApprovedUserModification(
               tx,
               onboarding,
+              approverId,
             );
             await tx.userOnboarding.update({
               where: { id },
@@ -8926,6 +8966,16 @@ export class UserDbController {
             },
           });
 
+          await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+            companyId: company.id,
+            userId: user.id,
+            eventUserId: approverId,
+            createReason:
+              'Default notification setting created because access was granted.',
+            removeReason:
+              'Notification setting removed because access was removed.',
+          });
+
           return { status: 'APPROVED' };
         }
 
@@ -9070,38 +9120,6 @@ export class UserDbController {
             )
           : [];
 
-      await NotificationService.createRequestNotification({
-        companyId: onboarding.companyId,
-        type: UserDbController.getUserNotificationType(
-          onboarding.type,
-          result?.status,
-        ),
-        ...(userNotificationContent || {}),
-        referenceType: 'USER',
-        referenceId: id,
-        referenceName: notificationReferenceName,
-        createdBy: approverId,
-        recipientUserIds: NotificationService.mergeRecipientUserIds(
-          notificationRecipientUserIds,
-          ...(isPartialApproval
-            ? []
-            : [
-                targetNotificationUserIds,
-                affectedNodeRecipientUserIds,
-                onboardedUserRecipientIds,
-                corpAdminUserIds,
-              ]),
-        ),
-        requiredRecipientUserIds: isPartialApproval
-          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
-          : NotificationService.mergeRecipientUserIds(
-              requestInitiatorId,
-              approverId,
-            ),
-        includeCreatedBy: true,
-        isPending: isPartialApproval,
-      });
-
       if (isPartialApproval) {
         const levelApprovalNotificationContent =
           UserDbController.getUserLevelApprovalNotificationContent(
@@ -9137,6 +9155,38 @@ export class UserDbController {
           isPending: false,
         });
       }
+
+      await NotificationService.createRequestNotification({
+        companyId: onboarding.companyId,
+        type: UserDbController.getUserNotificationType(
+          onboarding.type,
+          result?.status,
+        ),
+        ...(userNotificationContent || {}),
+        referenceType: 'USER',
+        referenceId: id,
+        referenceName: notificationReferenceName,
+        createdBy: approverId,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipientUserIds,
+          ...(isPartialApproval
+            ? []
+            : [
+                targetNotificationUserIds,
+                affectedNodeRecipientUserIds,
+                onboardedUserRecipientIds,
+                corpAdminUserIds,
+              ]),
+        ),
+        requiredRecipientUserIds: isPartialApproval
+          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+          : NotificationService.mergeRecipientUserIds(
+              requestInitiatorId,
+              approverId,
+            ),
+        includeCreatedBy: true,
+        isPending: isPartialApproval,
+      });
 
       res.status(200).json({
         message,

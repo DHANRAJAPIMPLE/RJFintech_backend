@@ -51,6 +51,28 @@ type OrgAutoDeletedWorkflowNotification = {
   workflowName: string;
   nodeName: string;
   nodePath: string;
+  workflowReqIds?: string[];
+};
+
+type PendingUserAccessRemovalNotification = {
+  requestId: string;
+  initiatorId: string | null;
+  eligibleApprovers: string[];
+  targetUserName: string;
+  targetUserEmail: string | null;
+  removedPermissions: Array<{
+    nodeName: string;
+    nodePath: string;
+    roleName: string;
+  }>;
+};
+
+type PendingWorkflowDeletionNotification = {
+  requestId: string;
+  initiatorId: string | null;
+  eligibleApprovers: string[];
+  workflowName: string;
+  targetNodePath: string;
 };
 
 type AutoUserAccessAuditEntry = {
@@ -262,7 +284,10 @@ export class OrgStructureDbController {
             ? request.operation.trim().toUpperCase()
             : null;
       const exactIndex = proposed.findIndex((stored) =>
-        OrgStructureDbController.pendingUserPermissionsEqual(stored, permission),
+        OrgStructureDbController.pendingUserPermissionsEqual(
+          stored,
+          permission,
+        ),
       );
       const replacementIndex = proposed.findIndex(
         (stored) =>
@@ -425,7 +450,7 @@ export class OrgStructureDbController {
           permission.accessType === 'PRIMARY' &&
           typeof permission.nodePath === 'string' &&
           permission.nodePath &&
-          OrgStructureDbController.pathsOverlap(
+          OrgStructureDbController.pathWithinSubtree(
             permission.nodePath,
             params.nodePath,
           ),
@@ -477,6 +502,192 @@ export class OrgStructureDbController {
     }
   }
 
+  private static getPendingUserTargetName(requestData: any) {
+    const name =
+      (typeof requestData?.basicDetails?.name === 'string' &&
+        requestData.basicDetails.name.trim()) ||
+      (typeof requestData?.targetUserName === 'string' &&
+        requestData.targetUserName.trim()) ||
+      '';
+    const email =
+      (typeof requestData?.basicDetails?.email === 'string' &&
+        requestData.basicDetails.email.trim()) ||
+      (typeof requestData?.targetUserEmail === 'string' &&
+        requestData.targetUserEmail.trim()) ||
+      null;
+
+    return {
+      targetUserName: name || email || 'user',
+      targetUserEmail: email,
+    };
+  }
+
+  private static async assertNoPendingPrimaryAccessRequestsInSubtree(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+      nodeName: string;
+    },
+  ) {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: { in: ['INITIATE', 'UPDATE'] },
+      },
+      select: {
+        id: true,
+        type: true,
+        data: true,
+      },
+    });
+    const conflicts: string[] = [];
+
+    for (const request of pendingRequests) {
+      const requestData = request.data as any;
+      const requestedPermissions = Array.isArray(requestData?.permissions)
+        ? requestData.permissions
+        : [];
+      const primaryPermission = requestedPermissions.find((permission: any) => {
+        const operation =
+          permission?.remove === true
+            ? 'REMOVE'
+            : typeof permission?.operation === 'string'
+              ? permission.operation.trim().toUpperCase()
+              : null;
+
+        return (
+          operation !== 'REMOVE' &&
+          permission?.accessType === 'PRIMARY' &&
+          typeof permission.nodePath === 'string' &&
+          permission.nodePath &&
+          OrgStructureDbController.pathWithinSubtree(
+            permission.nodePath,
+            params.nodePath,
+          )
+        );
+      });
+      if (!primaryPermission) continue;
+
+      const target =
+        OrgStructureDbController.getPendingUserTargetName(requestData);
+      conflicts.push(
+        `${target.targetUserEmail || target.targetUserName} (${primaryPermission.nodePath})`,
+      );
+    }
+
+    if (conflicts.length > 0) {
+      const top = conflicts
+        .slice(0, 10)
+        .map((conflict) => `- ${conflict}`)
+        .join('\n');
+      const remaining = Math.max(conflicts.length - 10, 0);
+      const remainingLine =
+        remaining > 0
+          ? `\nand ${remaining} other pending user request(s)...`
+          : '';
+      throw new AppError(
+        `Cannot inactivate node '${params.nodeName || params.nodePath}' because it has ${conflicts.length} pending primary user assignment(s). Please approve, reject, or change these pending users before deactivating:\n${top}${remainingLine}`,
+        400,
+      );
+    }
+  }
+
+  private static async removePendingSecondaryAccessRequestsForOrgInactivation(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+    },
+  ): Promise<PendingUserAccessRemovalNotification[]> {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: { in: ['INITIATE', 'UPDATE'] },
+      },
+      select: {
+        id: true,
+        type: true,
+        data: true,
+        initiatorId: true,
+        eligibleApprovers: true,
+      },
+    });
+    const notifications: PendingUserAccessRemovalNotification[] = [];
+
+    for (const request of pendingRequests) {
+      const requestData = (request.data || {}) as any;
+      const requestedPermissions = Array.isArray(requestData.permissions)
+        ? requestData.permissions
+        : [];
+      if (requestedPermissions.length === 0) continue;
+
+      const removedPermissions: PendingUserAccessRemovalNotification['removedPermissions'] =
+        [];
+      const nextPermissions = requestedPermissions.filter((permission: any) => {
+        const operation =
+          permission?.remove === true
+            ? 'REMOVE'
+            : typeof permission?.operation === 'string'
+              ? permission.operation.trim().toUpperCase()
+              : null;
+        const shouldRemove =
+          operation !== 'REMOVE' &&
+          permission?.accessType !== 'PRIMARY' &&
+          typeof permission?.nodePath === 'string' &&
+          permission.nodePath &&
+          OrgStructureDbController.pathWithinSubtree(
+            permission.nodePath,
+            params.nodePath,
+          );
+
+        if (shouldRemove) {
+          removedPermissions.push({
+            nodeName:
+              typeof permission?.nodeName === 'string' && permission.nodeName
+                ? permission.nodeName
+                : permission.nodePath,
+            nodePath: permission.nodePath,
+            roleName:
+              typeof permission?.roleName === 'string' && permission.roleName
+                ? permission.roleName
+                : 'role access',
+          });
+        }
+
+        return !shouldRemove;
+      });
+
+      if (removedPermissions.length === 0) continue;
+
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          data: {
+            ...requestData,
+            permissions: nextPermissions,
+          } as any,
+          approvalRemark:
+            'Secondary access under an inactivated organization node was removed from this pending request.',
+        },
+      });
+
+      notifications.push({
+        requestId: request.id,
+        initiatorId: request.initiatorId || null,
+        eligibleApprovers: Array.isArray(request.eligibleApprovers)
+          ? request.eligibleApprovers
+          : [],
+        ...OrgStructureDbController.getPendingUserTargetName(requestData),
+        removedPermissions,
+      });
+    }
+
+    return notifications;
+  }
+
   private static async rejectPendingWorkflowRequestsForOrgInactivation(
     tx: any,
     params: {
@@ -485,7 +696,7 @@ export class OrgStructureDbController {
       nodeName: string;
       actorId?: string;
     },
-  ) {
+  ): Promise<PendingWorkflowDeletionNotification[]> {
     const pendingRequests = await tx.workflowReq.findMany({
       where: {
         companyId: params.companyId,
@@ -495,15 +706,24 @@ export class OrgStructureDbController {
         id: true,
         companyId: true,
         data: true,
+        alias: true,
+        module: true,
+        subModule: true,
+        initiatorId: true,
+        eligibleApprovers: true,
       },
     });
+    const notifications: PendingWorkflowDeletionNotification[] = [];
 
     for (const request of pendingRequests) {
       const targetNodePath =
         OrgStructureDbController.getPendingWorkflowTargetNodePath(request);
       if (
         !targetNodePath ||
-        !OrgStructureDbController.pathsOverlap(targetNodePath, params.nodePath)
+        !OrgStructureDbController.pathWithinSubtree(
+          targetNodePath,
+          params.nodePath,
+        )
       ) {
         continue;
       }
@@ -519,7 +739,11 @@ export class OrgStructureDbController {
       });
       const remark = `Auto-rejected because organization ${params.nodeName} (${params.nodePath}) was inactivated and this workflow request targets node ${targetNodePath}.`;
 
-      await WorkflowApproverUtil.rejectAllLevels(tx, request.id, 'workflow_req');
+      await WorkflowApproverUtil.rejectAllLevels(
+        tx,
+        request.id,
+        'workflow_req',
+      );
       await tx.workflowReq.update({
         where: { id: request.id },
         data: {
@@ -540,7 +764,24 @@ export class OrgStructureDbController {
           },
         });
       }
+
+      const requestData = request.data as any;
+      notifications.push({
+        requestId: request.id,
+        initiatorId: request.initiatorId || null,
+        eligibleApprovers: Array.isArray(request.eligibleApprovers)
+          ? request.eligibleApprovers
+          : [],
+        workflowName:
+          (typeof requestData?.name === 'string' && requestData.name.trim()) ||
+          (typeof request.alias === 'string' && request.alias.trim()) ||
+          [request.module, request.subModule].filter(Boolean).join(' / ') ||
+          'workflow',
+        targetNodePath,
+      });
     }
+
+    return notifications;
   }
 
   private static async notifyConflict(
@@ -550,9 +791,8 @@ export class OrgStructureDbController {
     referenceName: string,
     approverUserIds: string[] = [],
   ) {
-    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
-      companyId,
-    );
+    const corpAdminUserIds =
+      await NotificationService.getCorpAdminUserIds(companyId);
     const recipients = NotificationService.mergeRecipientUserIds(
       initiatorId,
       approverUserIds,
@@ -690,30 +930,32 @@ export class OrgStructureDbController {
     }
 
     if (reqType === 'INITIATE') {
-      const requestedNodePath = OrgStructureDbController.resolveRequestedNodePath(reqData);
+      const requestedNodePath =
+        OrgStructureDbController.resolveRequestedNodePath(reqData);
       const userAccess =
         await OrgStructureDbController.getPropagatedUserAccessSummaries(
-        client,
-        companyId,
-        requestedNodePath,
-      );
+          client,
+          companyId,
+          requestedNodePath,
+        );
       const workflow =
         await OrgStructureDbController.getAutoGeneratedWorkflowTemplateSummaries(
-        client,
-        companyId,
-        reqData.parentNode?.nodePath,
-      );
+          client,
+          companyId,
+          reqData.parentNode?.nodePath,
+        );
       return { userAccess, workflow };
     } else {
       const nodePath = reqData?.targetNodePath || reqData?.nodePath || null;
       if (!nodePath) {
         return { userAccess: [], workflow: [] };
       }
-      const notification = await OrgStructureDbController.getOrgInactivationNotification(
-        client,
-        companyId,
-        nodePath,
-      );
+      const notification =
+        await OrgStructureDbController.getOrgInactivationNotification(
+          client,
+          companyId,
+          nodePath,
+        );
       return {
         userAccess: notification.users,
         workflow: notification.workflows,
@@ -1169,25 +1411,49 @@ export class OrgStructureDbController {
       workflowName: string;
       nodeName: string;
       nodePath: string;
+      workflowReqIds?: string[];
     }>;
   }) {
     if (params.deletedWorkflows.length === 0) return;
 
+    const workflowReqIds = Array.from(
+      new Set(
+        params.deletedWorkflows.flatMap((workflow) =>
+          Array.isArray(workflow.workflowReqIds) ? workflow.workflowReqIds : [],
+        ),
+      ),
+    );
+    const workflowInitiators =
+      workflowReqIds.length > 0
+        ? await prisma.workflowReqHistory.findMany({
+            where: {
+              workflowReqId: { in: workflowReqIds },
+              event: 'INITIATE',
+            },
+            select: { eventUserId: true },
+          })
+        : [];
     const recipientUserIds = NotificationService.mergeRecipientUserIds(
       await NotificationService.getRequestInitiatorId(
         params.orgReqId,
         'org_structure_req',
       ),
+      workflowInitiators.map((history) => history.eventUserId),
       await NotificationService.getCorpAdminUserIds(params.companyId),
     );
     const deletedSummary = params.deletedWorkflows
       .slice(0, 5)
-      .map((workflow) => `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`)
+      .map(
+        (workflow) =>
+          `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`,
+      )
       .join(', ');
 
     await NotificationService.createRequestNotification({
       companyId: params.companyId,
       type: 'AUTO_DELETE',
+      name: 'Workflow deleted because organization was inactivated',
+      message: `Workflow(s) were deleted because the related organization node was inactivated: ${deletedSummary || 'workflow'}.`,
       referenceType: 'WORKFLOW',
       referenceId: params.orgReqId,
       referenceName: deletedSummary || 'workflow',
@@ -1383,10 +1649,11 @@ export class OrgStructureDbController {
         tx,
         params.companyId,
       );
-    const groupedEntries = OrgStructureDbController.groupAutoUserAccessAuditEntries(
-      params.entries,
-      params.type === 'AUTO_DELETE',
-    );
+    const groupedEntries =
+      OrgStructureDbController.groupAutoUserAccessAuditEntries(
+        params.entries,
+        params.type === 'AUTO_DELETE',
+      );
 
     for (const entry of groupedEntries) {
       const data = {
@@ -1399,7 +1666,9 @@ export class OrgStructureDbController {
               permissions: {
                 added: [],
                 removed: cloneJson(
-                  entry.permissions.map(({ remove, ...permission }) => permission),
+                  entry.permissions.map(
+                    ({ remove, ...permission }) => permission,
+                  ),
                 ),
                 updated: [],
               },
@@ -1520,7 +1789,10 @@ export class OrgStructureDbController {
         newNodePath,
       );
 
-    const uniqueUsers = new Map<string, { name: string; email: string | null }>();
+    const uniqueUsers = new Map<
+      string,
+      { name: string; email: string | null }
+    >();
     parentAccesses.forEach((access: any) => {
       const name =
         typeof access.user?.name === 'string' ? access.user.name.trim() : '';
@@ -1687,11 +1959,106 @@ export class OrgStructureDbController {
     });
   }
 
+  private static async notifyPendingUserAccessRemoved(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    nodeName: string;
+    nodePath: string;
+    changes: PendingUserAccessRemovalNotification[];
+  }) {
+    if (params.changes.length === 0) return;
+
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      params.companyId,
+    );
+
+    for (const change of params.changes) {
+      const permissionSummary = change.removedPermissions
+        .slice(0, 5)
+        .map(
+          (permission) =>
+            `${permission.roleName} at ${permission.nodeName} (${permission.nodePath})`,
+        )
+        .join(', ');
+      const recipientUserIds = NotificationService.mergeRecipientUserIds(
+        change.initiatorId,
+        change.eligibleApprovers,
+        corpAdminUserIds,
+      );
+
+      await NotificationService.createRequestNotification({
+        companyId: params.companyId,
+        type: 'MODIFICATION',
+        name: 'Pending user access removed',
+        message: `Secondary access was removed from pending user request for ${change.targetUserName} because organization ${params.nodeName} (${params.nodePath}) was inactivated. Removed: ${permissionSummary}.`,
+        referenceType: 'USER',
+        referenceId: change.requestId,
+        referenceName: change.targetUserEmail || change.targetUserName,
+        createdBy: params.createdBy,
+        recipientUserIds,
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.initiatorId,
+          change.eligibleApprovers,
+        ),
+        includeCreatedBy: true,
+        isPending: false,
+      });
+    }
+  }
+
+  private static async notifyPendingWorkflowDeleted(params: {
+    companyId: string;
+    createdBy: string;
+    nodeName: string;
+    nodePath: string;
+    changes: PendingWorkflowDeletionNotification[];
+  }) {
+    if (params.changes.length === 0) return;
+
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      params.companyId,
+    );
+
+    for (const change of params.changes) {
+      const recipientUserIds = NotificationService.mergeRecipientUserIds(
+        change.initiatorId,
+        change.eligibleApprovers,
+        corpAdminUserIds,
+      );
+
+      await NotificationService.createRequestNotification({
+        companyId: params.companyId,
+        type: 'AUTO_DELETE',
+        name: 'Pending workflow request deleted',
+        message: `Pending workflow request ${change.workflowName} was rejected because organization ${params.nodeName} (${params.nodePath}) was inactivated.`,
+        referenceType: 'WORKFLOW',
+        referenceId: change.requestId,
+        referenceName: change.workflowName,
+        createdBy: params.createdBy,
+        recipientUserIds,
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.initiatorId,
+          change.eligibleApprovers,
+        ),
+        includeCreatedBy: true,
+        isPending: false,
+      });
+    }
+  }
+
   private static pathsOverlap(left: string, right: string) {
     return (
       left === right ||
       left.startsWith(`${right}.`) ||
       right.startsWith(`${left}.`)
+    );
+  }
+
+  private static pathWithinSubtree(candidatePath: string, subtreePath: string) {
+    return (
+      candidatePath === subtreePath ||
+      candidatePath.startsWith(`${subtreePath}.`)
     );
   }
 
@@ -1918,7 +2285,8 @@ export class OrgStructureDbController {
       const initiator = request.orgHistories?.[0]?.user;
       const initiatedAt =
         request.orgHistories?.[0]?.createdAt || request.createdAt;
-      const pendingTitle = data?.newNodeName || data?.nodeName || pendingNodePath;
+      const pendingTitle =
+        data?.newNodeName || data?.nodeName || pendingNodePath;
 
       throw new AppError(
         `Cannot initiate organization '${node.nodeName || node.nodePath}'. A pending request for the same organization already exists as '${pendingTitle}', initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
@@ -2052,7 +2420,10 @@ export class OrgStructureDbController {
       new Set(
         accessRows
           .map((row: any) => row.userId)
-          .filter((userId: unknown): userId is string => typeof userId === 'string' && userId.trim().length > 0)
+          .filter(
+            (userId: unknown): userId is string =>
+              typeof userId === 'string' && userId.trim().length > 0,
+          )
           .map((userId: string) => userId.trim()),
       ),
     ) as string[];
@@ -2061,7 +2432,10 @@ export class OrgStructureDbController {
       new Set(
         accessRows
           .map((row: any) => row.user?.name)
-          .filter((name: unknown): name is string => typeof name === 'string' && name.trim().length > 0)
+          .filter(
+            (name: unknown): name is string =>
+              typeof name === 'string' && name.trim().length > 0,
+          )
           .map((name: string) => name.trim()),
       ),
     ).sort() as string[];
@@ -2077,9 +2451,14 @@ export class OrgStructureDbController {
               typeof row.user?.email === 'string' && row.user.email.trim()
                 ? row.user.email.trim()
                 : null;
-            return [`${name.toLowerCase()}::${(email || '').toLowerCase()}`, { name, email }];
+            return [
+              `${name.toLowerCase()}::${(email || '').toLowerCase()}`,
+              { name, email },
+            ];
           })
-          .filter(Boolean) as Array<[string, { name: string; email: string | null }]>,
+          .filter(Boolean) as Array<
+          [string, { name: string; email: string | null }]
+        >,
       ).values(),
     ).sort((left, right) => left.name.localeCompare(right.name));
 
@@ -2087,7 +2466,10 @@ export class OrgStructureDbController {
       new Set(
         workflows
           .map((workflow: any) => workflow.name)
-          .filter((name: unknown): name is string => typeof name === 'string' && name.trim().length > 0)
+          .filter(
+            (name: unknown): name is string =>
+              typeof name === 'string' && name.trim().length > 0,
+          )
           .map((name: string) => name.trim()),
       ),
     ).sort() as string[];
@@ -2108,11 +2490,13 @@ export class OrgStructureDbController {
               { workflowName, alias },
             ];
           })
-          .filter(
-            Boolean,
-          ) as Array<[string, { workflowName: string; alias: string | null }]>,
+          .filter(Boolean) as Array<
+          [string, { workflowName: string; alias: string | null }]
+        >,
       ).values(),
-    ).sort((left, right) => left.workflowName.localeCompare(right.workflowName));
+    ).sort((left, right) =>
+      left.workflowName.localeCompare(right.workflowName),
+    );
 
     return {
       nodeName: subtreeNodes[0]?.nodeName || nodePath,
@@ -2274,6 +2658,14 @@ export class OrgStructureDbController {
         node.nodePath,
         node.nodeName,
       );
+      await OrgStructureDbController.assertNoPendingPrimaryAccessRequestsInSubtree(
+        prisma as any,
+        {
+          companyId,
+          nodePath: node.nodePath,
+          nodeName: node.nodeName,
+        },
+      );
 
       const impactSummaryNotification =
         await OrgStructureDbController.getOrgInactivationNotification(
@@ -2341,9 +2733,8 @@ export class OrgStructureDbController {
           'initiated',
           targetNodePath,
         );
-      const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
-        companyId,
-      );
+      const corpAdminUserIds =
+        await NotificationService.getCorpAdminUserIds(companyId);
       const initiatorReportingManagerUserIds =
         await NotificationService.getReportingManagerUserIds(
           companyId,
@@ -2373,10 +2764,7 @@ export class OrgStructureDbController {
       const initiatorId = req.body?.initiatorId;
       const companyId = req.body?.companyId;
       const targetNodePath = req.body?.targetNodePath;
-      if (
-        typeof initiatorId === 'string' &&
-        typeof companyId === 'string'
-      ) {
+      if (typeof initiatorId === 'string' && typeof companyId === 'string') {
         await OrgStructureDbController.notifyConflict(
           companyId,
           initiatorId,
@@ -2397,6 +2785,8 @@ export class OrgStructureDbController {
     notificationState?: {
       inactivation: OrgInactivationNotification | null;
       autoDeletedWorkflows?: OrgAutoDeletedWorkflowNotification[];
+      pendingUserAccessRemovals?: PendingUserAccessRemovalNotification[];
+      pendingWorkflowDeletions?: PendingWorkflowDeletionNotification[];
     },
     actorId?: string,
   ) {
@@ -2435,24 +2825,24 @@ export class OrgStructureDbController {
       request.companyId,
       targetNodePath,
     );
-    await OrgStructureDbController.rejectPendingUserRequestsForOrgInactivation(
+    await OrgStructureDbController.assertNoPendingPrimaryAccessRequestsInSubtree(
       tx,
       {
         companyId: request.companyId,
         nodePath: targetNodePath,
         nodeName: node.nodeName,
-        actorId: actorId || undefined,
       },
     );
-    await OrgStructureDbController.rejectPendingWorkflowRequestsForOrgInactivation(
-      tx,
-      {
-        companyId: request.companyId,
-        nodePath: targetNodePath,
-        nodeName: node.nodeName,
-        actorId: actorId || undefined,
-      },
-    );
+    const pendingWorkflowDeletions =
+      await OrgStructureDbController.rejectPendingWorkflowRequestsForOrgInactivation(
+        tx,
+        {
+          companyId: request.companyId,
+          nodePath: targetNodePath,
+          nodeName: node.nodeName,
+          actorId: actorId || undefined,
+        },
+      );
 
     const subtree = await OrgStructureDbController.getSubtreeNodes(
       tx,
@@ -2483,6 +2873,14 @@ export class OrgStructureDbController {
         },
       },
     });
+    const pendingUserAccessRemovals =
+      await OrgStructureDbController.removePendingSecondaryAccessRequestsForOrgInactivation(
+        tx,
+        {
+          companyId: request.companyId,
+          nodePath: targetNodePath,
+        },
+      );
     if (notificationState) {
       notificationState.inactivation =
         await OrgStructureDbController.getOrgInactivationNotification(
@@ -2495,8 +2893,13 @@ export class OrgStructureDbController {
           workflowName: workflow.name,
           nodeName: workflow.orgStructure?.nodeName || targetNodePath,
           nodePath: workflow.orgStructure?.nodePath || targetNodePath,
+          workflowReqIds: Array.isArray(workflow.workflowReqIds)
+            ? workflow.workflowReqIds
+            : [],
         }),
       );
+      notificationState.pendingUserAccessRemovals = pendingUserAccessRemovals;
+      notificationState.pendingWorkflowDeletions = pendingWorkflowDeletions;
     }
     const removedUserAccessRows = await tx.userAccess.findMany({
       where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
@@ -2555,6 +2958,26 @@ export class OrgStructureDbController {
     await tx.userAccess.deleteMany({
       where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
     });
+    if (actorId) {
+      const impactedUserIds: string[] = Array.from(
+        new Set(
+          removedUserAccessRows
+            .map((access: any) => String(access.userId || '').trim())
+            .filter(Boolean),
+        ),
+      );
+      for (const userId of impactedUserIds) {
+        await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+          companyId: request.companyId,
+          userId,
+          eventUserId: actorId,
+          createReason:
+            'Default notification setting created because access was granted.',
+          removeReason:
+            'Notification setting removed because node was inactivated.',
+        });
+      }
+    }
     await tx.workflow.updateMany({
       where: {
         companyId: request.companyId,
@@ -2593,13 +3016,12 @@ export class OrgStructureDbController {
                 workflowReq.type === 'AUTO_GENERATE' &&
                 typeof (workflowReq.data as any)?.sourceWorkflowId === 'string',
             )?.id ||
-            workflowRequests
-              .sort((left: any, right: any) => {
-                const leftTime = new Date(left.createdAt).getTime();
-                const rightTime = new Date(right.createdAt).getTime();
-                if (leftTime !== rightTime) return rightTime - leftTime;
-                return String(right.id).localeCompare(String(left.id));
-              })[0]?.id;
+            workflowRequests.sort((left: any, right: any) => {
+              const leftTime = new Date(left.createdAt).getTime();
+              const rightTime = new Date(right.createdAt).getTime();
+              if (leftTime !== rightTime) return rightTime - leftTime;
+              return String(right.id).localeCompare(String(left.id));
+            })[0]?.id;
           if (!requestId) return;
 
           const remarks = `Auto deleted workflow ${workflow.name} (${workflow.orgStructure?.nodePath || targetNodePath}) because organization node ${node.nodeName} (${targetNodePath}) was inactivated.`;
@@ -2698,9 +3120,13 @@ export class OrgStructureDbController {
       const orgLifecycleNotification: {
         inactivation: OrgInactivationNotification | null;
         autoDeletedWorkflows: OrgAutoDeletedWorkflowNotification[];
+        pendingUserAccessRemovals: PendingUserAccessRemovalNotification[];
+        pendingWorkflowDeletions: PendingWorkflowDeletionNotification[];
       } = {
         inactivation: null,
         autoDeletedWorkflows: [],
+        pendingUserAccessRemovals: [],
+        pendingWorkflowDeletions: [],
       };
       let autoGeneratedWorkflowNotifications: Array<{
         workflowName: string;
@@ -2954,6 +3380,27 @@ export class OrgStructureDbController {
                 entries: newAccesses,
               },
             );
+            const impactedUserIds: string[] = Array.from(
+              new Set(
+                newAccesses
+                  .map((access: any) => String(access.userId || '').trim())
+                  .filter(Boolean),
+              ),
+            );
+            for (const userId of impactedUserIds) {
+              await NotificationService.syncNotificationSettingsForUserAccess(
+                tx,
+                {
+                  companyId: request.companyId,
+                  userId,
+                  eventUserId: approverId,
+                  createReason:
+                    'Default notification setting created because access was granted.',
+                  removeReason:
+                    'Notification setting removed because access was removed.',
+                },
+              );
+            }
             userAccessImpactNotification = {
               nodeName: newNode.nodeName,
               nodePath: newNode.nodePath,
@@ -2998,9 +3445,9 @@ export class OrgStructureDbController {
                             { name, email },
                           ];
                         })
-                        .filter(
-                          Boolean,
-                        ) as Array<[string, { name: string; email: string | null }]>,
+                        .filter(Boolean) as Array<
+                        [string, { name: string; email: string | null }]
+                      >,
                     ).values(),
                   ).sort((left, right) => left.name.localeCompare(right.name)),
                   Array.from(
@@ -3022,11 +3469,9 @@ export class OrgStructureDbController {
                             { workflowName, alias },
                           ];
                         })
-                        .filter(
-                          Boolean,
-                        ) as Array<
-                          [string, { workflowName: string; alias: string | null }]
-                        >,
+                        .filter(Boolean) as Array<
+                        [string, { workflowName: string; alias: string | null }]
+                      >,
                     ).values(),
                   ).sort((left, right) =>
                     left.workflowName.localeCompare(right.workflowName),
@@ -3088,18 +3533,17 @@ export class OrgStructureDbController {
           orgLifecycleNotification.inactivation || null;
         const isOrgInactivation = Boolean(
           result?.status === 'APPROVED' &&
-            requestType === 'UPDATE' &&
-            String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
-            inactivationNotification,
+          requestType === 'UPDATE' &&
+          String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+          inactivationNotification,
         );
-        const notificationRecipientUserIds =
-          isPartialApproval
-            ? NotificationService.mergeRecipientUserIds(notificationRecipients)
-            : NotificationService.mergeRecipientUserIds(
-                notificationRecipients,
-                requestInitiatorId,
-                requestInitiatorReportingManagerUserIds,
-              );
+        const notificationRecipientUserIds = isPartialApproval
+          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+          : NotificationService.mergeRecipientUserIds(
+              notificationRecipients,
+              requestInitiatorId,
+              requestInitiatorReportingManagerUserIds,
+            );
         const orgNotificationContent = isOrgInactivation
           ? {
               name: 'Organization Removed',
@@ -3110,13 +3554,13 @@ export class OrgStructureDbController {
                 result?.type || requestType,
                 notificationSubject,
               )
-          : requestType === 'UPDATE' && result?.status
-            ? OrgStructureDbController.getOrgNotificationContent(
-                requestType,
-                result.status === 'REJECTED' ? 'rejected' : 'approved',
-                notificationSubject,
-              )
-            : null;
+            : requestType === 'UPDATE' && result?.status
+              ? OrgStructureDbController.getOrgNotificationContent(
+                  requestType,
+                  result.status === 'REJECTED' ? 'rejected' : 'approved',
+                  notificationSubject,
+                )
+              : null;
         const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
           notificationCompanyId,
         );
@@ -3155,10 +3599,8 @@ export class OrgStructureDbController {
           await OrgStructureDbController.notifyOrgAccessRemoval({
             companyId: notificationCompanyId,
             orgReqId: id,
-            nodeName:
-              inactivationNotification.nodeName || notificationSubject,
-            nodePath:
-              inactivationNotification.nodePath || notificationSubject,
+            nodeName: inactivationNotification.nodeName || notificationSubject,
+            nodePath: inactivationNotification.nodePath || notificationSubject,
             createdBy: approverId,
             recipientUserIds: inactivationNotification.accessUserIds,
           });
@@ -3208,6 +3650,43 @@ export class OrgStructureDbController {
           orgReqId: id,
           createdBy: approverId,
           deletedWorkflows: orgLifecycleNotification.autoDeletedWorkflows,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type === 'UPDATE' &&
+        String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+        orgLifecycleNotification.pendingUserAccessRemovals.length > 0
+      ) {
+        const inactivationNotification =
+          orgLifecycleNotification.inactivation || null;
+        await OrgStructureDbController.notifyPendingUserAccessRemoved({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          nodeName: inactivationNotification?.nodeName || notificationSubject,
+          nodePath: inactivationNotification?.nodePath || notificationSubject,
+          changes: orgLifecycleNotification.pendingUserAccessRemovals,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type === 'UPDATE' &&
+        String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+        orgLifecycleNotification.pendingWorkflowDeletions.length > 0
+      ) {
+        const inactivationNotification =
+          orgLifecycleNotification.inactivation || null;
+        await OrgStructureDbController.notifyPendingWorkflowDeleted({
+          companyId: notificationCompanyId,
+          createdBy: approverId,
+          nodeName: inactivationNotification?.nodeName || notificationSubject,
+          nodePath: inactivationNotification?.nodePath || notificationSubject,
+          changes: orgLifecycleNotification.pendingWorkflowDeletions,
         });
       }
 
@@ -3381,19 +3860,17 @@ export class OrgStructureDbController {
         }
 
         if (nodeId && initiatorId) {
-          const {
-            workflowId: resolvedWorkflowId,
-            currentLevelApprovers,
-          } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-            levelsHash: levelsHash || null,
-            module: 'SYSTEM_ACCESS',
-            subModule: 'ORG_STR',
-            companyId: resolvedCompanyId,
-            nodeId,
-            initiatorId,
-            reqId: reqRecord.id,
-            reqTable: 'org_structure_req',
-          });
+          const { workflowId: resolvedWorkflowId, currentLevelApprovers } =
+            await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+              levelsHash: levelsHash || null,
+              module: 'SYSTEM_ACCESS',
+              subModule: 'ORG_STR',
+              companyId: resolvedCompanyId,
+              nodeId,
+              initiatorId,
+              reqId: reqRecord.id,
+              reqTable: 'org_structure_req',
+            });
           notificationRecipients = currentLevelApprovers;
 
           // Store the resolved workflowId in the request record
@@ -3486,11 +3963,12 @@ export class OrgStructureDbController {
         }
       }
 
-      const requestedNodePath = OrgStructureDbController.resolveRequestedNodePath({
-        parentNode,
-        newNodeName,
-        nodePath: req.body?.nodePath,
-      });
+      const requestedNodePath =
+        OrgStructureDbController.resolveRequestedNodePath({
+          parentNode,
+          newNodeName,
+          nodePath: req.body?.nodePath,
+        });
       if (requestedNodePath) {
         const resolvedNodePath =
           await OrgStructureDbController.resolveUniqueRequestedNodePath(
@@ -3811,7 +4289,10 @@ export class OrgStructureDbController {
           levelStartByLevel.set(level.level, nextStep);
           getSortedApprovedEvents(reqId, level.level).forEach(
             (event: any, index: number) => {
-              approvedEventStepByHistoryId.set(event.historyId, nextStep + index);
+              approvedEventStepByHistoryId.set(
+                event.historyId,
+                nextStep + index,
+              );
             },
           );
           nextStep += getMandatoryApprovalCount(level);
@@ -3822,7 +4303,8 @@ export class OrgStructureDbController {
         });
       }
       const getLevelStartStep = (reqId: string, level: number) =>
-        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ?? null;
+        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ??
+        null;
       const getApprovedEventStep = (
         reqId: string,
         level: number,
@@ -3869,7 +4351,9 @@ export class OrgStructureDbController {
         const levels = workflowMap.get(reqId) || [];
         const request = histories.find((history) => history.orgReqId === reqId);
         const requestStatus = request?.orgReq?.status || null;
-        const normalizedRequestStatus = String(requestStatus || '').toUpperCase();
+        const normalizedRequestStatus = String(
+          requestStatus || '',
+        ).toUpperCase();
 
         if (levels.length === 0) {
           return {
@@ -3889,15 +4373,16 @@ export class OrgStructureDbController {
         ).length;
         const currentPendingLevel =
           normalizedRequestStatus === 'PENDING'
-            ? levels.find((level: any) => !isLevelApproved(reqId, level))
-                ?.level ?? null
+            ? (levels.find((level: any) => !isLevelApproved(reqId, level))
+                ?.level ?? null)
             : null;
         const currentPendingStep =
           currentPendingLevel && normalizedRequestStatus === 'PENDING'
             ? getNextPendingApprovalStep(reqId, currentPendingLevel)
             : null;
         const isRejected = normalizedRequestStatus === 'REJECTED';
-        const allApproved = levels.length > 0 && completedLevels === levels.length;
+        const allApproved =
+          levels.length > 0 && completedLevels === levels.length;
 
         return {
           currentStatus: isRejected
@@ -3989,9 +4474,8 @@ export class OrgStructureDbController {
       // 3. Add actual history entries
       const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;
-        const requestType = OrgStructureDbController.resolveOrgHistoryRequestType(
-          h.orgReq,
-        );
+        const requestType =
+          OrgStructureDbController.resolveOrgHistoryRequestType(h.orgReq);
         const isChangeRequestStart =
           h.event === 'INITIATE' && requestType !== 'INITIATE';
         const displayEvent = OrgStructureDbController.getOrgHistoryDisplayEvent(
@@ -4003,9 +4487,9 @@ export class OrgStructureDbController {
           : OrgStructureDbController.getEmptyOrgHistoryApprovalSummary();
         const approvalLevel =
           displayEvent === 'APPROVED' || displayEvent === 'REJECTED'
-            ? h.level ?? null
+            ? (h.level ?? null)
             : approvalSummary.currentStatus === 'PENDING'
-              ? (approvalSummary as any).currentPendingLevel ?? null
+              ? ((approvalSummary as any).currentPendingLevel ?? null)
               : null;
         const approvalStep =
           displayEvent === 'APPROVED' && h.orgReqId && h.level
@@ -4099,9 +4583,10 @@ export class OrgStructureDbController {
         const latestEvent = latestEntries[latestEntries.length - 1];
         const syntheticSource = latestEvent || h;
         const sourceData = syntheticSource.orgReq?.data as any;
-        const requestType = OrgStructureDbController.resolveOrgHistoryRequestType(
-          syntheticSource.orgReq,
-        );
+        const requestType =
+          OrgStructureDbController.resolveOrgHistoryRequestType(
+            syntheticSource.orgReq,
+          );
 
         if (isPending || isRejected) {
           suppressApprovedForReqIds.add(h.orgReqId);
@@ -4355,12 +4840,17 @@ export class OrgStructureDbController {
       if (!history) {
         throw new AppError('Organization history not found', 404);
       }
-      if (history.event === 'AUTO_GENERATE' || history.event === 'AUTO_DELETE') {
+      if (
+        history.event === 'AUTO_GENERATE' ||
+        history.event === 'AUTO_DELETE'
+      ) {
         throw new AppError('Organization history not found', 404);
       }
 
       const requestData = (history.orgReq?.data as any) || null;
-      const requestType = String(history.orgReq?.type || 'INITIATE').toUpperCase();
+      const requestType = String(
+        history.orgReq?.type || 'INITIATE',
+      ).toUpperCase();
       const displayEvent = OrgStructureDbController.getOrgHistoryDisplayEvent(
         history.event,
         requestType,
@@ -4376,9 +4866,8 @@ export class OrgStructureDbController {
           createdAt: true,
         },
       });
-      const targetNodePath = OrgStructureDbController.extractOrgTargetPath(
-        requestData,
-      );
+      const targetNodePath =
+        OrgStructureDbController.extractOrgTargetPath(requestData);
       const historyRequests = allRequests
         .filter((request) => {
           const requestTargetNodePath =
@@ -4558,13 +5047,17 @@ export class OrgStructureDbController {
       const pendingWithDetails = await Promise.all(
         pendingRequests.map(async (req) => {
           const w = req.workflowId ? workflowMap.get(req.workflowId) : null;
-          const initiator = req.orgHistories[0]?.user || { name: '', email: '' };
-          const resolvedImpactSummary = await OrgStructureDbController.resolveImpactSummary(
-            prisma as any,
-            resolvedCompanyId,
-            req.type || 'INITIATE',
-            req.data,
-          );
+          const initiator = req.orgHistories[0]?.user || {
+            name: '',
+            email: '',
+          };
+          const resolvedImpactSummary =
+            await OrgStructureDbController.resolveImpactSummary(
+              prisma as any,
+              resolvedCompanyId,
+              req.type || 'INITIATE',
+              req.data,
+            );
 
           const { orgHistories, ...rest } = req;
           const reqData = req.data as any;

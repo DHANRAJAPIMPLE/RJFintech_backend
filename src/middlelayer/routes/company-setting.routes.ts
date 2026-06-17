@@ -15,15 +15,16 @@ import type { NextFunction, Response } from 'express';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import type { AuthRequest } from '../middlewares/auth.middleware';
 import { AppError } from '../../shared/middlewares/error.middleware';
+import { config } from '../config';
 import { EditLockController } from '../controllers/edit-lock/edit-lock.controller';
 import { HistoryController } from '../controllers/history/history.controller';
 import { OrgController } from '../controllers/org/org.controller';
 import { RoleController } from '../controllers/role/role.controller';
-import { TemplateController } from '../controllers/template/template.controller';
 import { UserController } from '../controllers/user/user.controller';
 import { WorkflowController } from '../controllers/workflow/workflow.controller';
 
 import { authorize } from '../middlewares/access.middleware';
+import { internalPost } from '../utils/internal-fetch.util';
 
 const router = Router();
 router.use(authMiddleware);
@@ -131,6 +132,47 @@ const authorizeHistoryDetail = (
   return authorize('view', moduleName)(req, res, next);
 };
 
+const authorizeUserDetailAccess = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    if (req.body?.reportee === true) {
+      const userId = req.user?.id;
+      const companyId = req.user?.companyId;
+      const email =
+        typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+
+      if (userId && companyId && email) {
+        const response = await internalPost<{ users?: Array<{ email: string }> }>(
+          `${config.backendAuthUrl}/access-rights`,
+          {
+            reportee: true,
+            userId,
+            companyId,
+          },
+        );
+
+        const isDirectReportee =
+          response.ok &&
+          Array.isArray(response.data?.users) &&
+          response.data.users.some(
+            (user) => user.email.toLowerCase() === email.toLowerCase(),
+          );
+
+        if (isDirectReportee) {
+          return next();
+        }
+      }
+    }
+
+    return authorize('view', 'USER_ACC')(req, res, next);
+  } catch (error) {
+    return next(error);
+  }
+};
+
 router.post('/edit-lock', authorizeEditLock, EditLockController.toggle);
 router.post(
   '/history/detail',
@@ -157,7 +199,7 @@ router.post(
 );
 router.post(
   '/user/details',
-  authorize('view', 'USER_ACC'),
+  authorizeUserDetailAccess,
   UserController.fetchUserDetails,
 );
 router.post(
@@ -237,11 +279,6 @@ router.post(
 // --------------roles routes--------------------------------
 // router.post('/role/create', RoleController.createRoles);
 router.post('/role/fetch-all', RoleController.fetchAllRoles); //done
-// ----------------------------------------------------------
-
-// --------------template routes-----------------------------
-router.post('/template/upsert', TemplateController.upsert);
-router.post('/template/fetch', TemplateController.fetch);
 // ----------------------------------------------------------
 
 export default router;

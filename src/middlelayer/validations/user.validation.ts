@@ -579,6 +579,7 @@ export const userDetailsSchema = z
   .object({
     id: z.string().uuid('Request ID is invalid').optional(),
     email: emailSchema.optional(),
+    reportee: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, context) => {

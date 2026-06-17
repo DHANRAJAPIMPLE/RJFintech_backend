@@ -8,57 +8,61 @@ datasource db {
 }
 
 model User {
-  id                   String               @id @default(uuid())
-  name                 String
-  email                String               @unique
-  password             String
-  phone                String
-  editLockedBy         String?              @map("edit_locked_by")
-  editLockedAt         DateTime?            @map("edit_locked_at")
-  editLockExpiresAt    DateTime?            @map("edit_lock_expires_at")
-  apiSpans             ApiSpan[]            @relation("UserApiSpanRel")
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
-  companyHistory       CompanyHistory[]     @relation("UserCompanyHistoryRel")
-  createdNotifications Notification[]       @relation("NotificationCreatedBy")
-  notificationUsers    NotificationUser[]
-  orgHistory           OrgHistory[]         @relation("UserOrgHistoryRel")
-  userAccesses         UserAccess[]
-  userActivities       UserActivity[]
-  userHistory          UserHistory[]        @relation("UserHistoryRel")
-  managedUsers         UserMapping[]        @relation("ReportingManager")
-  userMappings         UserMapping[]        @relation("UserMappings")
-  workflowHistories    WorkflowReqHistory[] @relation("UserWorkflowHistoryRel")
+  id                         String                       @id @default(uuid())
+  name                       String
+  email                      String                       @unique
+  password                   String
+  phone                      String
+  editLockedBy               String?                      @map("edit_locked_by")
+  editLockedAt               DateTime?                    @map("edit_locked_at")
+  editLockExpiresAt          DateTime?                    @map("edit_lock_expires_at")
+  apiSpans                   ApiSpan[]                    @relation("UserApiSpanRel")
+  createdAt                  DateTime                     @default(now()) @map("created_at")
+  updatedAt                  DateTime                     @updatedAt @map("updated_at")
+  companyHistory             CompanyHistory[]             @relation("UserCompanyHistoryRel")
+  createdNotifications       Notification[]               @relation("NotificationCreatedBy")
+  notificationSettings       NotificationSetting[]        @relation("UserNotificationSettingRel")
+  notificationSettingHistory NotificationSettingHistory[] @relation("UserNotificationSettingHistoryRel")
+  notificationUsers          NotificationUser[]
+  orgHistory                 OrgHistory[]                 @relation("UserOrgHistoryRel")
+  userAccesses               UserAccess[]
+  userActivities             UserActivity[]
+  userHistory                UserHistory[]                @relation("UserHistoryRel")
+  managedUsers               UserMapping[]                @relation("ReportingManager")
+  userMappings               UserMapping[]                @relation("UserMappings")
+  workflowHistories          WorkflowReqHistory[]         @relation("UserWorkflowHistoryRel")
 
   @@map("user")
 }
 
 model Company {
-  id                   String               @id @default(uuid())
-  gstNumber            String?              @map("gst_number")
-  legalName            String               @map("legal_name")
-  address              String
-  status               Status
-  registrationDate     DateTime             @map("registration_date")
-  brandName            String?              @map("brand_name")
-  ieCode               String?              @map("ie_code")
-  companyCode          String               @unique @map("company_code")
-  apiSpans             ApiSpan[]            @relation("CompanyApiSpanRel")
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
-  companyMappings      CompanyMapping[]
-  notificationUsers    NotificationUser[]
-  notifications        Notification[]
-  orgHistories         OrgHistory[]         @relation("CompanyOrgHistoryRel")
-  orgStructures        OrgStructure[]
-  orgStructureReqs     OrgStructureReq[]
-  userAccesses         UserAccess[]
-  userHistories        UserHistory[]        @relation("CompanyUserHistoryRel")
-  userMappings         UserMapping[]
-  userOnboardings      UserOnboarding[]     @relation("UserOnboardingRel")
-  workflows            Workflow[]
-  workflowReqs         WorkflowReq[]
-  workflowReqHistories WorkflowReqHistory[] @relation("CompanyWorkflowHistoryRel")
+  id                         String                       @id @default(uuid())
+  gstNumber                  String?                      @map("gst_number")
+  legalName                  String                       @map("legal_name")
+  address                    String
+  status                     Status
+  registrationDate           DateTime                     @map("registration_date")
+  brandName                  String?                      @map("brand_name")
+  ieCode                     String?                      @map("ie_code")
+  companyCode                String                       @unique @map("company_code")
+  apiSpans                   ApiSpan[]                    @relation("CompanyApiSpanRel")
+  createdAt                  DateTime                     @default(now()) @map("created_at")
+  updatedAt                  DateTime                     @updatedAt @map("updated_at")
+  companyMappings            CompanyMapping[]
+  notificationSettings       NotificationSetting[]        @relation("CompanyNotificationSettingRel")
+  notificationSettingHistory NotificationSettingHistory[] @relation("CompanyNotificationSettingHistoryRel")
+  notificationUsers          NotificationUser[]
+  notifications              Notification[]
+  orgHistories               OrgHistory[]                 @relation("CompanyOrgHistoryRel")
+  orgStructures              OrgStructure[]
+  orgStructureReqs           OrgStructureReq[]
+  userAccesses               UserAccess[]
+  userHistories              UserHistory[]                @relation("CompanyUserHistoryRel")
+  userMappings               UserMapping[]
+  userOnboardings            UserOnboarding[]             @relation("UserOnboardingRel")
+  workflows                  Workflow[]
+  workflowReqs               WorkflowReq[]
+  workflowReqHistories       WorkflowReqHistory[]         @relation("CompanyWorkflowHistoryRel")
 
   @@map("company")
 }
@@ -237,6 +241,51 @@ model NotificationUser {
   @@map("notification_users")
 }
 
+model NotificationSetting {
+  id        String             @id @default(uuid())
+  companyId String             @map("company_id")
+  userId    String             @map("user_id")
+  nodeId    String             @map("node_id")
+  module    NotificationModule
+  isEnabled Boolean            @default(true) @map("is_enabled")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company   Company                      @relation("CompanyNotificationSettingRel", fields: [companyId], references: [id])
+  node      OrgStructure                 @relation("OrgNotificationSettingRel", fields: [nodeId], references: [id])
+  user      User                         @relation("UserNotificationSettingRel", fields: [userId], references: [id])
+  histories NotificationSettingHistory[]
+
+  @@unique([companyId, userId, nodeId, module])
+  @@index([companyId])
+  @@index([userId])
+  @@index([nodeId])
+  @@index([companyId, userId])
+  @@index([companyId, userId, nodeId])
+  @@map("notification_settings")
+}
+
+model NotificationSettingHistory {
+  id                    String   @id @default(uuid())
+  notificationSettingId String   @map("notification_setting_id")
+  companyId             String   @map("company_id")
+  eventUserId           String   @map("event_user_id")
+  oldData               Json?    @map("old_data")
+  newData               Json?    @map("new_data")
+  remarks               String?
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  company             Company             @relation("CompanyNotificationSettingHistoryRel", fields: [companyId], references: [id])
+  eventUser           User                @relation("UserNotificationSettingHistoryRel", fields: [eventUserId], references: [id])
+  notificationSetting NotificationSetting @relation(fields: [notificationSettingId], references: [id])
+
+  @@index([notificationSettingId])
+  @@index([companyId])
+  @@index([eventUserId])
+  @@map("notification_setting_history")
+}
+
 model OrgStructureReq {
   id                String           @id @default(uuid())
   data              Json
@@ -277,22 +326,23 @@ model OrgHistory {
 }
 
 model OrgStructure {
-  id                String         @id @default(uuid())
-  companyId         String         @map("company_id")
-  nodePath          String         @unique @map("node_path")
-  nodeName          String         @map("node_name")
-  nodeType          NodeType       @map("node_type")
-  parentId          String?        @map("parent_id")
-  status            Status         @default(ACTIVE)
-  editLockedBy      String?        @map("edit_locked_by")
-  editLockedAt      DateTime?      @map("edit_locked_at")
-  editLockExpiresAt DateTime?      @map("edit_lock_expires_at")
-  createdAt         DateTime       @default(now()) @map("created_at")
-  company           Company        @relation(fields: [companyId], references: [id])
-  parent            OrgStructure?  @relation("ParentChild", fields: [parentId], references: [id])
-  children          OrgStructure[] @relation("ParentChild")
-  userAccess        UserAccess[]
-  workflows         Workflow[]
+  id                   String                @id @default(uuid())
+  companyId            String                @map("company_id")
+  nodePath             String                @unique @map("node_path")
+  nodeName             String                @map("node_name")
+  nodeType             NodeType              @map("node_type")
+  parentId             String?               @map("parent_id")
+  status               Status                @default(ACTIVE)
+  editLockedBy         String?               @map("edit_locked_by")
+  editLockedAt         DateTime?             @map("edit_locked_at")
+  editLockExpiresAt    DateTime?             @map("edit_lock_expires_at")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  company              Company               @relation(fields: [companyId], references: [id])
+  parent               OrgStructure?         @relation("ParentChild", fields: [parentId], references: [id])
+  children             OrgStructure[]        @relation("ParentChild")
+  userAccess           UserAccess[]
+  notificationSettings NotificationSetting[] @relation("OrgNotificationSettingRel")
+  workflows            Workflow[]
 
   @@index([companyId])
   @@index([companyId, parentId])
@@ -555,20 +605,8 @@ enum UserCategory {
   NODE
 }
 
-model Template {
-  id         String   @id @default(uuid())
-
-  userId     String   @map("user_id")
-  companyId  String   @map("company_id")
-
-  module     String
-  event      String
-
-  isEnabled  Boolean  @default(true) @map("is_enabled")
-
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
-
-  @@unique([userId, companyId, module, event])
-  @@map("template")
+enum NotificationModule {
+  USER
+  WORKFLOW
+  ORG
 }

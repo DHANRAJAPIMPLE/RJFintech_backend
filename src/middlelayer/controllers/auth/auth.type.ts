@@ -39,8 +39,9 @@ export type AuthLogoutResponse = {
 };
 
 export type AuthAccessRightsRequest = {
-  email: string;
-  companyCode: string;
+  email?: string | null;
+  companyCode?: string | null;
+  reportee?: boolean;
 };
 
 export type AuthAccessRoleCategory =
@@ -85,6 +86,15 @@ export type AuthAccessRight = {
 export type AuthAccessRightsResponse = {
   primary: AuthAccessRight[];
   secondary: AuthAccessRight[];
+};
+
+export type AuthReporteeUser = {
+  name: string;
+  email: string;
+};
+
+export type AuthReporteeResponse = {
+  users: AuthReporteeUser[];
 };
 
 export type AuthApiErrorResponse = {

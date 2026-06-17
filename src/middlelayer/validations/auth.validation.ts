@@ -66,7 +66,33 @@ export const loginSchema = z.object({
 
 export const accessRightsSchema = z
   .object({
-    email: emailSchema,
-    companyCode: z.string().trim().min(1, 'Company code is required'),
+    email: emailSchema.nullable().optional(),
+    companyCode: z.string().trim().min(1).nullable().optional(),
+    reportee: z.boolean().optional().default(false),
   })
-  .strict();
+  .strict()
+  .superRefine((data, ctx) => {
+    if (data.reportee) {
+      return;
+    }
+
+    if (!data.email) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Email is required',
+        path: ['email'],
+      });
+    }
+
+    if (!data.companyCode) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Company code is required',
+        path: ['companyCode'],
+      });
+    }
+  });
+
+export const accessRightsRequestSchema = z.object({
+  body: accessRightsSchema,
+});
