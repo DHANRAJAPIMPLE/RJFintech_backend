@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { NextFunction, Response } from 'express';
 import { AuthController } from '../controllers/auth/auth.controller';
 import { validate } from '../middlewares/validate.middleware';
 import {
@@ -7,6 +8,7 @@ import {
   accessRightsRequestSchema,
 } from '../validations/auth.validation';
 import { authMiddleware } from '../middlewares/auth.middleware';
+import type { AuthRequest } from '../middlewares/auth.middleware';
 
 /**
  * Auth Routes:
@@ -18,6 +20,18 @@ import { authMiddleware } from '../middlewares/auth.middleware';
  * - To provide the /me endpoint for the frontend to retrieve the current user's profile and permissions.
  */
 const router = Router();
+
+const authMiddlewareForReportee = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (req.body?.reportee === true) {
+    return authMiddleware(req, res, next);
+  }
+
+  return next();
+};
 
 // // Logic: Public route — Create a new user account
 // router.post('/register', validate(registerSchema), AuthController.register);
@@ -38,6 +52,7 @@ router.post('/logout', AuthController.logout);  //done
 router.post(
   '/access-rights',
   validate(accessRightsRequestSchema),
+  authMiddlewareForReportee,
   AuthController.getAccessRights,
 );  //done
 

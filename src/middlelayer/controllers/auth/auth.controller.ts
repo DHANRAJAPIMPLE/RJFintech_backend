@@ -428,7 +428,7 @@ export class AuthController {
       Record<string, never>,
       AuthAccessRightsResponse | AuthReporteeResponse,
       AuthAccessRightsRequest
-    >,
+    > & { user?: { id: string; companyId: string } },
     res: Response<AuthAccessRightsResponse | AuthReporteeResponse>,
     next: NextFunction,
   ) {
@@ -439,38 +439,19 @@ export class AuthController {
       );
 
       if (reportee) {
-        const accessToken =
-          req.cookies?.accessToken ||
-          req.headers.authorization?.split(' ')[1] ||
-          null;
+        const userId = req.user?.id;
+        const companyId = req.user?.companyId;
 
-        if (!accessToken) {
-          throw new AppError('Unauthorized - Access token missing', 401);
-        }
-
-        let decodedToken: { userId: string; companyId: string } | null = null;
-        try {
-          decodedToken = TokenUtil.verifyAccessToken(accessToken) as {
-            userId: string;
-            companyId: string;
-          };
-        } catch {
-          decodedToken = TokenUtil.decodeToken(accessToken) as {
-            userId: string;
-            companyId: string;
-          } | null;
-        }
-
-        if (!decodedToken?.userId || !decodedToken?.companyId) {
-          throw new AppError('Unauthorized - Invalid access token', 401);
+        if (!userId || !companyId) {
+          throw new AppError('Unauthorized', 401);
         }
 
         const backendRes = await internalPost<
           AuthReporteeResponse | AuthApiErrorResponse
         >(`${config.backendAuthUrl}/access-rights`, {
           reportee: true,
-          userId: decodedToken.userId,
-          companyId: decodedToken.companyId,
+          userId,
+          companyId,
         });
 
         if (!backendRes.ok) {
