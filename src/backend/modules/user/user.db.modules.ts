@@ -416,6 +416,32 @@ export class UserDbController {
     return user?.id ? [user.id] : [];
   }
 
+  private static async getCompanySaasAdminUserIds(companyId: string) {
+    const accesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        roleCode: 'SAAS_ADMIN',
+        user: {
+          userMappings: {
+            some: {
+              companyId,
+              status: 'ACTIVE',
+            },
+          },
+        },
+      },
+      select: { userId: true },
+    });
+
+    return Array.from(
+      new Set(
+        accesses
+          .map((access) => String(access.userId || '').trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+
   private static buildNotificationHandledError(
     message: string,
     statusCode = 400,
@@ -463,6 +489,55 @@ export class UserDbController {
     return {
       name: `${label} ${phase}`,
       message: `${label} request ${phase} for ${referenceName}`,
+    };
+  }
+
+  private static getUserPendingApprovalNotificationContent(
+    type: string | null | undefined,
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'User modification'
+        : normalizedType === 'ACTIVE'
+          ? 'User activation'
+          : normalizedType === 'INACTIVE'
+            ? 'User inactivation'
+            : normalizedType === 'ARCHIVE'
+              ? 'User archive'
+              : 'User onboarding';
+
+    return {
+      name: `${label} approval pending`,
+      message: `${label} request is pending for your approval for ${referenceName}`,
+    };
+  }
+
+  private static getUserLevelApprovalNotificationContent(
+    type: string | null | undefined,
+    referenceName: string,
+    level: number | null | undefined,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'User modification'
+        : normalizedType === 'ACTIVE'
+          ? 'User activation'
+          : normalizedType === 'INACTIVE'
+            ? 'User inactivation'
+            : normalizedType === 'ARCHIVE'
+              ? 'User archive'
+              : 'User onboarding';
+    const levelLabel =
+      typeof level === 'number' && Number.isFinite(level)
+        ? ` at Level ${level}`
+        : '';
+
+    return {
+      name: `${label} approved${levelLabel}`,
+      message: `${label} request approved${levelLabel} for ${referenceName}`,
     };
   }
 
@@ -1023,6 +1098,123 @@ export class UserDbController {
           .filter(Boolean),
       ),
     );
+  }
+
+  private static extractUserNotificationNodePaths(data: any): string[] {
+    const source = UserDbController.normalizeUserSnapshotSource(data);
+    const currentData = source?.currentData || data?.currentData || {};
+    const newData = source?.newData || data?.newData || {};
+    const oldData = source?.oldData || data?.oldData || {};
+    const candidateNodePaths = [
+      ...UserDbController.extractPendingUserRequestNodePaths(data),
+      data?.targetNodePath,
+      data?.nodePath,
+      data?.orgStructure?.nodePath,
+      data?.basicDetails?.nodePath,
+      source?.targetNodePath,
+      source?.nodePath,
+      source?.orgStructure?.nodePath,
+      source?.basicDetails?.nodePath,
+      currentData?.nodePath,
+      currentData?.orgStructure?.nodePath,
+      currentData?.basicDetails?.nodePath,
+      newData?.nodePath,
+      newData?.orgStructure?.nodePath,
+      newData?.basicDetails?.nodePath,
+      oldData?.nodePath,
+      oldData?.orgStructure?.nodePath,
+      oldData?.basicDetails?.nodePath,
+    ];
+
+    return Array.from(
+      new Set(
+        candidateNodePaths
+          .map((nodePath) =>
+            typeof nodePath === 'string' ? nodePath.trim() : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private static async getNodeAccessNotificationRecipientIds(
+    companyId: string,
+    nodePaths: string[],
+  ) {
+    const normalizedNodePaths = Array.from(
+      new Set(
+        nodePaths
+          .map((nodePath) =>
+            typeof nodePath === 'string' ? nodePath.trim() : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+
+    if (normalizedNodePaths.length === 0) {
+      return [];
+    }
+
+    const companyMappedUsers = await prisma.userMapping.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+      },
+      select: {
+        userId: true,
+      },
+    });
+    const mappedUserIds = Array.from(
+      new Set(
+        companyMappedUsers
+          .map((mapping) => String(mapping.userId || '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    if (mappedUserIds.length === 0) {
+      return [];
+    }
+
+    const userAccesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        userId: {
+          in: mappedUserIds,
+        },
+      },
+      include: {
+        role: {
+          select: {
+            isActive: true,
+          },
+        },
+        orgStructure: {
+          select: {
+            nodePath: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    const recipientIds = userAccesses
+      .filter((access) => {
+        if (access.role?.isActive === false) {
+          return false;
+        }
+
+        if (!access.isGlobalAccess && access.orgStructure?.status !== 'ACTIVE') {
+          return false;
+        }
+
+        return normalizedNodePaths.some((nodePath) =>
+          UserDbController.doesAccessCoverNode(access, nodePath),
+        );
+      })
+      .map((access) => access.userId);
+
+    return Array.from(new Set(recipientIds));
   }
 
   private static normalizeEmail(value: unknown): string {
@@ -8807,6 +8999,7 @@ export class UserDbController {
       } else if (result && result.status === 'REJECTED') {
         message = `User ${requestType.toLowerCase()} request rejected`;
       }
+      const isPartialApproval = result?.status === 'PARTIAL_APPROVED';
 
       const requestInitiatorId =
         await NotificationService.getRequestInitiatorId(id, 'user_onboarding');
@@ -8817,16 +9010,25 @@ export class UserDbController {
           'user_onboarding',
         );
       const notificationRecipientUserIds =
-        NotificationService.mergeRecipientUserIds(
-          notificationRecipients,
-          requestInitiatorId,
-          requestInitiatorReportingManagerUserIds,
-        );
+        isPartialApproval
+          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+          : NotificationService.mergeRecipientUserIds(
+              notificationRecipients,
+              requestInitiatorId,
+              requestInitiatorReportingManagerUserIds,
+            );
       const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
         onboarding.companyId,
       );
       const notificationLookupEmail =
         result?.status === 'REJECTED' ? historyEmail : email || historyEmail;
+      const companySaasAdminUserIds =
+        await UserDbController.getCompanySaasAdminUserIds(onboarding.companyId);
+      const allEligibleApproverUserIds = Array.isArray(
+        onboarding.eligibleApprovers,
+      )
+        ? onboarding.eligibleApprovers
+        : [];
       const notificationUser = notificationLookupEmail
         ? await prisma.user.findUnique({
             where: { email: notificationLookupEmail },
@@ -8839,13 +9041,27 @@ export class UserDbController {
           email: notificationLookupEmail || notificationUser?.email,
         });
       const userNotificationContent =
-        requestType !== 'INITIATE' && result?.status
+        isPartialApproval
+          ? UserDbController.getUserPendingApprovalNotificationContent(
+              requestType,
+              notificationReferenceName,
+            )
+          : requestType !== 'INITIATE' && result?.status
           ? UserDbController.getUserNotificationContent(
               requestType,
               result.status === 'REJECTED' ? 'rejected' : 'approved',
               notificationReferenceName,
             )
           : null;
+      const affectedNodeRecipientUserIds =
+        result?.status === 'APPROVED'
+          ? await UserDbController.getNodeAccessNotificationRecipientIds(
+              onboarding.companyId,
+              UserDbController.extractUserNotificationNodePaths(
+                onboarding.data,
+              ),
+            )
+          : [];
       const onboardedUserRecipientIds =
         requestType === 'INITIATE' && result?.status === 'APPROVED'
           ? await UserDbController.getCompanyMappedUserNotificationRecipientIds(
@@ -8867,17 +9083,60 @@ export class UserDbController {
         createdBy: approverId,
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipientUserIds,
-          targetNotificationUserIds,
-          onboardedUserRecipientIds,
-          corpAdminUserIds,
+          ...(isPartialApproval
+            ? []
+            : [
+                targetNotificationUserIds,
+                affectedNodeRecipientUserIds,
+                onboardedUserRecipientIds,
+                corpAdminUserIds,
+              ]),
         ),
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          requestInitiatorId,
-          approverId,
-        ),
+        requiredRecipientUserIds: isPartialApproval
+          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+          : NotificationService.mergeRecipientUserIds(
+              requestInitiatorId,
+              approverId,
+            ),
         includeCreatedBy: true,
-        isPending: result?.status === 'PARTIAL_APPROVED',
+        isPending: isPartialApproval,
       });
+
+      if (isPartialApproval) {
+        const levelApprovalNotificationContent =
+          UserDbController.getUserLevelApprovalNotificationContent(
+            requestType,
+            notificationReferenceName,
+            result?.level ?? null,
+          );
+
+        await NotificationService.createRequestNotification({
+          companyId: onboarding.companyId,
+          type: UserDbController.getUserNotificationType(
+            onboarding.type,
+            result?.status,
+          ),
+          ...levelApprovalNotificationContent,
+          referenceType: 'USER',
+          referenceId: id,
+          referenceName: notificationReferenceName,
+          createdBy: approverId,
+          recipientUserIds: NotificationService.mergeRecipientUserIds(
+            allEligibleApproverUserIds,
+            requestInitiatorId,
+            corpAdminUserIds,
+            companySaasAdminUserIds,
+          ),
+          requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+            allEligibleApproverUserIds,
+            requestInitiatorId,
+            corpAdminUserIds,
+            companySaasAdminUserIds,
+          ),
+          includeCreatedBy: true,
+          isPending: false,
+        });
+      }
 
       res.status(200).json({
         message,

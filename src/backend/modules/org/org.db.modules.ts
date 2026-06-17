@@ -738,6 +738,22 @@ export class OrgStructureDbController {
     };
   }
 
+  private static getOrgPendingApprovalNotificationContent(
+    type: string | null | undefined,
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Organization modification'
+        : 'Organization onboarding';
+
+    return {
+      name: `${label} approval pending`,
+      message: `${label} request is pending for your approval for ${referenceName}`,
+    };
+  }
+
   private static getOrgNotificationType(
     type: string | null | undefined,
     status: string | null | undefined,
@@ -3054,6 +3070,7 @@ export class OrgStructureDbController {
       } else if (result && result.status === 'REJECTED') {
         message = `Org structure ${requestType.toLowerCase()} request rejected`;
       }
+      const isPartialApproval = result?.status === 'PARTIAL_APPROVED';
 
       if (notificationCompanyId) {
         const requestInitiatorId =
@@ -3076,16 +3093,23 @@ export class OrgStructureDbController {
             inactivationNotification,
         );
         const notificationRecipientUserIds =
-          NotificationService.mergeRecipientUserIds(
-            notificationRecipients,
-            requestInitiatorId,
-            requestInitiatorReportingManagerUserIds,
-          );
+          isPartialApproval
+            ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+            : NotificationService.mergeRecipientUserIds(
+                notificationRecipients,
+                requestInitiatorId,
+                requestInitiatorReportingManagerUserIds,
+              );
         const orgNotificationContent = isOrgInactivation
           ? {
               name: 'Organization Removed',
               message: `Organization ${inactivationNotification?.nodeName || notificationSubject} (${inactivationNotification?.nodePath || notificationSubject}) was inactivated. ${inactivationNotification?.workflowCount || 0} workflow(s) were deleted ${inactivationNotification?.workflowNames && inactivationNotification.workflowNames.length > 0 ? `: ${inactivationNotification.workflowNames.join(', ')}` : ''}. Access was removed for ${inactivationNotification?.accessUserIds.length || 0} user(s).`,
             }
+          : isPartialApproval
+            ? OrgStructureDbController.getOrgPendingApprovalNotificationContent(
+                result?.type || requestType,
+                notificationSubject,
+              )
           : requestType === 'UPDATE' && result?.status
             ? OrgStructureDbController.getOrgNotificationContent(
                 requestType,
@@ -3114,13 +3138,13 @@ export class OrgStructureDbController {
           createdBy: approverId,
           recipientUserIds: NotificationService.mergeRecipientUserIds(
             notificationRecipientUserIds,
-            corpAdminUserIds,
+            ...(isPartialApproval ? [] : [corpAdminUserIds]),
           ),
-          requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-            requestInitiatorId,
-          ),
+          requiredRecipientUserIds: isPartialApproval
+            ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+            : NotificationService.mergeRecipientUserIds(requestInitiatorId),
           includeCreatedBy: true,
-          isPending: result?.status === 'PARTIAL_APPROVED',
+          isPending: isPartialApproval,
         });
 
         if (

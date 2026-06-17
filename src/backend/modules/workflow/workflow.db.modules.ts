@@ -638,6 +638,28 @@ export class WorkflowDbController {
     };
   }
 
+  private static getWorkflowPendingApprovalNotificationContent(
+    type: string | null | undefined,
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Workflow modification'
+        : normalizedType === 'ACTIVE'
+          ? 'Workflow activation'
+          : normalizedType === 'INACTIVE'
+            ? 'Workflow inactivation'
+            : normalizedType === 'ARCHIVE'
+              ? 'Workflow archive'
+              : 'Workflow onboarding';
+
+    return {
+      name: `${label} approval pending`,
+      message: `${label} request is pending for your approval for ${referenceName}`,
+    };
+  }
+
   private static getWorkflowNotificationType(
     type: string | null | undefined,
     status: string | null | undefined,
@@ -1211,6 +1233,9 @@ export class WorkflowDbController {
         nodePath: node.nodePath,
         nodeName: node.nodeName,
         nodeType: node.nodeType,
+        levelCount: WorkflowDbController.getNodeHierarchyLevelCount(
+          node.nodePath,
+        ),
       }));
   }
 
@@ -1227,6 +1252,7 @@ export class WorkflowDbController {
 
   private static formatWorkflowSummary(row: any) {
     const nodePath = row.orgStructure?.nodePath ?? null;
+    const levelCount = WorkflowDbController.getNodeHierarchyLevelCount(nodePath);
     return {
       id: row.id,
       name: row.name,
@@ -1238,11 +1264,12 @@ export class WorkflowDbController {
       workflowType: row.type ?? row.workflowType ?? 'NODE',
       module: row.module,
       subModule: row.subModule,
-      levelCount: WorkflowDbController.getNodeHierarchyLevelCount(nodePath),
+      levelCount,
       orgStructure: {
         nodePath,
         nodeName: row.orgStructure?.nodeName ?? null,
         nodeType: row.orgStructure?.nodeType ?? null,
+        levelCount,
       },
       isPending: row.isPending ?? false,
     };
@@ -4295,6 +4322,7 @@ export class WorkflowDbController {
             notificationRecipients,
           );
       }
+      const isPartialApproval = result?.status === 'PARTIAL_APPROVED';
 
       const requestInitiatorId =
         await NotificationService.getRequestInitiatorId(id, 'workflow_req');
@@ -4308,11 +4336,13 @@ export class WorkflowDbController {
         request.companyId,
       );
       const notificationRecipientUserIds =
-        NotificationService.mergeRecipientUserIds(
-          notificationRecipients,
-          requestInitiatorId,
-          requestInitiatorReportingManagerUserIds,
-        );
+        isPartialApproval
+          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+          : NotificationService.mergeRecipientUserIds(
+              notificationRecipients,
+              requestInitiatorId,
+              requestInitiatorReportingManagerUserIds,
+            );
       const workflowReferenceName =
         (request.data as any)?.name || request.alias || request.id;
       const workflowNotificationRequestType =
@@ -4324,7 +4354,12 @@ export class WorkflowDbController {
               ? 'ARCHIVE'
               : request.type;
       const workflowNotificationContent =
-        requestType !== 'INITIATE' && result?.status
+        isPartialApproval
+          ? WorkflowDbController.getWorkflowPendingApprovalNotificationContent(
+              workflowNotificationRequestType,
+              workflowReferenceName,
+            )
+          : requestType !== 'INITIATE' && result?.status
           ? WorkflowDbController.getWorkflowNotificationContent(
               workflowNotificationRequestType,
               result.status === 'REJECTED' ? 'rejected' : 'approved',
@@ -4345,11 +4380,12 @@ export class WorkflowDbController {
         createdBy: approverId,
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipientUserIds,
-          corpAdminUserIds,
+          ...(isPartialApproval ? [] : [corpAdminUserIds]),
         ),
-        requiredRecipientUserIds:
-          NotificationService.mergeRecipientUserIds(requestInitiatorId),
-        isPending: result?.status === 'PARTIAL_APPROVED',
+        requiredRecipientUserIds: isPartialApproval
+          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+          : NotificationService.mergeRecipientUserIds(requestInitiatorId),
+        isPending: isPartialApproval,
       });
 
       if (
@@ -6204,9 +6240,20 @@ export class WorkflowDbController {
         code: 200,
         data: {
           ...workflow,
+          levelCount: WorkflowDbController.getNodeHierarchyLevelCount(
+            workflow.orgStructure?.nodePath,
+          ),
           associateAlias: {
             workflowName: workflow.name ?? null,
             workflowAlias: workflow.alias ?? null,
+          },
+          orgStructure: {
+            nodePath: workflow.orgStructure?.nodePath ?? null,
+            nodeName: workflow.orgStructure?.nodeName ?? null,
+            nodeType: workflow.orgStructure?.nodeType ?? null,
+            levelCount: WorkflowDbController.getNodeHierarchyLevelCount(
+              workflow.orgStructure?.nodePath,
+            ),
           },
           isPending,
           linkedOrgStructure: WorkflowDbController.buildLinkedOrgStructure(

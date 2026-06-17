@@ -47,6 +47,7 @@ export type WorkflowOrgStructure = {
   nodePath: string;
   nodeName: string;
   nodeType: WorkflowNodeType;
+  levelCount?: number | null;
 };
 
 export type WorkflowActiveLevel = {

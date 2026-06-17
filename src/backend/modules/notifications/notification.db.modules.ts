@@ -296,6 +296,63 @@ export class NotificationService {
     return null;
   }
 
+  private static async resolveNotificationPendingState(row: {
+    companyId: string;
+    type?: string | null;
+    referenceType?: string | null;
+    referenceId?: string | null;
+    isPending?: boolean | null;
+  }) {
+    const referenceType =
+      typeof row.referenceType === 'string'
+        ? row.referenceType.trim().toUpperCase()
+        : '';
+    const referenceId =
+      typeof row.referenceId === 'string' ? row.referenceId.trim() : '';
+
+    if (!referenceType || !referenceId) {
+      return row.isPending ?? false;
+    }
+
+    if (referenceType === 'USER') {
+      const onboarding = await prisma.userOnboarding.findUnique({
+        where: { id: referenceId },
+        select: { status: true },
+      });
+
+      return onboarding?.status === 'PENDING';
+    }
+
+    if (referenceType === 'ORG') {
+      const request = await prisma.orgStructureReq.findUnique({
+        where: { id: referenceId },
+        select: { status: true },
+      });
+
+      return request?.status === 'PENDING';
+    }
+
+    if (referenceType === 'WORKFLOW' && isUuidLike(referenceId)) {
+      const request = await prisma.workflowReq.findUnique({
+        where: { id: referenceId },
+        select: { status: true },
+      });
+
+      return request?.status === 'PENDING';
+    }
+
+    if (referenceType === 'COMPANY' && isUuidLike(referenceId)) {
+      const request = await prisma.companyOnboarding.findUnique({
+        where: { id: referenceId },
+        select: { status: true },
+      });
+
+      return request?.status === 'PENDING';
+    }
+
+    return row.isPending ?? false;
+  }
+
   private static async formatNotification(
     row: any,
     target?: string | null,
@@ -304,6 +361,10 @@ export class NotificationService {
       target === undefined
         ? await NotificationService.resolveNotificationTarget(row.notification)
         : target;
+    const resolvedPendingState =
+      await NotificationService.resolveNotificationPendingState(
+        row.notification,
+      );
 
     return {
       id: row.id,
@@ -313,7 +374,7 @@ export class NotificationService {
       refType: row.notification.referenceType,
       referenceId: row.notification.referenceId,
       target: resolvedTarget,
-      isPending: row.notification.isPending ?? false,
+      isPending: resolvedPendingState,
       status: row.status,
       createdByname: row.notification.createdByUser?.name || null,
       createdByemail: row.notification.createdByUser?.email || null,

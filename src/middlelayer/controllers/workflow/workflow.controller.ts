@@ -54,6 +54,9 @@ export class WorkflowController {
       nodePath: workflow.nodePath,
       nodeName: workflow.nodeName,
       nodeType: workflow.nodeType,
+      ...(workflow.levelCount !== undefined
+        ? { levelCount: workflow.levelCount }
+        : {}),
     };
   }
 
@@ -82,6 +85,9 @@ export class WorkflowController {
         nodePath: workflow.orgStructure.nodePath,
         nodeName: workflow.orgStructure.nodeName,
         nodeType: workflow.orgStructure.nodeType,
+        ...(workflow.orgStructure.levelCount !== undefined
+          ? { levelCount: workflow.orgStructure.levelCount }
+          : {}),
       },
       isPending: workflow.isPending ?? false,
       ...(detail
