@@ -1085,6 +1085,7 @@ export class CompanyDbController {
         referenceName: (onboardingData.data as any)?.company?.name,
         createdBy: initiatorId,
         recipientUserIds: notificationRecipients,
+        requiredRecipientUserIds: notificationRecipients,
         includeCreatedBy: true,
       });
     }
@@ -1633,6 +1634,7 @@ export class CompanyDbController {
           referenceName: notificationSubject,
           createdBy: approverId,
           recipientUserIds: notificationRecipientUserIds,
+          requiredRecipientUserIds: notificationRecipientUserIds,
           isPending: false,
         });
       }
