@@ -349,6 +349,7 @@ export class UserDbController {
     companyId: string,
     userId?: string | null,
     reportingManagerEmail?: string | null,
+    subCategory = 'USER_ACC',
   ) {
     let managerEmail = String(reportingManagerEmail || '').trim();
 
@@ -374,7 +375,30 @@ export class UserDbController {
       select: { id: true },
     });
 
-    return manager?.id ? [manager.id] : [];
+    if (!manager?.id) return [];
+
+    const managerAccess = await prisma.userAccess.findFirst({
+      where: {
+        companyId,
+        userId: manager.id,
+        user: {
+          userMappings: {
+            some: {
+              companyId,
+              status: 'ACTIVE',
+            },
+          },
+        },
+        OR: [
+          { isGlobalAccess: true },
+          { role: { subCategory, approve: true } },
+          { role: { subCategory, view: true } },
+        ],
+      },
+      select: { userId: true },
+    });
+
+    return managerAccess?.userId ? [managerAccess.userId] : [];
   }
 
   private static async getCompanyMappedUserNotificationRecipientIds(
@@ -7868,6 +7892,7 @@ export class UserDbController {
       await NotificationService.getReportingManagerUserIds(
         companyId,
         initiatorId,
+        'USER_ACC',
       );
     const targetNotificationUserIds =
       await UserDbController.getCompanyMappedUserNotificationRecipientIds(
@@ -8396,6 +8421,7 @@ export class UserDbController {
         await NotificationService.getReportingManagerUserIds(
           resolvedCompanyId,
           initiatorId,
+          'USER_ACC',
         );
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,

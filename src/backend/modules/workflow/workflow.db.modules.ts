@@ -3228,6 +3228,7 @@ export class WorkflowDbController {
       await NotificationService.getReportingManagerUserIds(
         companyId,
         initiatorId,
+        'WORK_FLOW',
       );
     await NotificationService.createRequestNotification({
       companyId,
@@ -3836,6 +3837,7 @@ export class WorkflowDbController {
         await NotificationService.getReportingManagerUserIds(
           resolvedCompanyId,
           initiatorId,
+          'WORK_FLOW',
         );
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,

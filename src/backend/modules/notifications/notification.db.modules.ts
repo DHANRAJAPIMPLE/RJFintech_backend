@@ -947,7 +947,7 @@ export class NotificationService {
               existing.module,
             ) || 'USER',
             isEnabled: Boolean(existing.isEnabled),
-            remarks: existing.remarks,
+            remarks: null,
           })
         : null;
 
@@ -983,7 +983,6 @@ export class NotificationService {
             nodeId: node.id,
             module,
             isEnabled: true,
-            remarks: params.createReason,
           },
         });
 
@@ -1236,6 +1235,7 @@ export class NotificationService {
   static async getReportingManagerUserIds(
     companyId: string,
     userId?: string | null,
+    subModule?: string | null,
   ) {
     if (!userId) return [];
 
@@ -1250,17 +1250,33 @@ export class NotificationService {
 
     if (!mapping?.reportingManager) return [];
 
-    const managerMappings = await prisma.userMapping.findMany({
+    const managerAccesses = await prisma.userAccess.findMany({
       where: {
         companyId,
         userId: mapping.reportingManager,
-        status: 'ACTIVE',
+        user: {
+          userMappings: {
+            some: {
+              companyId,
+              status: 'ACTIVE',
+            },
+          },
+        },
+        OR: [
+          { isGlobalAccess: true },
+          ...(subModule
+            ? [
+                { role: { subCategory: subModule, approve: true } },
+                { role: { subCategory: subModule, view: true } },
+              ]
+            : []),
+        ],
       },
       select: { userId: true },
     });
 
     return NotificationService.unique(
-      managerMappings.map((managerMapping) => managerMapping.userId),
+      managerAccesses.map((access) => access.userId),
     );
   }
 
@@ -1319,9 +1335,16 @@ export class NotificationService {
       reqTable,
     );
 
+    const subModuleByReqTable: Record<string, string> = {
+      user_onboarding: 'USER_ACC',
+      org_structure_req: 'ORG_STR',
+      workflow_req: 'WORK_FLOW',
+    };
+
     return NotificationService.getReportingManagerUserIds(
       companyId,
       initiatorId,
+      subModuleByReqTable[reqTable] || null,
     );
   }
 
@@ -1665,40 +1688,55 @@ export class NotificationService {
       }
     }
 
-    const baseWhere: any = {
+    const scopedWhere: any = {
       userId: params.userId,
       ...(includeAllCompanies ? {} : { companyId: params.companyId }),
-      status: status === 'HIDDEN' ? 'HIDDEN' : { not: 'HIDDEN' },
       ...(Object.keys(notificationWhere).length
         ? { notification: notificationWhere }
         : {}),
     };
+    const visibleBaseWhere: any = {
+      ...scopedWhere,
+      status: { not: 'HIDDEN' },
+    };
+    const hiddenWhere: any = {
+      ...scopedWhere,
+      status: 'HIDDEN',
+    };
     const where: any = {
-      ...baseWhere,
-      ...(status === 'ALL' ? {} : { status }),
+      ...scopedWhere,
+      ...(status === 'HIDDEN'
+        ? { status: 'HIDDEN' }
+        : status === 'ALL'
+          ? { status: { not: 'HIDDEN' } }
+          : { status }),
     };
     const unreadWhere: any = {
-      ...baseWhere,
+      ...visibleBaseWhere,
       status: 'UNREAD',
     };
 
-    const [unreadCount, allCount, cursorRow] = await Promise.all([
-      prisma.notificationUser.count({ where: unreadWhere }),
-      prisma.notificationUser.count({ where: baseWhere }),
-      cursorId
-        ? prisma.notificationUser.findFirst({
-            where: { ...where, id: cursorId },
-            select: { id: true },
-          })
-        : Promise.resolve(null),
-    ]);
+    const [unreadCount, allCount, hiddenCount, currentStatusCount, cursorRow] =
+      await Promise.all([
+        prisma.notificationUser.count({ where: unreadWhere }),
+        prisma.notificationUser.count({ where: visibleBaseWhere }),
+        prisma.notificationUser.count({ where: hiddenWhere }),
+        prisma.notificationUser.count({ where }),
+        cursorId
+          ? prisma.notificationUser.findFirst({
+              where: { ...where, id: cursorId },
+              select: { id: true },
+            })
+          : Promise.resolve(null),
+      ]);
 
     if (cursorId && !cursorRow) {
       return {
         data: [],
-        count: unreadCount,
+        count: currentStatusCount,
         unreadCount,
         allCount,
+        hiddenCount,
         limit: params.limit,
         offset: params.offset,
         status,
@@ -1736,9 +1774,10 @@ export class NotificationService {
       data: await Promise.all(
         pageRows.map((row) => NotificationService.formatNotification(row)),
       ),
-      count: unreadCount,
+      count: currentStatusCount,
       unreadCount,
       allCount,
+      hiddenCount,
       limit: params.limit,
       offset: cursorId ? 0 : params.offset,
       status,
@@ -1999,19 +2038,18 @@ export class NotificationService {
                 nodeName: node.nodeName,
                 module,
                 isEnabled: Boolean(existing.isEnabled),
-                remarks: existing.remarks,
+                remarks: null,
               })
             : null;
 
           if (
             existing &&
-            Boolean(existing.isEnabled) === setting.isEnabled &&
-            (existing.remarks || null) === (setting.remarks || null)
+            Boolean(existing.isEnabled) === setting.isEnabled
           ) {
             continue;
           }
 
-          if (!existing && setting.isEnabled === true && !setting.remarks) {
+          if (!existing && setting.isEnabled === true) {
             continue;
           }
 
@@ -2020,7 +2058,6 @@ export class NotificationService {
                 where: { id: existing.id },
                 data: {
                   isEnabled: setting.isEnabled,
-                  remarks: setting.remarks || null,
                 },
               })
             : await (tx as any).notificationSetting.create({
@@ -2030,7 +2067,6 @@ export class NotificationService {
                   nodeId: node.id,
                   module,
                   isEnabled: setting.isEnabled,
-                  remarks: setting.remarks || null,
                 },
               });
 
@@ -2040,7 +2076,7 @@ export class NotificationService {
               nodeName: node.nodeName,
               module,
               isEnabled: setting.isEnabled,
-              remarks: setting.remarks || null,
+              remarks: null,
             });
           const historyRemark =
             NotificationService.buildNotificationSettingsHistoryRemark({

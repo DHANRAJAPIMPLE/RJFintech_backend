@@ -2739,6 +2739,7 @@ export class OrgStructureDbController {
         await NotificationService.getReportingManagerUserIds(
           companyId,
           initiatorId,
+          'ORG_STR',
         );
       await NotificationService.createRequestNotification({
         companyId,
@@ -3894,6 +3895,7 @@ export class OrgStructureDbController {
         await NotificationService.getReportingManagerUserIds(
           resolvedCompanyId,
           initiatorId,
+          'ORG_STR',
         );
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
