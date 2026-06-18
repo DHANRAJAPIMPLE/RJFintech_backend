@@ -800,7 +800,7 @@ export class OrgStructureDbController {
     );
     await NotificationService.createRequestNotification({
       companyId,
-      type: 'MODIFICATION',
+      type: 'FAILED',
       name: 'Organization modification failed',
       message: `Organization modification failed: ${message}`,
       referenceType: 'ORG',
@@ -976,7 +976,12 @@ export class OrgStructureDbController {
 
     return {
       name: `${label} ${phase}`,
-      message: `${label} request ${phase} for ${referenceName}`,
+      message:
+        phase === 'approved'
+          ? `${label} approved for ${referenceName}`
+          : phase === 'rejected'
+            ? `${label} request rejected for ${referenceName}`
+            : `${label} request initiated for ${referenceName}`,
     };
   }
 
@@ -1001,14 +1006,30 @@ export class OrgStructureDbController {
     status: string | null | undefined,
   ) {
     const normalizedStatus = String(status || '').toUpperCase();
-    if (normalizedStatus === 'REJECTED') return 'REJECT' as const;
-    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVE' as const;
-
     const normalizedType = String(type || 'INITIATE').toUpperCase();
-    if (normalizedType === 'UPDATE') return 'MODIFICATION' as const;
-    if (normalizedStatus === 'APPROVED') return 'ONBOARDED' as const;
 
-    return 'INITIATE' as const;
+    if (normalizedStatus === 'REJECTED') {
+      if (normalizedType === 'UPDATE') return 'REJECTED-MODIFICATION' as const;
+      if (normalizedType === 'ACTIVE') return 'REJECTED-ACTIVE' as const;
+      if (normalizedType === 'INACTIVE') return 'REJECTED-INACTIVE' as const;
+      if (normalizedType === 'ARCHIVE') return 'REJECTED-ARCHIVED' as const;
+      return 'REJECTED-INITIATE' as const;
+    }
+    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVED' as const;
+    if (normalizedStatus === 'APPROVED') {
+      if (normalizedType === 'UPDATE') return 'MODIFIED' as const;
+      if (normalizedType === 'ACTIVE') return 'ACTIVATED' as const;
+      if (normalizedType === 'INACTIVE') return 'INACTIVATED' as const;
+      if (normalizedType === 'ARCHIVE') return 'ARCHIVED' as const;
+      return 'ONBOARDED' as const;
+    }
+
+    if (normalizedType === 'UPDATE') return 'Pending Approval - MODIFICATION' as const;
+    if (normalizedType === 'ACTIVE') return 'Pending Approval - ACTIVE' as const;
+    if (normalizedType === 'INACTIVE') return 'Pending Approval - INACTIVE' as const;
+    if (normalizedType === 'ARCHIVE') return 'Pending Approval - ARCHIVED' as const;
+
+    return 'Pending Approval - INITIATE' as const;
   }
 
   private static normalizeOrgSnapshotSource(data: any) {

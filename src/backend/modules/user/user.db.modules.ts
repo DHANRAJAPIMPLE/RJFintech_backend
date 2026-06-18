@@ -129,6 +129,7 @@ type UserPermissionSnapshot = {
   nodeName: string;
   nodePath: string;
   accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
+  sourceTag?: 'USER' | 'AUTO_GENERATED';
 };
 
 type UserDataSnapshot = {
@@ -328,7 +329,7 @@ export class UserDbController {
     );
     await NotificationService.createRequestNotification({
       companyId,
-      type: 'MODIFICATION',
+      type: 'FAILED',
       name: 'User modification failed',
       message: `${message}`,
       referenceType: 'USER',
@@ -512,7 +513,12 @@ export class UserDbController {
 
     return {
       name: `${label} ${phase}`,
-      message: `${label} request ${phase} for ${referenceName}`,
+      message:
+        phase === 'approved'
+          ? `${label} approved for ${referenceName}`
+          : phase === 'rejected'
+            ? `${label} request rejected for ${referenceName}`
+            : `${label} request initiated for ${referenceName}`,
     };
   }
 
@@ -631,22 +637,97 @@ export class UserDbController {
     return `${expandedPermissions.length} role assignment(s), including ${generatedPermissions.length} auto-generated role assignment(s)${preview ? `: ${preview}${remainingText}` : ''}`;
   }
 
+  private static getGeneratedPermissionLabels(
+    originalPermissions: any[],
+    expandedPermissions: any[],
+  ) {
+    if (
+      !Array.isArray(originalPermissions) ||
+      !Array.isArray(expandedPermissions) ||
+      expandedPermissions.length === 0
+    ) {
+      return [];
+    }
+
+    const originalKeys = new Set(
+      originalPermissions.map((permission) =>
+        UserDbController.permissionSummaryKey(permission),
+      ),
+    );
+
+    return Array.from(
+      new Set(
+        expandedPermissions
+          .filter(
+            (permission) =>
+              !originalKeys.has(
+                UserDbController.permissionSummaryKey(permission),
+              ),
+          )
+          .map((permission) => {
+            const roleName =
+              typeof permission?.roleName === 'string'
+                ? permission.roleName.trim()
+                : '';
+            const nodePath =
+              typeof permission?.nodePath === 'string'
+                ? permission.nodePath.trim()
+                : '';
+
+            if (roleName && nodePath) return `${roleName} (${nodePath})`;
+            return roleName || nodePath;
+          })
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private static formatGeneratedPermissionMessage(
+    originalPermissions: any[],
+    expandedPermissions: any[],
+  ) {
+    const labels = UserDbController.getGeneratedPermissionLabels(
+      originalPermissions,
+      expandedPermissions,
+    );
+
+    if (labels.length === 0) return null;
+
+    const preview = labels.slice(0, 5).join(', ');
+    const remaining = labels.length - 5;
+
+    return `Auto-generated access: ${preview}${remaining > 0 ? ` and ${remaining} more` : ''}.`;
+  }
+
   private static getUserNotificationType(
     type: string | null | undefined,
     status: string | null | undefined,
   ) {
     const normalizedStatus = String(status || '').toUpperCase();
-    if (normalizedStatus === 'REJECTED') return 'REJECT' as const;
-    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVE' as const;
-
     const normalizedType = String(type || 'INITIATE').toUpperCase();
-    if (normalizedType === 'UPDATE') return 'MODIFICATION' as const;
-    if (normalizedType === 'ACTIVE') return 'ACTIVE' as const;
-    if (normalizedType === 'INACTIVE') return 'INACTIVE' as const;
-    if (normalizedType === 'ARCHIVE') return 'ARCHIVE' as const;
-    if (normalizedStatus === 'APPROVED') return 'ONBOARDED' as const;
 
-    return 'INITIATE' as const;
+    if (normalizedStatus === 'REJECTED') {
+      if (normalizedType === 'UPDATE') return 'REJECTED-MODIFICATION' as const;
+      if (normalizedType === 'ACTIVE') return 'REJECTED-ACTIVE' as const;
+      if (normalizedType === 'INACTIVE') return 'REJECTED-INACTIVE' as const;
+      if (normalizedType === 'ARCHIVE') return 'REJECTED-ARCHIVED' as const;
+      return 'REJECTED-INITIATE' as const;
+    }
+    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVED' as const;
+    if (normalizedStatus === 'APPROVED') {
+      if (normalizedType === 'UPDATE') return 'MODIFIED' as const;
+      if (normalizedType === 'ACTIVE') return 'ACTIVATED' as const;
+      if (normalizedType === 'INACTIVE') return 'INACTIVATED' as const;
+      if (normalizedType === 'ARCHIVE') return 'ARCHIVED' as const;
+      return 'ONBOARDED' as const;
+    }
+
+    if (normalizedType === 'UPDATE') return 'Pending Approval - MODIFICATION' as const;
+    if (normalizedType === 'ACTIVE') return 'Pending Approval - ACTIVE' as const;
+    if (normalizedType === 'INACTIVE') return 'Pending Approval - INACTIVE' as const;
+    if (normalizedType === 'ARCHIVE') return 'Pending Approval - ARCHIVED' as const;
+
+    return 'Pending Approval - INITIATE' as const;
   }
 
   private static normalizePermission(permission: any): UserPermissionSnapshot {
@@ -658,6 +739,10 @@ export class UserDbController {
       nodeName: permission.nodeName,
       nodePath: permission.nodePath,
       accessCategory: permission.accessCategory || null,
+      sourceTag:
+        permission?.sourceTag === 'AUTO_GENERATED'
+          ? 'AUTO_GENERATED'
+          : 'USER',
     };
   }
 
@@ -1747,7 +1832,13 @@ export class UserDbController {
     const generatedPermissionKeys = new Set<string>();
 
     for (const permission of permissions) {
-      expandedPermissions.push(permission);
+      expandedPermissions.push({
+        ...permission,
+        sourceTag:
+          permission?.sourceTag === 'AUTO_GENERATED'
+            ? 'AUTO_GENERATED'
+            : 'USER',
+      });
 
       if (
         UserDbController.isPermissionRemoval(permission) ||
@@ -1794,6 +1885,7 @@ export class UserDbController {
           nodeName: child.nodeName,
           nodePath: child.nodePath,
           nodeType: child.nodeType,
+          sourceTag: 'AUTO_GENERATED',
           accessCategory:
             permission.accessCategory === 'IMMEDIATE_CHILD'
               ? 'NODE'
@@ -4074,6 +4166,10 @@ export class UserDbController {
             canModify: access.role?.modify || false,
             canApprove: access.role?.approve || false,
             canInitiate: access.role?.initiate || false,
+            sourceTag: UserDbController.resolvePermissionSourceTag(
+              access,
+              user.userAccesses,
+            ),
           }));
         const secondary = visibleAccesses
           .filter(
@@ -4092,6 +4188,10 @@ export class UserDbController {
             canModify: access.role?.modify || false,
             canApprove: access.role?.approve || false,
             canInitiate: access.role?.initiate || false,
+            sourceTag: UserDbController.resolvePermissionSourceTag(
+              access,
+              user.userAccesses,
+            ),
           }));
         const pendingSummary = eligibleCounts.get(user.id);
 
@@ -5237,7 +5337,85 @@ export class UserDbController {
         ? { nodeType: access.orgStructure?.nodeType ?? access.nodeType }
         : {}),
       accessCategory: access.accessCategory,
+      sourceTag: UserDbController.resolvePermissionSourceTag(access),
     };
+  }
+
+  private static getAccessRoleKey(access: any) {
+    return String(
+      access?.roleCode ?? access?.role?.roleCode ?? access?.role?.roleName ?? access?.roleName ?? '',
+    ).trim();
+  }
+
+  private static getAccessNodePath(access: any) {
+    return String(access?.orgStructure?.nodePath ?? access?.nodePath ?? '').trim();
+  }
+
+  private static getParentNodePath(nodePath: string) {
+    const segments = nodePath
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    if (segments.length <= 1) return null;
+    return segments.slice(0, -1).join('.');
+  }
+
+  private static isAutoGeneratedAccess(access: any, allAccesses: any[]) {
+    if (access?.sourceTag === 'AUTO_GENERATED') return true;
+    if (access?.sourceTag === 'USER') return false;
+    if (access?.isGlobalAccess === true || access?.accessType === 'PRIMARY') {
+      return false;
+    }
+
+    const roleKey = UserDbController.getAccessRoleKey(access);
+    const nodePath = UserDbController.getAccessNodePath(access);
+    if (!roleKey || !nodePath) return false;
+
+    const directParentNodePath = UserDbController.getParentNodePath(nodePath);
+
+    return allAccesses.some((candidate) => {
+      if (candidate === access) return false;
+      if (
+        candidate?.isGlobalAccess !== true &&
+        candidate?.accessType !== 'PRIMARY' &&
+        candidate?.accessType !== 'SECONDARY'
+      ) {
+        return false;
+      }
+
+      const candidateRoleKey = UserDbController.getAccessRoleKey(candidate);
+      const candidateNodePath = UserDbController.getAccessNodePath(candidate);
+      const candidateCategory = String(candidate?.accessCategory || '')
+        .trim()
+        .toUpperCase();
+
+      if (!candidateRoleKey || candidateRoleKey !== roleKey || !candidateNodePath) {
+        return false;
+      }
+
+      if (
+        candidateCategory === 'ALL_CHILD' &&
+        nodePath.startsWith(`${candidateNodePath}.`)
+      ) {
+        return true;
+      }
+
+      if (
+        candidateCategory === 'IMMEDIATE_CHILD' &&
+        directParentNodePath &&
+        directParentNodePath === candidateNodePath
+      ) {
+        return true;
+      }
+
+      return false;
+    });
+  }
+
+  private static resolvePermissionSourceTag(access: any, allAccesses: any[] = []) {
+    return UserDbController.isAutoGeneratedAccess(access, allAccesses)
+      ? 'AUTO_GENERATED'
+      : 'USER';
   }
 
   private static getNodeHierarchyLevelCount(nodePath: unknown) {
@@ -5270,11 +5448,33 @@ export class UserDbController {
     );
     const primary = u.userAccesses
       .filter((a: any) => a.accessType === 'PRIMARY' || a.isGlobalAccess)
-      .map((access: any) => UserDbController.formatUserAccess(access, detail));
+      .map((access: any) =>
+        UserDbController.formatUserAccess(
+          {
+            ...access,
+            sourceTag: UserDbController.resolvePermissionSourceTag(
+              access,
+              u.userAccesses,
+            ),
+          },
+          detail,
+        ),
+      );
     const secondary = detail
       ? u.userAccesses
           .filter((a: any) => a.accessType === 'SECONDARY' && !a.isGlobalAccess)
-          .map((access: any) => UserDbController.formatUserAccess(access, true))
+          .map((access: any) =>
+            UserDbController.formatUserAccess(
+              {
+                ...access,
+                sourceTag: UserDbController.resolvePermissionSourceTag(
+                  access,
+                  u.userAccesses,
+                ),
+              },
+              true,
+            ),
+          )
       : [];
     const resolvedNodePath =
       primary[0]?.nodePath ?? summaryPrimaryAccess?.orgStructure?.nodePath ?? null;
@@ -5860,6 +6060,12 @@ export class UserDbController {
         const incomingPermissions = Array.isArray(dataBlob?.permissions)
           ? dataBlob.permissions
           : [];
+        const currentInitiatePermissions = isInitiate
+          ? await UserDbController.expandInitiatePermissionsForChildNodes(
+              resolvedCompanyId,
+              incomingPermissions,
+            )
+          : incomingPermissions;
         const existingPermissions = (existingUser?.userAccesses || []).map(
           (access: any) => ({
             roleCategory: access.role?.category || '',
@@ -5873,6 +6079,10 @@ export class UserDbController {
             accessType: access.accessType || 'SECONDARY',
             isGlobalAccess: access.isGlobalAccess || false,
             nodeStatus: access.orgStructure?.status || null,
+            sourceTag: UserDbController.resolvePermissionSourceTag(
+              access,
+              existingUser?.userAccesses || [],
+            ) as 'USER' | 'AUTO_GENERATED',
           }),
         );
         const existingActivePermissions = existingPermissions.filter(
@@ -5912,20 +6122,26 @@ export class UserDbController {
             )
           : { oldData: null, newData: null };
         const resolvedOldData = resolvedSnapshot.oldData;
-        const resolvedNewData = resolvedSnapshot.newData;
+        const resolvedNewData =
+          isInitiate && resolvedSnapshot.newData
+            ? {
+                ...resolvedSnapshot.newData,
+                permissions: cloneJson(currentInitiatePermissions),
+              }
+            : resolvedSnapshot.newData;
         const effectivePermissions =
           detail && resolvedNewData?.permissions
             ? resolvedNewData.permissions
-            : incomingPermissions.length > 0
+            : currentInitiatePermissions.length > 0
               ? isInitiate || existingPermissions.length === 0
-                ? incomingPermissions.filter(
+                ? currentInitiatePermissions.filter(
                     (permission: any) =>
                       !UserDbController.isPermissionRemoval(permission) &&
                       hasActivePermissionNode(permission),
                   )
                 : UserDbController.mergePermissionMutations(
                     existingActivePermissions,
-                    incomingPermissions.filter(hasActivePermissionNode),
+                    currentInitiatePermissions.filter(hasActivePermissionNode),
                   )
               : existingPermissions.filter(
                   (permission: any) => permission.nodeStatus === 'ACTIVE',
@@ -5952,16 +6168,17 @@ export class UserDbController {
           detail && !isInitiate
             ? await HistoryUserUtil.enrichUserHistoryOldData(resolvedOldData)
             : null;
-        const responseNewData =
-          detail && !isInitiate
-            ? HistoryUserUtil.formatUserHistoryDetailNewData({
+        const responseNewData = detail
+          ? isInitiate
+            ? cloneJson(resolvedNewData)
+            : HistoryUserUtil.formatUserHistoryDetailNewData({
                 requestData: dataBlob,
                 requestOldData: onb.oldData,
                 resolvedOldData,
                 resolvedNewData,
                 requestType: type,
               })
-            : null;
+          : null;
 
         normalizedEffectivePermissions.forEach((p: any) => {
           const access = {
@@ -5973,6 +6190,8 @@ export class UserDbController {
             nodePath: p.nodePath,
             ...(detail ? { nodeType: p.nodeType } : {}),
             accessCategory: p.accessCategory,
+            sourceTag:
+              p?.sourceTag === 'AUTO_GENERATED' ? 'AUTO_GENERATED' : 'USER',
           };
           if (
             p.isGlobal === true ||
@@ -8459,7 +8678,24 @@ export class UserDbController {
               ).message;
         })(),
       });
-      res.status(201).json(onboarding);
+      const generatedPermissionMessage =
+        UserDbController.formatGeneratedPermissionMessage(
+          originalPermissions,
+          expandedInitiatePermissions,
+        );
+      const responseMessage = generatedPermissionMessage
+        ? `User onboarding initiated successfully. ${generatedPermissionMessage}`
+        : 'User onboarding initiated successfully';
+
+      res.status(201).json({
+        ...onboarding,
+        message: responseMessage,
+        autoGeneratedAccessNames:
+          UserDbController.getGeneratedPermissionLabels(
+            originalPermissions,
+            expandedInitiatePermissions,
+          ),
+      });
     } catch (error) {
       const initiatorId = req.body?.initiatorId;
       let resolvedCompanyId = req.body?.companyId as string | undefined;
@@ -8654,7 +8890,19 @@ export class UserDbController {
         throw new AppError('You have already approved this request once', 403);
       }
 
-      const requestData = rawRequestData;
+      const requestData =
+        onboarding.type === 'INITIATE'
+          ? {
+              ...(rawRequestData || {}),
+              permissions:
+                await UserDbController.expandInitiatePermissionsForChildNodes(
+                  onboarding.companyId,
+                  Array.isArray(rawRequestData?.permissions)
+                    ? rawRequestData.permissions
+                    : [],
+                ),
+            }
+          : rawRequestData;
       const data =
         onboarding.type && onboarding.type !== 'INITIATE'
           ? requestData?.newData || requestData
@@ -8989,6 +9237,9 @@ export class UserDbController {
             data: {
               status: 'APPROVED',
               approvalRemark: remark,
+              ...(onboarding.type === 'INITIATE'
+                ? { data: requestData as any }
+                : {}),
             },
           });
 
@@ -10324,7 +10575,7 @@ export class UserDbController {
 
         await NotificationService.createRequestNotification({
           companyId: resolvedCompanyId,
-          type: 'MODIFICATION',
+          type: 'FAILED',
           name: 'User request failed',
           message: `User request failed: ${
             error instanceof Error ? error.message : 'Unexpected error'

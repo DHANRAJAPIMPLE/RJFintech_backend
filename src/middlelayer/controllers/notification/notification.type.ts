@@ -1,12 +1,21 @@
 export type NotificationActionType =
-  | 'INITIATE'
-  | 'APPROVE'
-  | 'REJECT'
+  | 'Pending Approval - INITIATE'
+  | 'Pending Approval - MODIFICATION'
+  | 'Pending Approval - ACTIVE'
+  | 'Pending Approval - INACTIVE'
+  | 'Pending Approval - ARCHIVED'
+  | 'APPROVED'
   | 'ONBOARDED'
-  | 'MODIFICATION'
-  | 'ACTIVE'
-  | 'INACTIVE'
-  | 'ARCHIVE'
+  | 'MODIFIED'
+  | 'ACTIVATED'
+  | 'INACTIVATED'
+  | 'ARCHIVED'
+  | 'REJECTED-INITIATE'
+  | 'REJECTED-MODIFICATION'
+  | 'REJECTED-ACTIVE'
+  | 'REJECTED-INACTIVE'
+  | 'REJECTED-ARCHIVED'
+  | 'FAILED'
   | 'AUTO_DELETE';
 
 export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';

@@ -5,15 +5,32 @@ import { getPagination } from '../../../shared/utils/pagination.util';
 import { prisma } from '../../lib/prisma';
 
 type NotificationType =
+  | 'Pending Approval - INITIATE'
+  | 'Pending Approval - MODIFICATION'
+  | 'Pending Approval - ACTIVE'
+  | 'Pending Approval - INACTIVE'
+  | 'Pending Approval - ARCHIVED'
+  | 'APPROVED'
+  | 'ONBOARDED'
+  | 'MODIFIED'
+  | 'ACTIVATED'
+  | 'INACTIVATED'
+  | 'ARCHIVED'
+  | 'REJECTED-INITIATE'
+  | 'REJECTED-MODIFICATION'
+  | 'REJECTED-ACTIVE'
+  | 'REJECTED-INACTIVE'
+  | 'REJECTED-ARCHIVED'
+  | 'FAILED'
+  | 'AUTO_DELETE';
+type LegacyNotificationType =
   | 'INITIATE'
   | 'APPROVE'
   | 'REJECT'
-  | 'ONBOARDED'
   | 'MODIFICATION'
   | 'ACTIVE'
   | 'INACTIVE'
-  | 'ARCHIVE'
-  | 'AUTO_DELETE';
+  | 'ARCHIVE';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 type NotificationModule = 'USER' | 'WORKFLOW' | 'ORG';
 type NotificationVisibilityStatus = 'UNREAD' | 'READ' | 'ARCHIVED' | 'HIDDEN';
@@ -28,7 +45,7 @@ type CreateNotificationInput = {
   companyId: string;
   name?: string;
   message?: string;
-  type: NotificationType;
+  type: NotificationType | LegacyNotificationType;
   referenceType?: NotificationReferenceType | null;
   referenceId?: string | null;
   referenceName?: string | null;
@@ -37,6 +54,10 @@ type CreateNotificationInput = {
   requiredRecipientUserIds?: string[];
   includeCreatedBy?: boolean;
   isPending?: boolean;
+};
+
+type NormalizedCreateNotificationInput = Omit<CreateNotificationInput, 'type'> & {
+  type: NotificationType;
 };
 
 type NotificationSettingsFetchParams = {
@@ -68,15 +89,28 @@ type NotificationAccessNode = {
   levelCount: number;
 };
 
+type NotificationAccessScopeNode = NotificationAccessNode & {
+  modules: NotificationModule[];
+};
+
 const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
-  'INITIATE',
-  'APPROVE',
-  'REJECT',
+  'Pending Approval - INITIATE',
+  'Pending Approval - MODIFICATION',
+  'Pending Approval - ACTIVE',
+  'Pending Approval - INACTIVE',
+  'Pending Approval - ARCHIVED',
+  'APPROVED',
   'ONBOARDED',
-  'MODIFICATION',
-  'ACTIVE',
-  'INACTIVE',
-  'ARCHIVE',
+  'MODIFIED',
+  'ACTIVATED',
+  'INACTIVATED',
+  'ARCHIVED',
+  'REJECTED-INITIATE',
+  'REJECTED-MODIFICATION',
+  'REJECTED-ACTIVE',
+  'REJECTED-INACTIVE',
+  'REJECTED-ARCHIVED',
+  'FAILED',
   'AUTO_DELETE',
 ];
 const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
@@ -86,13 +120,21 @@ const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'COMPANY',
 ];
 const PENDING_NOTIFICATION_TYPES: NotificationType[] = [
-  'INITIATE',
-  'MODIFICATION',
-  'ACTIVE',
-  'INACTIVE',
-  'ARCHIVE',
+  'Pending Approval - INITIATE',
+  'Pending Approval - MODIFICATION',
+  'Pending Approval - ACTIVE',
+  'Pending Approval - INACTIVE',
+  'Pending Approval - ARCHIVED',
 ];
 const NOTIFICATION_MODULES: NotificationModule[] = ['USER', 'WORKFLOW', 'ORG'];
+const NOTIFICATION_MODULE_TO_SUBCATEGORY: Record<
+  NotificationModule,
+  'USER_ACC' | 'WORK_FLOW' | 'ORG_STR'
+> = {
+  USER: 'USER_ACC',
+  WORKFLOW: 'WORK_FLOW',
+  ORG: 'ORG_STR',
+};
 
 const normalizeStatus = (value: unknown) => {
   const status = typeof value === 'string' ? value.trim().toUpperCase() : 'ALL';
@@ -172,6 +214,118 @@ const isUuidLike = (value: unknown) =>
     value.trim(),
   );
 
+const canonicalPendingTypeByRequestType: Record<string, NotificationType> = {
+  INITIATE: 'Pending Approval - INITIATE',
+  UPDATE: 'Pending Approval - MODIFICATION',
+  MODIFICATION: 'Pending Approval - MODIFICATION',
+  ACTIVE: 'Pending Approval - ACTIVE',
+  INACTIVE: 'Pending Approval - INACTIVE',
+  ARCHIVE: 'Pending Approval - ARCHIVED',
+  ARCHIVED: 'Pending Approval - ARCHIVED',
+};
+
+const normalizeNotificationTypeValue = (
+  type: unknown,
+  isPending: boolean,
+): NotificationType => {
+  const normalized = typeof type === 'string' ? type.trim().toUpperCase() : '';
+
+  if (
+    normalized === 'PENDING APPROVAL - INITIATE' ||
+    normalized === 'PENDING_APPROVAL_INITIATE'
+  ) {
+    return 'Pending Approval - INITIATE';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - MODIFICATION' ||
+    normalized === 'PENDING APPROVAL - UPDATE' ||
+    normalized === 'PENDING_APPROVAL_MODIFICATION' ||
+    normalized === 'PENDING_APPROVAL_UPDATE'
+  ) {
+    return 'Pending Approval - MODIFICATION';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - ACTIVE' ||
+    normalized === 'PENDING_APPROVAL_ACTIVE'
+  ) {
+    return 'Pending Approval - ACTIVE';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - INACTIVE' ||
+    normalized === 'PENDING_APPROVAL_INACTIVE'
+  ) {
+    return 'Pending Approval - INACTIVE';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - ARCHIVE' ||
+    normalized === 'PENDING APPROVAL - ARCHIVED' ||
+    normalized === 'PENDING_APPROVAL_ARCHIVE' ||
+    normalized === 'PENDING_APPROVAL_ARCHIVED'
+  ) {
+    return 'Pending Approval - ARCHIVED';
+  }
+
+  if (normalized === 'APPROVE' || normalized === 'APPROVED') {
+    return 'APPROVED';
+  }
+  if (normalized === 'ONBOARDED') return 'ONBOARDED';
+  if (normalized === 'MODIFIED') return 'MODIFIED';
+  if (normalized === 'ACTIVATED') return 'ACTIVATED';
+  if (normalized === 'INACTIVATED') return 'INACTIVATED';
+  if (normalized === 'ARCHIVED') return 'ARCHIVED';
+  if (normalized === 'FAILED') return 'FAILED';
+  if (normalized === 'AUTO_DELETE') return 'AUTO_DELETE';
+
+  if (
+    normalized === 'REJECTED-INITIATE' ||
+    normalized === 'REJECTED_INITIATE'
+  ) {
+    return 'REJECTED-INITIATE';
+  }
+  if (
+    normalized === 'REJECTED-MODIFICATION' ||
+    normalized === 'REJECTED_MODIFICATION' ||
+    normalized === 'REJECTED-UPDATE' ||
+    normalized === 'REJECTED_UPDATE'
+  ) {
+    return 'REJECTED-MODIFICATION';
+  }
+  if (normalized === 'REJECTED-ACTIVE' || normalized === 'REJECTED_ACTIVE') {
+    return 'REJECTED-ACTIVE';
+  }
+  if (
+    normalized === 'REJECTED-INACTIVE' ||
+    normalized === 'REJECTED_INACTIVE'
+  ) {
+    return 'REJECTED-INACTIVE';
+  }
+  if (
+    normalized === 'REJECTED-ARCHIVE' ||
+    normalized === 'REJECTED_ARCHIVE' ||
+    normalized === 'REJECTED-ARCHIVED' ||
+    normalized === 'REJECTED_ARCHIVED'
+  ) {
+    return 'REJECTED-ARCHIVED';
+  }
+
+  if (normalized === 'REJECT' || normalized === 'REJECTED') {
+    return 'REJECTED-INITIATE';
+  }
+
+  if (isPending && canonicalPendingTypeByRequestType[normalized]) {
+    return canonicalPendingTypeByRequestType[normalized];
+  }
+
+  if (normalized === 'MODIFICATION' || normalized === 'UPDATE') {
+    return 'MODIFIED';
+  }
+  if (normalized === 'ACTIVE') return 'ACTIVATED';
+  if (normalized === 'INACTIVE') return 'INACTIVATED';
+  if (normalized === 'ARCHIVE') return 'ARCHIVED';
+
+  return 'ONBOARDED';
+};
+
 export class NotificationService {
   private static unique(values: Array<string | null | undefined>) {
     return Array.from(
@@ -194,7 +348,7 @@ export class NotificationService {
     );
   }
 
-  private static validateNotificationInput(input: CreateNotificationInput) {
+  private static validateNotificationInput(input: NormalizedCreateNotificationInput) {
     if (!input.companyId || !input.createdBy) {
       throw new Error('companyId and createdBy are required');
     }
@@ -217,8 +371,12 @@ export class NotificationService {
     }
   }
 
-  private static isPendingNotificationType(type: NotificationType) {
-    return PENDING_NOTIFICATION_TYPES.includes(type);
+  private static isPendingNotificationType(
+    type: NotificationType | LegacyNotificationType,
+  ) {
+    return PENDING_NOTIFICATION_TYPES.includes(
+      normalizeNotificationTypeValue(type, true),
+    );
   }
 
   private static stringifyTargetParts(parts: Array<string | null | undefined>) {
@@ -343,7 +501,7 @@ export class NotificationService {
     referenceType?: string | null;
     referenceId?: string | null;
     isPending?: boolean | null;
-  }) {
+  }, userId?: string | null) {
     if (row.isPending !== true) {
       return false;
     }
@@ -357,40 +515,57 @@ export class NotificationService {
 
     if (!referenceType || !referenceId) return false;
 
-    if (referenceType === 'USER') {
-      const onboarding = await prisma.userOnboarding.findUnique({
+    const normalizedUserId =
+      typeof userId === 'string' ? userId.trim() : '';
+    const requestTable =
+      NotificationService.getRequestTableForReferenceType(referenceType);
+
+    if (requestTable && isUuidLike(referenceId)) {
+      const config = NotificationService.getHistoryConfig(requestTable);
+      if (!config) return false;
+
+      const request = await (prisma as any)[config.requestTable].findUnique({
         where: { id: referenceId },
-        select: { status: true },
+        select: { status: true, eligibleApprovers: true },
       });
 
-      return onboarding?.status === 'PENDING';
-    }
+      if (request?.status !== 'PENDING') {
+        return false;
+      }
 
-    if (referenceType === 'ORG') {
-      const request = await prisma.orgStructureReq.findUnique({
-        where: { id: referenceId },
-        select: { status: true },
-      });
+      if (!normalizedUserId) {
+        return true;
+      }
 
-      return request?.status === 'PENDING';
-    }
+      const currentApproverIds =
+        await NotificationService.getCurrentApproverIds(
+          referenceId,
+          requestTable,
+          Array.isArray(request.eligibleApprovers)
+            ? request.eligibleApprovers
+            : [],
+        );
 
-    if (referenceType === 'WORKFLOW' && isUuidLike(referenceId)) {
-      const request = await prisma.workflowReq.findUnique({
-        where: { id: referenceId },
-        select: { status: true },
-      });
-
-      return request?.status === 'PENDING';
+      return currentApproverIds.includes(normalizedUserId);
     }
 
     if (referenceType === 'COMPANY' && isUuidLike(referenceId)) {
       const request = await prisma.companyOnboarding.findUnique({
         where: { id: referenceId },
-        select: { status: true },
+        select: { status: true, eligibleApprovers: true },
       });
 
-      return request?.status === 'PENDING';
+      if (request?.status !== 'PENDING') {
+        return false;
+      }
+
+      if (!normalizedUserId) {
+        return true;
+      }
+
+      return Array.isArray(request.eligibleApprovers)
+        ? request.eligibleApprovers.includes(normalizedUserId)
+        : false;
     }
 
     return false;
@@ -457,13 +632,18 @@ export class NotificationService {
     const resolvedPendingState =
       await NotificationService.resolveNotificationPendingState(
         row.notification,
+        row.userId,
       );
+    const normalizedType = normalizeNotificationTypeValue(
+      row.notification.type,
+      resolvedPendingState,
+    );
 
     return {
       id: row.id,
       name: row.notification.name,
       message: row.notification.message,
-      type: row.notification.type,
+      type: normalizedType,
       refType: row.notification.referenceType,
       referenceId: row.notification.referenceId,
       target: resolvedTarget,
@@ -479,171 +659,370 @@ export class NotificationService {
     return getDisplayValue(user.name, getDisplayValue(user.email, 'Someone'));
   }
 
+  private static getReferenceEntityLabel(referenceType?: string | null) {
+    switch (String(referenceType || '').toUpperCase()) {
+      case 'USER':
+        return 'User';
+      case 'ORG':
+        return 'Organization';
+      case 'WORKFLOW':
+        return 'Workflow';
+      case 'COMPANY':
+        return 'Company';
+      default:
+        return 'Record';
+    }
+  }
+
+  private static getRequestLifecycleLabel(
+    referenceType?: string | null,
+    normalizedType?: string | null,
+  ) {
+    const entity = NotificationService.getReferenceEntityLabel(referenceType);
+
+    switch (String(normalizedType || '').toUpperCase()) {
+      case 'PENDING APPROVAL - MODIFICATION':
+      case 'REJECTED-MODIFICATION':
+      case 'MODIFIED':
+        return `${entity} modification`;
+      case 'PENDING APPROVAL - ACTIVE':
+      case 'REJECTED-ACTIVE':
+      case 'ACTIVATED':
+        return `${entity} activation`;
+      case 'PENDING APPROVAL - INACTIVE':
+      case 'REJECTED-INACTIVE':
+      case 'INACTIVATED':
+        return `${entity} inactivation`;
+      case 'PENDING APPROVAL - ARCHIVED':
+      case 'REJECTED-ARCHIVED':
+      case 'ARCHIVED':
+        return `${entity} archive`;
+      default:
+        return `${entity} onboarding`;
+    }
+  }
+
+  private static getRequestTableForReferenceType(referenceType?: string | null) {
+    switch (String(referenceType || '').toUpperCase()) {
+      case 'USER':
+        return 'user_onboarding';
+      case 'ORG':
+        return 'org_structure_req';
+      case 'WORKFLOW':
+        return 'workflow_req';
+      default:
+        return null;
+    }
+  }
+
   private static getRequestNotificationContent(
     input: CreateNotificationInput,
-    actorName: string,
+    _actorName: string,
   ) {
     const userName = getDisplayValue(input.referenceName, 'the user');
     const orgName = getDisplayValue(input.referenceName, 'the organization');
     const workflowName = getDisplayValue(input.referenceName, 'the workflow');
     const companyName = getDisplayValue(input.referenceName, 'the company');
+    const normalizedType = normalizeNotificationTypeValue(
+      input.type,
+      Boolean(input.isPending),
+    );
+    const lifecycleLabel = NotificationService.getRequestLifecycleLabel(
+      input.referenceType,
+      normalizedType,
+    );
 
     const content = (() => {
-      switch (`${input.referenceType}:${input.type}`) {
-      case 'USER:INITIATE':
+      switch (`${input.referenceType}:${normalizedType}`) {
+      case 'USER:Pending Approval - INITIATE':
         return {
           name: 'User onboarding initiated',
-          message: `${actorName} initiated user onboarding for ${userName}`,
+          message: `User onboarding request initiated for ${userName}`,
         };
-      case 'USER:APPROVE':
+      case 'USER:APPROVED':
         return {
-          name: 'User onboarding approved',
-          message: `${actorName} approved user onboarding for ${userName}`,
+          name: 'User request approved',
+          message: `User request approved for ${userName}`,
         };
-      case 'USER:REJECT':
+      case 'USER:REJECTED-INITIATE':
         return {
           name: 'User onboarding rejected',
-          message: `${actorName} rejected user onboarding for ${userName}`,
+          message: `User onboarding request rejected for ${userName}`,
         };
       case 'USER:ONBOARDED':
         return {
           name: 'User onboarded',
-          message: `${actorName} onboarded ${userName}`,
+          message: `${userName} was onboarded`,
         };
-      case 'USER:MODIFICATION':
+      case 'USER:Pending Approval - MODIFICATION':
         return {
-          name: 'User modification',
-          message: `${actorName} updated user access for ${userName}`,
+          name: 'User modification initiated',
+          message: `User modification request initiated for ${userName}`,
         };
-      case 'USER:ACTIVE':
+      case 'USER:MODIFIED':
+        return {
+          name: 'User modified',
+          message: `User details were modified for ${userName}`,
+        };
+      case 'USER:Pending Approval - ACTIVE':
+        return {
+          name: 'User activation initiated',
+          message: `User activation request initiated for ${userName}`,
+        };
+      case 'USER:ACTIVATED':
         return {
           name: 'User activated',
-          message: `${actorName} activated ${userName}`,
+          message: `${userName} was activated`,
         };
-      case 'USER:INACTIVE':
+      case 'USER:Pending Approval - INACTIVE':
+        return {
+          name: 'User inactivation initiated',
+          message: `User inactivation request initiated for ${userName}`,
+        };
+      case 'USER:INACTIVATED':
         return {
           name: 'User inactivated',
-          message: `${actorName} inactivated ${userName}`,
+          message: `${userName} was inactivated`,
         };
-      case 'USER:ARCHIVE':
+      case 'USER:Pending Approval - ARCHIVED':
         return {
-          name: 'User deleted',
-          message: `${actorName} deleted ${userName}`,
+          name: 'User archive initiated',
+          message: `User archive request initiated for ${userName}`,
         };
-      case 'ORG:INITIATE':
+      case 'USER:ARCHIVED':
         return {
-          name: 'Organization request initiated',
-          message: `${actorName} initiated organization request for ${orgName}`,
+          name: 'User archived',
+          message: `${userName} was archived`,
         };
-      case 'ORG:APPROVE':
+      case 'USER:REJECTED-MODIFICATION':
+        return {
+          name: 'User modification rejected',
+          message: `User modification request rejected for ${userName}`,
+        };
+      case 'USER:REJECTED-ACTIVE':
+        return {
+          name: 'User activation rejected',
+          message: `User activation request rejected for ${userName}`,
+        };
+      case 'USER:REJECTED-INACTIVE':
+        return {
+          name: 'User inactivation rejected',
+          message: `User inactivation request rejected for ${userName}`,
+        };
+      case 'USER:REJECTED-ARCHIVED':
+        return {
+          name: 'User archive rejected',
+          message: `User archive request rejected for ${userName}`,
+        };
+      case 'USER:FAILED':
+        return {
+          name: 'User request failed',
+          message: `User request failed for ${userName}`,
+        };
+      case 'ORG:Pending Approval - INITIATE':
+        return {
+          name: 'Organization onboarding initiated',
+          message: `Organization onboarding request initiated for ${orgName}`,
+        };
+      case 'ORG:APPROVED':
         return {
           name: 'Organization request approved',
-          message: `${actorName} approved organization request for ${orgName}`,
+          message: `Organization request approved for ${orgName}`,
         };
-      case 'ORG:REJECT':
+      case 'ORG:REJECTED-INITIATE':
         return {
           name: 'Organization request rejected',
-          message: `${actorName} rejected organization request for ${orgName}`,
+          message: `Organization onboarding request rejected for ${orgName}`,
         };
       case 'ORG:ONBOARDED':
         return {
           name: 'Organization structure onboarded',
-          message: `${actorName} onboarded organization structure for ${orgName}`,
+          message: `Organization structure was onboarded for ${orgName}`,
         };
-      case 'ORG:MODIFICATION':
+      case 'ORG:Pending Approval - MODIFICATION':
         return {
-          name: 'Organization modification',
-          message: `${actorName} updated organization structure for ${orgName}`,
+          name: 'Organization modification initiated',
+          message: `Organization modification request initiated for ${orgName}`,
         };
-      case 'ORG:INACTIVE':
+      case 'ORG:MODIFIED':
         return {
-          name: 'Organization Removed',
-          message: `${actorName} inactivated organization ${orgName}`,
+          name: 'Organization modified',
+          message: `Organization structure was modified for ${orgName}`,
         };
-      case 'ORG:ARCHIVE':
+      case 'ORG:Pending Approval - INACTIVE':
         return {
-          name: 'Organization deleted',
-          message: `${actorName} deleted organization ${orgName}`,
+          name: 'Organization inactivation initiated',
+          message: `Organization inactivation request initiated for ${orgName}`,
+        };
+      case 'ORG:INACTIVATED':
+        return {
+          name: 'Organization inactivated',
+          message: `Organization was inactivated for ${orgName}`,
+        };
+      case 'ORG:Pending Approval - ARCHIVED':
+        return {
+          name: 'Organization archive initiated',
+          message: `Organization archive request initiated for ${orgName}`,
+        };
+      case 'ORG:ARCHIVED':
+        return {
+          name: 'Organization archived',
+          message: `Organization was archived for ${orgName}`,
         };
       case 'ORG:AUTO_DELETE':
         return {
           name: 'Organization auto-deleted',
-          message: `${actorName} auto-deleted organization ${orgName}`,
+          message: `Organization was auto-deleted for ${orgName}`,
         };
-      case 'ORG:ACTIVE':
+      case 'ORG:Pending Approval - ACTIVE':
+        return {
+          name: 'Organization activation initiated',
+          message: `Organization activation request initiated for ${orgName}`,
+        };
+      case 'ORG:ACTIVATED':
         return {
           name: 'Organization activated',
-          message: `${actorName} activated organization ${orgName}`,
+          message: `Organization was activated for ${orgName}`,
         };
-      case 'WORKFLOW:INITIATE':
+      case 'ORG:REJECTED-MODIFICATION':
         return {
-          name: 'Workflow request initiated',
-          message: `${actorName} initiated workflow request for ${workflowName}`,
+          name: 'Organization modification rejected',
+          message: `Organization modification request rejected for ${orgName}`,
         };
-      case 'WORKFLOW:APPROVE':
+      case 'ORG:REJECTED-ACTIVE':
+        return {
+          name: 'Organization activation rejected',
+          message: `Organization activation request rejected for ${orgName}`,
+        };
+      case 'ORG:REJECTED-INACTIVE':
+        return {
+          name: 'Organization inactivation rejected',
+          message: `Organization inactivation request rejected for ${orgName}`,
+        };
+      case 'ORG:REJECTED-ARCHIVED':
+        return {
+          name: 'Organization archive rejected',
+          message: `Organization archive request rejected for ${orgName}`,
+        };
+      case 'ORG:FAILED':
+        return {
+          name: 'Organization request failed',
+          message: `Organization request failed for ${orgName}`,
+        };
+      case 'WORKFLOW:Pending Approval - INITIATE':
+        return {
+          name: 'Workflow onboarding initiated',
+          message: `Workflow onboarding request initiated for ${workflowName}`,
+        };
+      case 'WORKFLOW:APPROVED':
         return {
           name: 'Workflow request approved',
-          message: `${actorName} approved workflow request for ${workflowName}`,
+          message: `Workflow request approved for ${workflowName}`,
         };
-      case 'WORKFLOW:REJECT':
+      case 'WORKFLOW:REJECTED-INITIATE':
         return {
           name: 'Workflow request rejected',
-          message: `${actorName} rejected workflow request for ${workflowName}`,
+          message: `Workflow onboarding request rejected for ${workflowName}`,
         };
       case 'WORKFLOW:ONBOARDED':
         return {
           name: 'Workflow onboarded',
-          message: `${actorName} onboarded workflow ${workflowName}`,
+          message: `Workflow was onboarded for ${workflowName}`,
         };
-      case 'WORKFLOW:MODIFICATION':
+      case 'WORKFLOW:Pending Approval - MODIFICATION':
         return {
-          name: 'Workflow modification',
-          message: `${actorName} updated workflow ${workflowName}`,
+          name: 'Workflow modification initiated',
+          message: `Workflow modification request initiated for ${workflowName}`,
         };
-      case 'WORKFLOW:ACTIVE':
+      case 'WORKFLOW:MODIFIED':
+        return {
+          name: 'Workflow modified',
+          message: `Workflow was modified for ${workflowName}`,
+        };
+      case 'WORKFLOW:Pending Approval - ACTIVE':
+        return {
+          name: 'Workflow activation initiated',
+          message: `Workflow activation request initiated for ${workflowName}`,
+        };
+      case 'WORKFLOW:ACTIVATED':
         return {
           name: 'Workflow activated',
-          message: `${actorName} activated workflow ${workflowName}`,
+          message: `Workflow was activated for ${workflowName}`,
         };
-      case 'WORKFLOW:INACTIVE':
+      case 'WORKFLOW:Pending Approval - INACTIVE':
+        return {
+          name: 'Workflow inactivation initiated',
+          message: `Workflow inactivation request initiated for ${workflowName}`,
+        };
+      case 'WORKFLOW:INACTIVATED':
         return {
           name: 'Workflow inactivated',
-          message: `${actorName} inactivated workflow ${workflowName}`,
+          message: `Workflow was inactivated for ${workflowName}`,
         };
-      case 'WORKFLOW:ARCHIVE':
+      case 'WORKFLOW:Pending Approval - ARCHIVED':
         return {
-          name: 'Workflow deleted',
-          message: `${actorName} deleted workflow ${workflowName}`,
+          name: 'Workflow archive initiated',
+          message: `Workflow archive request initiated for ${workflowName}`,
+        };
+      case 'WORKFLOW:ARCHIVED':
+        return {
+          name: 'Workflow archived',
+          message: `Workflow was archived for ${workflowName}`,
         };
       case 'WORKFLOW:AUTO_DELETE':
         return {
           name: 'Workflow auto-deleted',
-          message: `${actorName} auto-deleted workflow ${workflowName}`,
+          message: `Workflow was auto-deleted for ${workflowName}`,
         };
-      case 'COMPANY:INITIATE':
+      case 'WORKFLOW:REJECTED-MODIFICATION':
+        return {
+          name: 'Workflow modification rejected',
+          message: `Workflow modification request rejected for ${workflowName}`,
+        };
+      case 'WORKFLOW:REJECTED-ACTIVE':
+        return {
+          name: 'Workflow activation rejected',
+          message: `Workflow activation request rejected for ${workflowName}`,
+        };
+      case 'WORKFLOW:REJECTED-INACTIVE':
+        return {
+          name: 'Workflow inactivation rejected',
+          message: `Workflow inactivation request rejected for ${workflowName}`,
+        };
+      case 'WORKFLOW:REJECTED-ARCHIVED':
+        return {
+          name: 'Workflow archive rejected',
+          message: `Workflow archive request rejected for ${workflowName}`,
+        };
+      case 'WORKFLOW:FAILED':
+        return {
+          name: 'Workflow request failed',
+          message: `Workflow request failed for ${workflowName}`,
+        };
+      case 'COMPANY:Pending Approval - INITIATE':
         return {
           name: 'Company onboarding initiated',
-          message: `${actorName} initiated company onboarding for ${companyName}`,
+          message: `Company onboarding request initiated for ${companyName}`,
         };
-      case 'COMPANY:APPROVE':
+      case 'COMPANY:APPROVED':
         return {
           name: 'Company onboarding approved',
-          message: `${actorName} approved company onboarding for ${companyName}`,
+          message: `Company onboarding approved for ${companyName}`,
         };
-      case 'COMPANY:REJECT':
+      case 'COMPANY:REJECTED-INITIATE':
         return {
           name: 'Company onboarding rejected',
-          message: `${actorName} rejected company onboarding for ${companyName}`,
+          message: `Company onboarding request rejected for ${companyName}`,
         };
       case 'COMPANY:ONBOARDED':
         return {
           name: 'Company onboarded',
-          message: `${actorName} onboarded ${companyName}`,
+          message: `${companyName} was onboarded`,
         };
       default:
         return {
-          name: 'Notification',
-          message: `${actorName} updated a notification`,
+          name: `${lifecycleLabel} updated`,
+          message: `${lifecycleLabel} notification updated`,
         };
       }
     })();
@@ -745,6 +1124,18 @@ export class NotificationService {
     return null;
   }
 
+  private static getNotificationModuleForAccessSubCategory(
+    subCategory?: string | null,
+  ): NotificationModule | null {
+    const normalized = String(subCategory || '').trim().toUpperCase();
+
+    return (
+      Object.entries(NOTIFICATION_MODULE_TO_SUBCATEGORY).find(
+        ([, value]) => value === normalized,
+      )?.[0] as NotificationModule | undefined
+    ) || null;
+  }
+
   private static buildNotificationSettingsHistoryPayload(input: {
     nodePath: string;
     nodeName: string;
@@ -805,26 +1196,47 @@ export class NotificationService {
     });
   }
 
-  private static async getAccessibleNotificationNodes(
+  private static async getAccessibleNotificationNodeScopes(
     tx: any,
     companyId: string,
     userId: string,
-  ): Promise<NotificationAccessNode[]> {
-    const hasGlobalAccess = Boolean(
-      await tx.userAccess.findFirst({
-        where: {
-          companyId,
-          userId,
-          isGlobalAccess: true,
-          orgStructure: {
-            status: 'ACTIVE',
+  ): Promise<NotificationAccessScopeNode[]> {
+    const accesses = await tx.userAccess.findMany({
+      where: {
+        companyId,
+        userId,
+        orgStructure: {
+          status: 'ACTIVE',
+        },
+      },
+      select: {
+        nodeId: true,
+        isGlobalAccess: true,
+        roleCode: true,
+        role: {
+          select: {
+            subCategory: true,
           },
         },
-        select: { id: true },
-      }),
+        orgStructure: {
+          select: {
+            id: true,
+            nodeName: true,
+            nodePath: true,
+          },
+        },
+      },
+      orderBy: {
+        orgStructure: { nodePath: 'asc' },
+      },
+    });
+
+    const hasAdminAccess = accesses.some(
+      (access: any) =>
+        access.roleCode === 'SAAS_ADMIN' || access.roleCode === 'CORP_ADMIN',
     );
 
-    if (hasGlobalAccess) {
+    if (hasAdminAccess) {
       const nodes = await tx.orgStructure.findMany({
         where: {
           companyId,
@@ -841,47 +1253,85 @@ export class NotificationService {
       return nodes.map((node: any) => ({
         ...node,
         levelCount: getNodeLevelCount(node.nodePath),
+        modules: [...NOTIFICATION_MODULES],
       }));
     }
 
-    const accesses = await tx.userAccess.findMany({
-      where: {
-        companyId,
-        userId,
-        orgStructure: {
-          status: 'ACTIVE',
-        },
-      },
-      select: {
-        nodeId: true,
-        orgStructure: {
-          select: {
-            id: true,
-            nodeName: true,
-            nodePath: true,
-          },
-        },
-      },
-      orderBy: {
-        orgStructure: { nodePath: 'asc' },
-      },
-    });
-
-    const uniqueNodes = new Map<string, NotificationAccessNode>();
+    const globalModules = new Set<NotificationModule>();
+    const uniqueNodes = new Map<
+      string,
+      NotificationAccessNode & { modules: Set<NotificationModule> }
+    >();
     accesses.forEach((access: any) => {
+      const module = NotificationService.getNotificationModuleForAccessSubCategory(
+        access.role?.subCategory,
+      );
+      if (!module) return;
+
+      if (access.isGlobalAccess) {
+        globalModules.add(module);
+      }
+
       const node = access.orgStructure;
       if (!node?.id) return;
+
+      const existing = uniqueNodes.get(node.id);
+      if (existing) {
+        existing.modules.add(module);
+        return;
+      }
+
       uniqueNodes.set(node.id, {
         id: node.id,
         nodeName: node.nodeName,
         nodePath: node.nodePath,
         levelCount: getNodeLevelCount(node.nodePath),
+        modules: new Set([module]),
       });
     });
 
-    return Array.from(uniqueNodes.values()).sort((left, right) =>
-      left.nodePath.localeCompare(right.nodePath),
-    );
+    if (globalModules.size > 0) {
+      const nodes = await tx.orgStructure.findMany({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+        },
+        select: {
+          id: true,
+          nodeName: true,
+          nodePath: true,
+        },
+        orderBy: { nodePath: 'asc' },
+      });
+
+      nodes.forEach((node: any) => {
+        const existing = uniqueNodes.get(node.id);
+        if (existing) {
+          globalModules.forEach((module) => existing.modules.add(module));
+          return;
+        }
+
+        uniqueNodes.set(node.id, {
+          id: node.id,
+          nodeName: node.nodeName,
+          nodePath: node.nodePath,
+          levelCount: getNodeLevelCount(node.nodePath),
+          modules: new Set(globalModules),
+        });
+      });
+    }
+
+    return Array.from(uniqueNodes.values())
+      .map((node) => ({
+        id: node.id,
+        nodeName: node.nodeName,
+        nodePath: node.nodePath,
+        levelCount: node.levelCount,
+        modules: Array.from(node.modules).sort((left, right) =>
+          left.localeCompare(right),
+        ),
+      }))
+      .sort((left, right) => left.nodePath.localeCompare(right.nodePath));
   }
 
   static async syncNotificationSettingsForUserAccess(
@@ -902,15 +1352,14 @@ export class NotificationService {
       select: { status: true },
     });
 
-    const nodeRows =
+    const nodeScopes =
       mapping?.status === 'ACTIVE'
-        ? await NotificationService.getAccessibleNotificationNodes(
+        ? await NotificationService.getAccessibleNotificationNodeScopes(
             tx,
             params.companyId,
             params.userId,
           )
         : [];
-    const nodeMap = new Map(nodeRows.map((node) => [node.id, node]));
 
     const existingRows = await (tx as any).notificationSetting.findMany({
       where: {
@@ -926,10 +1375,13 @@ export class NotificationService {
         },
       },
     });
+    const existingRowsByKey = new Map<string, any>(
+      existingRows.map((row: any) => [`${row.nodeId}:${row.module}`, row]),
+    );
 
     const desiredKeys = new Set<string>();
-    nodeRows.forEach((node) => {
-      NOTIFICATION_MODULES.forEach((module) => {
+    nodeScopes.forEach((node) => {
+      node.modules.forEach((module) => {
         desiredKeys.add(`${node.id}:${module}`);
       });
     });
@@ -951,30 +1403,87 @@ export class NotificationService {
           })
         : null;
 
+      if (!existing.isEnabled) continue;
+
+      const module =
+        NotificationService.normalizeNotificationModule(existing.module) ||
+        'USER';
+
+      const newData = node
+        ? NotificationService.buildNotificationSettingsHistoryPayload({
+            nodePath: node.nodePath,
+            nodeName: node.nodeName,
+            module,
+            isEnabled: false,
+            remarks: null,
+          })
+        : null;
+
       await (tx as any).notificationSettingHistory.create({
         data: {
           notificationSettingId: existing.id,
           companyId: params.companyId,
           eventUserId: params.eventUserId,
           oldData,
-          newData: null,
+          newData,
           remarks: params.removeReason,
         },
       });
 
-      await (tx as any).notificationSetting.delete({
+      await (tx as any).notificationSetting.update({
         where: { id: existing.id },
+        data: {
+          isEnabled: false,
+        },
       });
     }
 
-    const existingKeySet = new Set(
-      existingRows.map((row: any) => `${row.nodeId}:${row.module}`),
-    );
-
-    for (const node of nodeRows) {
-      for (const module of NOTIFICATION_MODULES) {
+    for (const node of nodeScopes) {
+      for (const module of node.modules) {
         const key = `${node.id}:${module}`;
-        if (existingKeySet.has(key)) continue;
+        const existing = existingRowsByKey.get(key);
+
+        if (existing) {
+          if (Boolean(existing.isEnabled)) continue;
+
+          const oldData = NotificationService.buildNotificationSettingsHistoryPayload(
+            {
+              nodePath: node.nodePath,
+              nodeName: node.nodeName,
+              module,
+              isEnabled: false,
+              remarks: null,
+            },
+          );
+
+          const saved = await (tx as any).notificationSetting.update({
+            where: { id: existing.id },
+            data: {
+              isEnabled: true,
+            },
+          });
+
+          await (tx as any).notificationSettingHistory.create({
+            data: {
+              notificationSettingId: saved.id,
+              companyId: params.companyId,
+              eventUserId: params.eventUserId,
+              oldData,
+              newData: NotificationService.buildNotificationSettingsHistoryPayload(
+                {
+                  nodePath: node.nodePath,
+                  nodeName: node.nodeName,
+                  module,
+                  isEnabled: true,
+                  remarks: params.createReason,
+                },
+              ),
+              remarks: params.createReason,
+            },
+          });
+
+          continue;
+        }
 
         const created = await (tx as any).notificationSetting.create({
           data: {
@@ -1429,39 +1938,46 @@ export class NotificationService {
   }
 
   static async createNotification(input: CreateNotificationInput) {
-    NotificationService.validateNotificationInput(input);
+    const normalizedIsPending =
+      input.isPending ?? NotificationService.isPendingNotificationType(input.type);
+    const normalizedInput: NormalizedCreateNotificationInput = {
+      ...input,
+      type: normalizeNotificationTypeValue(input.type, normalizedIsPending),
+      isPending: normalizedIsPending,
+    };
+
+    NotificationService.validateNotificationInput(normalizedInput);
 
     const [saasAdmins, createdByUser] = await Promise.all([
       NotificationService.getSaasAdminUserIds(),
       prisma.user.findUnique({
-        where: { id: input.createdBy },
+        where: { id: normalizedInput.createdBy },
         select: { name: true, email: true },
       }),
     ]);
     const actorName = NotificationService.getActorName(createdByUser || {});
     const content = NotificationService.getRequestNotificationContent(
-      input,
+      normalizedInput,
       actorName,
     );
-    const isPending =
-      input.isPending ?? NotificationService.isPendingNotificationType(input.type);
+    const isPending = normalizedIsPending;
     const shouldClearPreviousPending =
-      Boolean(input.referenceType) && Boolean(input.referenceId);
+      Boolean(normalizedInput.referenceType) && Boolean(normalizedInput.referenceId);
     const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);
     const requestedRecipients = NotificationService.unique(
       [
-        ...(input.recipientUserIds || []),
-        input.includeCreatedBy === true ? input.createdBy : null,
+        ...(normalizedInput.recipientUserIds || []),
+        normalizedInput.includeCreatedBy === true ? normalizedInput.createdBy : null,
       ],
     );
     const [companyRecipientUserIds, requiredRecipientUserIds] =
       await Promise.all([
         NotificationService.filterActiveCompanyUserIds(
-          input.companyId,
+          normalizedInput.companyId,
           requestedRecipients,
         ),
         NotificationService.filterExistingUserIds(
-          input.requiredRecipientUserIds || [],
+          normalizedInput.requiredRecipientUserIds || [],
         ),
       ]);
     const requiredRecipientSet = new Set(requiredRecipientUserIds);
@@ -1471,9 +1987,9 @@ export class NotificationService {
       ...saasAdmins,
     ]).filter(
       (userId) =>
-        input.includeCreatedBy === true ||
+        normalizedInput.includeCreatedBy === true ||
         requiredRecipientSet.has(userId) ||
-        userId !== input.createdBy,
+        userId !== normalizedInput.createdBy,
     );
 
     if (recipientUserIds.length === 0) return null;
@@ -1484,14 +2000,14 @@ export class NotificationService {
     const notification = await prisma.$transaction(async (tx) => {
       const hiddenRecipientUserIds =
         await NotificationService.resolveHiddenRecipientUserIds(tx, {
-          companyId: input.companyId,
+          companyId: normalizedInput.companyId,
           recipientUserIds,
-          referenceType: input.referenceType,
-          referenceId: input.referenceId,
+          referenceType: normalizedInput.referenceType,
+          referenceId: normalizedInput.referenceId,
         });
       const notificationUsers = recipientUserIds.map((userId) => ({
         id: randomUUID(),
-        companyId: input.companyId,
+        companyId: normalizedInput.companyId,
         userId,
         notificationId,
         status: (
@@ -1501,11 +2017,11 @@ export class NotificationService {
       }));
       const existingNotification = await tx.notification.findFirst({
         where: {
-          companyId: input.companyId,
-          type: input.type,
-          referenceType: input.referenceType || null,
-          referenceId: input.referenceId || null,
-          createdBy: input.createdBy,
+          companyId: normalizedInput.companyId,
+          type: normalizedInput.type,
+          referenceType: normalizedInput.referenceType || null,
+          referenceId: normalizedInput.referenceId || null,
+          createdBy: normalizedInput.createdBy,
           name: content.name,
           message: content.message,
           createdAt: { gte: duplicateWindowStart },
@@ -1521,9 +2037,9 @@ export class NotificationService {
       if (existingNotification) {
         if (shouldClearPreviousPending) {
           await NotificationService.hidePendingNotificationUsers(tx, {
-            companyId: input.companyId,
-            referenceType: input.referenceType,
-            referenceId: input.referenceId,
+            companyId: normalizedInput.companyId,
+            referenceType: normalizedInput.referenceType,
+            referenceId: normalizedInput.referenceId,
             now,
             excludeNotificationId: existingNotification.id,
           });
@@ -1554,9 +2070,9 @@ export class NotificationService {
 
       if (shouldClearPreviousPending) {
         await NotificationService.hidePendingNotificationUsers(tx, {
-          companyId: input.companyId,
-          referenceType: input.referenceType,
-          referenceId: input.referenceId,
+          companyId: normalizedInput.companyId,
+          referenceType: normalizedInput.referenceType,
+          referenceId: normalizedInput.referenceId,
           now,
         });
       }
@@ -1564,14 +2080,14 @@ export class NotificationService {
       const createdNotification = await tx.notification.create({
         data: {
           id: notificationId,
-          companyId: input.companyId,
+          companyId: normalizedInput.companyId,
           name: content.name,
           message: content.message,
-          type: input.type,
-          referenceType: input.referenceType || null,
-          referenceId: input.referenceId || null,
+          type: normalizedInput.type,
+          referenceType: normalizedInput.referenceType || null,
+          referenceId: normalizedInput.referenceId || null,
           isPending,
-          createdBy: input.createdBy,
+          createdBy: normalizedInput.createdBy,
           updatedAt: now,
         },
         include: {
@@ -1609,7 +2125,7 @@ export class NotificationService {
         );
         emitNotificationEvent({
           userId: notificationUser.userId,
-          companyId: input.companyId,
+          companyId: normalizedInput.companyId,
           notification: formattedNotification,
         });
       }
@@ -1845,68 +2361,34 @@ export class NotificationService {
     }
 
     const companyIds = mappings.map((mapping) => mapping.companyId);
-    const [settingsRows, globalAccessRows, accessRows, allOrgNodes] =
-      await Promise.all([
-        (prisma as any).notificationSetting.findMany({
-          where: {
-            userId: params.userId,
-            companyId: { in: companyIds },
-          },
-          include: {
-            node: {
-              select: {
-                id: true,
-                nodeName: true,
-                nodePath: true,
-              },
+    const [settingsRows, scopeEntries] = await Promise.all([
+      (prisma as any).notificationSetting.findMany({
+        where: {
+          userId: params.userId,
+          companyId: { in: companyIds },
+        },
+        include: {
+          node: {
+            select: {
+              id: true,
+              nodeName: true,
+              nodePath: true,
             },
           },
-        }),
-        prisma.userAccess.findMany({
-          where: {
-            userId: params.userId,
-            companyId: { in: companyIds },
-            isGlobalAccess: true,
-            orgStructure: { status: 'ACTIVE' },
-          },
-          select: { companyId: true },
-        }),
-        prisma.userAccess.findMany({
-          where: {
-            userId: params.userId,
-            companyId: { in: companyIds },
-            orgStructure: { status: 'ACTIVE' },
-          },
-          select: {
-            companyId: true,
-            nodeId: true,
-            orgStructure: {
-              select: {
-                id: true,
-                nodeName: true,
-                nodePath: true,
-              },
-            },
-          },
-        }),
-        prisma.orgStructure.findMany({
-          where: {
-            companyId: { in: companyIds },
-            status: 'ACTIVE',
-          },
-          select: {
-            companyId: true,
-            id: true,
-            nodeName: true,
-            nodePath: true,
-          },
-          orderBy: { nodePath: 'asc' },
-        }),
-      ]);
+        },
+      }),
+      Promise.all(
+        companyIds.map(async (companyId) => ({
+          companyId,
+          nodes: await NotificationService.getAccessibleNotificationNodeScopes(
+            prisma,
+            companyId,
+            params.userId,
+          ),
+        })),
+      ),
+    ]);
 
-    const globalCompanyIds = new Set(
-      globalAccessRows.map((row) => String(row.companyId || '').trim()),
-    );
     const settingsByKey = new Map<string, any>();
     settingsRows.forEach((row: any) => {
       settingsByKey.set(
@@ -1914,43 +2396,14 @@ export class NotificationService {
         row,
       );
     });
-
-    const directNodesByCompany = new Map<string, Map<string, NotificationAccessNode>>();
-    accessRows.forEach((row: any) => {
-      const companyKey = String(row.companyId || '').trim();
-      const node = row.orgStructure;
-      if (!companyKey || !node?.id) return;
-      const companyNodes =
-        directNodesByCompany.get(companyKey) || new Map<string, NotificationAccessNode>();
-      companyNodes.set(node.id, {
-        id: node.id,
-        nodeName: node.nodeName,
-        nodePath: node.nodePath,
-        levelCount: getNodeLevelCount(node.nodePath),
-      });
-      directNodesByCompany.set(companyKey, companyNodes);
-    });
-
-    const allNodesByCompany = new Map<string, NotificationAccessNode[]>();
-    allOrgNodes.forEach((node: any) => {
-      const companyKey = String(node.companyId || '').trim();
-      const current = allNodesByCompany.get(companyKey) || [];
-      current.push({
-        id: node.id,
-        nodeName: node.nodeName,
-        nodePath: node.nodePath,
-        levelCount: getNodeLevelCount(node.nodePath),
-      });
-      allNodesByCompany.set(companyKey, current);
+    const scopesByCompany = new Map<string, NotificationAccessScopeNode[]>();
+    scopeEntries.forEach((entry) => {
+      scopesByCompany.set(entry.companyId, entry.nodes);
     });
 
     const data = mappings.map((mapping) => {
       const companyKey = mapping.companyId;
-      const visibleNodes = globalCompanyIds.has(companyKey)
-        ? allNodesByCompany.get(companyKey) || []
-        : Array.from(directNodesByCompany.get(companyKey)?.values() || []).sort(
-            (left, right) => left.nodePath.localeCompare(right.nodePath),
-          );
+      const visibleNodes = scopesByCompany.get(companyKey) || [];
 
       return {
         companyName:
@@ -1960,7 +2413,7 @@ export class NotificationService {
           nodePath: node.nodePath,
           nodeName: node.nodeName,
           levelCount: node.levelCount,
-          settings: NOTIFICATION_MODULES.map((module) => {
+          settings: node.modules.map((module) => {
             const row = settingsByKey.get(
               `${companyKey}:${node.id}:${module}`,
             );
@@ -1998,14 +2451,14 @@ export class NotificationService {
           );
         }
 
-        const accessibleNodes =
-          await NotificationService.getAccessibleNotificationNodes(
+        const accessibleNodeScopes =
+          await NotificationService.getAccessibleNotificationNodeScopes(
             tx,
             mapping.companyId,
             params.userId,
           );
         const accessibleNodeByPath = new Map(
-          accessibleNodes.map((node) => [node.nodePath, node]),
+          accessibleNodeScopes.map((node) => [node.nodePath, node]),
         );
 
         for (const setting of companyEntry.settings) {
@@ -2020,6 +2473,12 @@ export class NotificationService {
           if (!node) {
             throw new Error(
               `Node path ${setting.nodePath} is not accessible for company ${companyEntry.companyCode}`,
+            );
+          }
+
+          if (!node.modules.includes(module)) {
+            throw new Error(
+              `Module ${module} is not accessible for node path ${setting.nodePath} in company ${companyEntry.companyCode}`,
             );
           }
 

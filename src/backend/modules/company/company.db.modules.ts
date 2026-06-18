@@ -1621,7 +1621,10 @@ export class CompanyDbController {
 
         await NotificationService.createRequestNotification({
           companyId: resolvedNotificationCompanyId,
-          type: result.status === 'REJECTED' ? 'REJECT' : 'ONBOARDED',
+          type:
+            result.status === 'REJECTED'
+              ? 'REJECTED-INITIATE'
+              : 'ONBOARDED',
           referenceType: 'COMPANY',
           referenceId: id,
           referenceName: notificationSubject,
