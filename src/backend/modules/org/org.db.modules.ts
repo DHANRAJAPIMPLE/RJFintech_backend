@@ -1518,6 +1518,56 @@ export class OrgStructureDbController {
     });
   }
 
+  private static async syncNotificationSettingsForGlobalAccessUsers(
+    tx: any,
+    params: {
+      companyId: string;
+      eventUserId: string;
+      removeReason: string;
+      excludeUserIds?: string[];
+    },
+  ) {
+    const excludedUserIds = new Set<string>(
+      (params.excludeUserIds || []).map((userId: string) =>
+        String(userId || '').trim(),
+      ),
+    );
+    const globalAccessRows = await tx.userAccess.findMany({
+      where: {
+        companyId: params.companyId,
+        isGlobalAccess: true,
+        user: {
+          userMappings: {
+            some: {
+              companyId: params.companyId,
+              status: 'ACTIVE',
+            },
+          },
+        },
+      },
+      select: { userId: true },
+    });
+
+    const userIds: string[] = Array.from(
+      new Set(
+        globalAccessRows
+          .map((row: any) => String(row.userId || '').trim())
+          .filter((userId: string) => userId && !excludedUserIds.has(userId)),
+      ),
+    );
+
+    for (const userId of userIds) {
+      await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+        companyId: params.companyId,
+        userId,
+        eventUserId: params.eventUserId,
+        createReason:
+          'Default notification setting created because access was granted.',
+        removeReason: params.removeReason,
+      });
+    }
+  }
+
   private static buildPropagatedAccesses(
     parentAccesses: any[],
     newNodeId: string,
@@ -2978,6 +3028,16 @@ export class OrgStructureDbController {
             'Notification setting removed because node was inactivated.',
         });
       }
+      await OrgStructureDbController.syncNotificationSettingsForGlobalAccessUsers(
+        tx,
+        {
+          companyId: request.companyId,
+          eventUserId: actorId,
+          removeReason:
+            'Notification setting removed because node was inactivated.',
+          excludeUserIds: impactedUserIds,
+        },
+      );
     }
     await tx.workflow.updateMany({
       where: {
@@ -3402,6 +3462,16 @@ export class OrgStructureDbController {
                 },
               );
             }
+            await OrgStructureDbController.syncNotificationSettingsForGlobalAccessUsers(
+              tx,
+              {
+                companyId: request.companyId,
+                eventUserId: approverId,
+                removeReason:
+                  'Notification setting removed because access was removed.',
+                excludeUserIds: impactedUserIds,
+              },
+            );
             userAccessImpactNotification = {
               nodeName: newNode.nodeName,
               nodePath: newNode.nodePath,
