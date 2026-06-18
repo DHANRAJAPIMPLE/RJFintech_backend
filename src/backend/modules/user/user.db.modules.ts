@@ -1897,6 +1897,87 @@ export class UserDbController {
     return expandedPermissions;
   }
 
+  private static async expandPermissionMutationsForChildNodes(
+    companyId: string,
+    permissions: any[],
+  ) {
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+      return [];
+    }
+
+    const explicitPermissionKeys = new Set(
+      permissions.map((permission) =>
+        [
+          permission?.roleName || '',
+          permission?.nodePath || '',
+          UserDbController.isPermissionRemoval(permission) ? 'REMOVE' : 'UPSERT',
+        ].join('|'),
+      ),
+    );
+    const expandedPermissions: any[] = [];
+    const generatedPermissionKeys = new Set<string>();
+
+    for (const permission of permissions) {
+      expandedPermissions.push(permission);
+
+      if (
+        permission?.roleName === 'Corp Admin' ||
+        (permission?.accessCategory !== 'ALL_CHILD' &&
+          permission?.accessCategory !== 'IMMEDIATE_CHILD') ||
+        typeof permission?.nodePath !== 'string'
+      ) {
+        continue;
+      }
+
+      const isRemoval = UserDbController.isPermissionRemoval(permission);
+      const children = await prisma.orgStructure.findMany({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+          ...(permission.accessCategory === 'ALL_CHILD'
+            ? { nodePath: { startsWith: `${permission.nodePath}.` } }
+            : { parent: { nodePath: permission.nodePath } }),
+        },
+        select: {
+          nodeName: true,
+          nodePath: true,
+          nodeType: true,
+        },
+        orderBy: { nodePath: 'asc' },
+      });
+
+      for (const child of children) {
+        const permissionKey = [
+          permission.roleName || '',
+          child.nodePath || '',
+          isRemoval ? 'REMOVE' : 'UPSERT',
+        ].join('|');
+        if (
+          explicitPermissionKeys.has(permissionKey) ||
+          generatedPermissionKeys.has(permissionKey)
+        ) {
+          continue;
+        }
+
+        generatedPermissionKeys.add(permissionKey);
+        expandedPermissions.push({
+          ...permission,
+          accessType: 'SECONDARY',
+          nodeName: child.nodeName,
+          nodePath: child.nodePath,
+          nodeType: child.nodeType,
+          sourceTag: 'AUTO_GENERATED',
+          accessCategory:
+            permission.accessCategory === 'IMMEDIATE_CHILD'
+              ? 'NODE'
+              : 'ALL_CHILD',
+        });
+      }
+    }
+
+    return expandedPermissions;
+  }
+
   private static async validateReportingManagerChange(
     targetUserId: string,
     companyId: string,
@@ -7844,6 +7925,11 @@ export class UserDbController {
     const permissionMutations = Array.isArray(data?.permissions)
       ? data.permissions
       : [];
+    const expandedPermissionMutations =
+      await UserDbController.expandPermissionMutationsForChildNodes(
+        companyId,
+        permissionMutations,
+      );
     await UserDbController.validateChangedPermissions(
       companyId,
       permissionMutations,
@@ -7861,7 +7947,7 @@ export class UserDbController {
           ? []
           : UserDbController.mergePermissionMutations(
               current.snapshot.permissions,
-              permissionMutations,
+              expandedPermissionMutations,
             ),
     };
     const changedDetails = data?.basicDetails || {};
@@ -8039,6 +8125,9 @@ export class UserDbController {
     const requestData: Record<string, unknown> = {
       targetUserEmail: current.user.email,
       ...(data || {}),
+      ...(permissionMutations.length > 0
+        ? { permissions: expandedPermissionMutations }
+        : {}),
     };
     if (statusChanged) {
       requestData.basicDetails = {
@@ -8237,6 +8326,11 @@ export class UserDbController {
     const permissionMutations = Array.isArray(requestData?.permissions)
       ? requestData.permissions
       : [];
+    const expandedPermissionMutations =
+      await UserDbController.expandPermissionMutationsForChildNodes(
+        onboarding.companyId,
+        permissionMutations,
+      );
     const proposed: UserDataSnapshot = {
       basicDetails: { ...current.snapshot.basicDetails },
       permissions:
@@ -8244,7 +8338,7 @@ export class UserDbController {
           ? []
           : UserDbController.mergePermissionMutations(
               current.snapshot.permissions,
-              permissionMutations,
+              expandedPermissionMutations,
             ),
     };
     const changedDetails = requestData?.basicDetails || {};

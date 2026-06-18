@@ -4326,6 +4326,24 @@ export class OrgStructureDbController {
       let whereCondition: any = { companyId: resolvedCompanyId };
       let applyHistoryFilter = false;
       const normalizedNodeName = nodeName?.trim().toLowerCase() || null;
+      const orgNodes = await prisma.orgStructure.findMany({
+        where: { companyId: resolvedCompanyId },
+        select: {
+          id: true,
+          nodeName: true,
+          nodeType: true,
+          nodePath: true,
+          parent: {
+            select: {
+              nodeName: true,
+              nodePath: true,
+            },
+          },
+        },
+      });
+      const orgNodeByPath = new Map(
+        orgNodes.map((node) => [node.nodePath, node]),
+      );
       let selectedNodeType =
         OrgStructureDbController.normalizeOrgNodeType(nodeType) ||
         OrgStructureDbController.normalizeOrgNodeType(_nodeType);
@@ -4347,14 +4365,6 @@ export class OrgStructureDbController {
         if (!data) return false;
         const identity =
           OrgStructureDbController.buildOrgHistoryNodeIdentity(data);
-        const candidateNodeType = identity.nodeType;
-        const candidateNodeNames = [
-          data?.newNodeName,
-          data?.nodeName,
-          data?.currentData?.nodeName,
-        ]
-          .filter((value): value is string => typeof value === 'string')
-          .map((value) => value.toLowerCase());
         const derivedNodePath =
           typeof data?.parentNode?.nodePath === 'string' &&
           typeof data?.newNodeName === 'string'
@@ -4364,12 +4374,30 @@ export class OrgStructureDbController {
           data?.targetNodePath,
           data?.currentData?.nodePath,
           data?.nodePath,
+          identity.nodePath,
           derivedNodePath,
         ].filter((value): value is string => typeof value === 'string');
+        const matchedOrgNode = candidatePaths
+          .map((path) => orgNodeByPath.get(path))
+          .find(Boolean);
+        const candidateNodeType =
+          identity.nodeType ||
+          OrgStructureDbController.normalizeOrgNodeType(
+            matchedOrgNode?.nodeType,
+          );
+        const candidateNodeNames = [
+          data?.newNodeName,
+          data?.nodeName,
+          data?.currentData?.nodeName,
+          identity.nodeName,
+          matchedOrgNode?.nodeName,
+        ]
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.toLowerCase());
         const parentNodePath =
           typeof data?.parentNode?.nodePath === 'string'
             ? data.parentNode.nodePath
-            : null;
+            : matchedOrgNode?.parent?.nodePath || null;
         const hasPathSignals = candidatePaths.length > 0;
         const extractedNames = candidatePaths
           .map((p) => p.split('.').pop()?.toLowerCase())
@@ -4390,6 +4418,7 @@ export class OrgStructureDbController {
           : true;
         const parentNodePathMatches = normalizedParentNodePath
           ? identity.parentNodePath === normalizedParentNodePath ||
+            matchedOrgNode?.parent?.nodePath === normalizedParentNodePath ||
             parentNodePath === normalizedParentNodePath
           : true;
         return (
@@ -4760,6 +4789,54 @@ export class OrgStructureDbController {
           })
           .filter(Boolean);
       };
+      const resolveHistoryNodeDisplay = (data: any) => {
+        const identity =
+          OrgStructureDbController.buildOrgHistoryNodeIdentity(data);
+        const candidatePaths = [
+          data?.targetNodePath,
+          data?.currentData?.nodePath,
+          data?.nodePath,
+          identity.nodePath,
+        ].filter((value): value is string => typeof value === 'string');
+        const matchedOrgNode = candidatePaths
+          .map((path) => orgNodeByPath.get(path))
+          .find(Boolean);
+
+        return {
+          nodeId:
+            data?.nodeId || data?.orgStructureId || matchedOrgNode?.id || null,
+          orgStructureId:
+            data?.orgStructureId || data?.nodeId || matchedOrgNode?.id || null,
+          newNodeName:
+            data?.newNodeName ||
+            data?.nodeName ||
+            data?.currentData?.nodeName ||
+            matchedOrgNode?.nodeName ||
+            null,
+          nodeType:
+            data?._nodeType ||
+            data?.nodeType ||
+            data?.currentData?.nodeType ||
+            matchedOrgNode?.nodeType ||
+            null,
+          nodePath:
+            data?.nodePath ||
+            data?.targetNodePath ||
+            data?.currentData?.nodePath ||
+            matchedOrgNode?.nodePath ||
+            null,
+          parentNodePath:
+            data?.parentNode?.nodePath ||
+            data?.parentNodePath ||
+            matchedOrgNode?.parent?.nodePath ||
+            'ROOT',
+          parentNodeName:
+            data?.parentNode?.nodeName ||
+            data?.parentNodeName ||
+            matchedOrgNode?.parent?.nodeName ||
+            'ROOT',
+        };
+      };
 
       const modificationSequenceByReqId = new Map<string, number>();
       const historyByReqId = new Map<string, any[]>();
@@ -4801,6 +4878,7 @@ export class OrgStructureDbController {
       // 3. Add actual history entries
       const formattedHistories = histories.map((h) => {
         const data = h.orgReq?.data as any;
+        const nodeDisplay = resolveHistoryNodeDisplay(data || {});
         const requestType =
           OrgStructureDbController.resolveOrgHistoryRequestType(h.orgReq);
         const isChangeRequestStart =
@@ -4858,13 +4936,13 @@ export class OrgStructureDbController {
             saasAdminUserIds,
             viewerUserId,
           ),
-          nodeId: data?.nodeId || data?.orgStructureId || null,
-          orgStructureId: data?.orgStructureId || data?.nodeId || null,
-          newNodeName: data?.newNodeName || null,
-          nodeType: data?._nodeType || data?.nodeType || null,
-          nodePath: data?.nodePath || null,
-          parentNodePath: data?.parentNode?.nodePath || 'ROOT',
-          parentNodeName: data?.parentNode?.nodeName || 'ROOT',
+          nodeId: nodeDisplay.nodeId,
+          orgStructureId: nodeDisplay.orgStructureId,
+          newNodeName: nodeDisplay.newNodeName,
+          nodeType: nodeDisplay.nodeType,
+          nodePath: nodeDisplay.nodePath,
+          parentNodePath: nodeDisplay.parentNodePath,
+          parentNodeName: nodeDisplay.parentNodeName,
           approvalLevel,
           _reqId: h.orgReqId || null,
         };
@@ -4910,6 +4988,7 @@ export class OrgStructureDbController {
         const latestEvent = latestEntries[latestEntries.length - 1];
         const syntheticSource = latestEvent || h;
         const sourceData = syntheticSource.orgReq?.data as any;
+        const sourceNodeDisplay = resolveHistoryNodeDisplay(sourceData || {});
         const requestType =
           OrgStructureDbController.resolveOrgHistoryRequestType(
             syntheticSource.orgReq,
@@ -4945,14 +5024,13 @@ export class OrgStructureDbController {
               saasAdminUserIds,
               viewerUserId,
             ),
-            nodeId: sourceData?.nodeId || sourceData?.orgStructureId || null,
-            orgStructureId:
-              sourceData?.orgStructureId || sourceData?.nodeId || null,
-            newNodeName: sourceData?.newNodeName || null,
-            nodeType: sourceData?._nodeType || sourceData?.nodeType || null,
-            nodePath: sourceData?.nodePath || null,
-            parentNodePath: sourceData?.parentNode?.nodePath || 'ROOT',
-            parentNodeName: sourceData?.parentNode?.nodeName || 'ROOT',
+            nodeId: sourceNodeDisplay.nodeId,
+            orgStructureId: sourceNodeDisplay.orgStructureId,
+            newNodeName: sourceNodeDisplay.newNodeName,
+            nodeType: sourceNodeDisplay.nodeType,
+            nodePath: sourceNodeDisplay.nodePath,
+            parentNodePath: sourceNodeDisplay.parentNodePath,
+            parentNodeName: sourceNodeDisplay.parentNodeName,
             approvalLevel: null,
             approvalSummary: {
               currentStatus: 'APPROVED',
@@ -5004,14 +5082,13 @@ export class OrgStructureDbController {
               saasAdminUserIds,
               viewerUserId,
             ),
-            nodeId: sourceData?.nodeId || sourceData?.orgStructureId || null,
-            orgStructureId:
-              sourceData?.orgStructureId || sourceData?.nodeId || null,
-            newNodeName: sourceData?.newNodeName || null,
-            nodeType: sourceData?._nodeType || sourceData?.nodeType || null,
-            nodePath: sourceData?.nodePath || null,
-            parentNodePath: sourceData?.parentNode?.nodePath || 'ROOT',
-            parentNodeName: sourceData?.parentNode?.nodeName || 'ROOT',
+            nodeId: sourceNodeDisplay.nodeId,
+            orgStructureId: sourceNodeDisplay.orgStructureId,
+            newNodeName: sourceNodeDisplay.newNodeName,
+            nodeType: sourceNodeDisplay.nodeType,
+            nodePath: sourceNodeDisplay.nodePath,
+            parentNodePath: sourceNodeDisplay.parentNodePath,
+            parentNodeName: sourceNodeDisplay.parentNodeName,
             approvalLevel: null,
             approvalSummary: progressSummary,
             approvedBy,
@@ -5048,14 +5125,13 @@ export class OrgStructureDbController {
               saasAdminUserIds,
               viewerUserId,
             ),
-            nodeId: sourceData?.nodeId || sourceData?.orgStructureId || null,
-            orgStructureId:
-              sourceData?.orgStructureId || sourceData?.nodeId || null,
-            newNodeName: sourceData?.newNodeName || null,
-            nodeType: sourceData?._nodeType || sourceData?.nodeType || null,
-            nodePath: sourceData?.nodePath || null,
-            parentNodePath: sourceData?.parentNode?.nodePath || 'ROOT',
-            parentNodeName: sourceData?.parentNode?.nodeName || 'ROOT',
+            nodeId: sourceNodeDisplay.nodeId,
+            orgStructureId: sourceNodeDisplay.orgStructureId,
+            newNodeName: sourceNodeDisplay.newNodeName,
+            nodeType: sourceNodeDisplay.nodeType,
+            nodePath: sourceNodeDisplay.nodePath,
+            parentNodePath: sourceNodeDisplay.parentNodePath,
+            parentNodeName: sourceNodeDisplay.parentNodeName,
             approvalLevel: null,
             approvalSummary: {
               currentStatus: 'PENDING',
@@ -5195,9 +5271,9 @@ export class OrgStructureDbController {
       }
 
       const requestData = (history.orgReq?.data as any) || null;
-      const requestType = String(
-        history.orgReq?.type || 'INITIATE',
-      ).toUpperCase();
+      const requestType = OrgStructureDbController.resolveOrgHistoryRequestType(
+        history.orgReq,
+      );
       const displayEvent = OrgStructureDbController.getOrgHistoryDisplayEvent(
         history.event,
         requestType,
@@ -5213,6 +5289,24 @@ export class OrgStructureDbController {
           createdAt: true,
         },
       });
+      const detailIdentity =
+        OrgStructureDbController.buildOrgHistoryNodeIdentity(requestData);
+      const detailCandidatePaths = [
+        requestData?.targetNodePath,
+        requestData?.nodePath,
+        requestData?.currentData?.nodePath,
+        detailIdentity.nodePath,
+      ].filter((value): value is string => typeof value === 'string');
+      const detailNode =
+        detailCandidatePaths.length > 0
+          ? await prisma.orgStructure.findFirst({
+              where: {
+                companyId: resolvedCompanyId,
+                nodePath: { in: detailCandidatePaths },
+              },
+              include: { parent: true },
+            })
+          : null;
       const historyRequests = allRequests
         .filter((request) => {
           return (
@@ -5294,11 +5388,29 @@ export class OrgStructureDbController {
                 createdAt: history.orgReq.createdAt,
               }
             : null,
-          newNodeName: requestData?.newNodeName || null,
-          nodeType: requestData?._nodeType || requestData?.nodeType || null,
-          nodePath: requestData?.nodePath || null,
-          parentNodePath: requestData?.parentNode?.nodePath || 'ROOT',
-          parentNodeName: requestData?.parentNode?.nodeName || 'ROOT',
+          newNodeName:
+            requestData?.newNodeName ||
+            requestData?.nodeName ||
+            detailNode?.nodeName ||
+            null,
+          nodeType:
+            requestData?._nodeType ||
+            requestData?.nodeType ||
+            detailNode?.nodeType ||
+            null,
+          nodePath:
+            requestData?.nodePath ||
+            requestData?.targetNodePath ||
+            detailNode?.nodePath ||
+            null,
+          parentNodePath:
+            requestData?.parentNode?.nodePath ||
+            detailNode?.parent?.nodePath ||
+            'ROOT',
+          parentNodeName:
+            requestData?.parentNode?.nodeName ||
+            detailNode?.parent?.nodeName ||
+            'ROOT',
         },
       });
     } catch (error) {
