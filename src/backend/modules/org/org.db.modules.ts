@@ -1191,6 +1191,92 @@ export class OrgStructureDbController {
     );
   }
 
+  private static normalizeNodeType(value: unknown) {
+    return typeof value === 'string' ? value.trim().toUpperCase() : '';
+  }
+
+  private static async assertNoPendingApproverNodeTypeConflict(
+    client: any,
+    companyId: string,
+    requestData: any,
+  ) {
+    const requestedNodePath =
+      OrgStructureDbController.resolveRequestedNodePath(requestData);
+    const requestedNodeType = OrgStructureDbController.normalizeNodeType(
+      requestData?._nodeType || requestData?.nodeType,
+    );
+    if (!requestedNodePath || !requestedNodeType) return;
+
+    const pendingRequests = await client.orgStructureReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        data: true,
+        orgHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+          select: {
+            createdAt: true,
+            user: {
+              select: {
+                name: true,
+                email: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (pendingRequests.length === 0) return;
+
+    const pendingApproverRows = await client.workflowApprover.findMany({
+      where: {
+        reqTable: 'org_structure_req',
+        status: 'PENDING',
+        reqId: {
+          in: pendingRequests.map((request: any) => request.id),
+        },
+      },
+      select: { reqId: true },
+    });
+    const pendingApproverRequestIds = new Set(
+      pendingApproverRows.map((row: any) => row.reqId),
+    );
+    if (pendingApproverRequestIds.size === 0) return;
+
+    for (const request of pendingRequests) {
+      if (!pendingApproverRequestIds.has(request.id)) continue;
+
+      const pendingData = request.data as any;
+      const pendingNodePath = OrgStructureDbController.resolveRequestedNodePath(
+        pendingData,
+        OrgStructureDbController.extractOrgTargetPath(pendingData),
+      );
+      if (pendingNodePath !== requestedNodePath) continue;
+
+      const pendingNodeType = OrgStructureDbController.normalizeNodeType(
+        pendingData?._nodeType || pendingData?.nodeType,
+      );
+      if (pendingNodeType !== requestedNodeType) continue;
+
+      const initiator = request.orgHistories?.[0]?.user;
+      const initiatedAt =
+        request.orgHistories?.[0]?.createdAt || request.createdAt;
+      const pendingTitle =
+        pendingData?.newNodeName || pendingData?.nodeName || pendingNodePath;
+
+      throw new AppError(
+        `Cannot initiate organization '${pendingTitle}'. A pending approver request already exists for node path '${requestedNodePath}' with node type '${requestedNodeType}', initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
+        400,
+      );
+    }
+  }
+
   private static formatUserAccessImpact(count: number) {
     return count > 0 ? `${count} USER_ACCESS_ADDED` : 'NO_ISSUES';
   }
@@ -3889,6 +3975,11 @@ export class OrgStructureDbController {
 
       const request = await prisma.$transaction(async (tx) => {
         const reqData = rest.data || {};
+        await OrgStructureDbController.assertNoPendingApproverNodeTypeConflict(
+          tx,
+          resolvedCompanyId,
+          reqData,
+        );
         const requestedNodePath =
           await OrgStructureDbController.resolveUniqueRequestedNodePath(
             tx,
@@ -4060,9 +4151,20 @@ export class OrgStructureDbController {
         OrgStructureDbController.resolveRequestedNodePath({
           parentNode,
           newNodeName,
+          _nodeType,
           nodePath: req.body?.nodePath,
         });
       if (requestedNodePath) {
+        await OrgStructureDbController.assertNoPendingApproverNodeTypeConflict(
+          prisma,
+          resolvedCompanyId,
+          {
+            parentNode,
+            newNodeName,
+            _nodeType,
+            nodePath: req.body?.nodePath,
+          },
+        );
         const resolvedNodePath =
           await OrgStructureDbController.resolveUniqueRequestedNodePath(
             prisma,
@@ -4070,6 +4172,7 @@ export class OrgStructureDbController {
             {
               parentNode,
               newNodeName,
+              _nodeType,
               nodePath: req.body?.nodePath,
             },
           );

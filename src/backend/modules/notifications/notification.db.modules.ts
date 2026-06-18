@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { emitNotificationEvent } from '../../../shared/utils/notification-events.util';
 import { getPagination } from '../../../shared/utils/pagination.util';
+import { HistoryUserUtil } from '../../utils/history-user.util';
 import { prisma } from '../../lib/prisma';
 
 type NotificationType =
@@ -326,6 +327,54 @@ const normalizeNotificationTypeValue = (
   return 'ONBOARDED';
 };
 
+const getViewerNotificationTypeValue = (
+  type: unknown,
+  isPendingForViewer: boolean,
+): NotificationType | LegacyNotificationType => {
+  const normalized = typeof type === 'string' ? type.trim().toUpperCase() : '';
+
+  if (isPendingForViewer) {
+    return normalizeNotificationTypeValue(type, true);
+  }
+
+  if (
+    normalized === 'PENDING APPROVAL - INITIATE' ||
+    normalized === 'PENDING_APPROVAL_INITIATE'
+  ) {
+    return 'INITIATE';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - MODIFICATION' ||
+    normalized === 'PENDING APPROVAL - UPDATE' ||
+    normalized === 'PENDING_APPROVAL_MODIFICATION' ||
+    normalized === 'PENDING_APPROVAL_UPDATE'
+  ) {
+    return 'MODIFICATION';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - ACTIVE' ||
+    normalized === 'PENDING_APPROVAL_ACTIVE'
+  ) {
+    return 'ACTIVE';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - INACTIVE' ||
+    normalized === 'PENDING_APPROVAL_INACTIVE'
+  ) {
+    return 'INACTIVE';
+  }
+  if (
+    normalized === 'PENDING APPROVAL - ARCHIVE' ||
+    normalized === 'PENDING APPROVAL - ARCHIVED' ||
+    normalized === 'PENDING_APPROVAL_ARCHIVE' ||
+    normalized === 'PENDING_APPROVAL_ARCHIVED'
+  ) {
+    return 'ARCHIVE';
+  }
+
+  return normalizeNotificationTypeValue(type, false);
+};
+
 export class NotificationService {
   private static unique(values: Array<string | null | undefined>) {
     return Array.from(
@@ -624,6 +673,7 @@ export class NotificationService {
   private static async formatNotification(
     row: any,
     target?: string | null,
+    saasAdminUserIds?: Set<string>,
   ) {
     const resolvedTarget =
       target === undefined
@@ -634,9 +684,27 @@ export class NotificationService {
         row.notification,
         row.userId,
       );
-    const normalizedType = normalizeNotificationTypeValue(
+    const normalizedType = getViewerNotificationTypeValue(
       row.notification.type,
       resolvedPendingState,
+    );
+    const viewerUserId =
+      typeof row.userId === 'string' ? row.userId.trim() : '';
+    const createdByUserId =
+      typeof row.notification?.createdBy === 'string'
+        ? row.notification.createdBy.trim()
+        : '';
+    const resolvedSaasAdminUserIds =
+      saasAdminUserIds ||
+      (await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        createdByUserId,
+      ]));
+    const maskedActor = HistoryUserUtil.formatAuditUser(
+      row.notification.createdByUser,
+      createdByUserId || null,
+      resolvedSaasAdminUserIds,
+      viewerUserId || null,
     );
 
     return {
@@ -649,8 +717,8 @@ export class NotificationService {
       target: resolvedTarget,
       isPending: resolvedPendingState,
       status: row.status,
-      createdByname: row.notification.createdByUser?.name || null,
-      createdByemail: row.notification.createdByUser?.email || null,
+      createdByname: maskedActor.name,
+      createdByemail: maskedActor.email,
       ['createat_timestamp']: formatDateTime(row.notification.createdAt),
     };
   }
@@ -2285,10 +2353,20 @@ export class NotificationService {
     const nextCursorId = hasNextPage
       ? pageRows[pageRows.length - 1]?.id || null
       : null;
+    const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+      params.userId,
+      ...pageRows.map((row) => row.notification?.createdBy),
+    ]);
 
     return {
       data: await Promise.all(
-        pageRows.map((row) => NotificationService.formatNotification(row)),
+        pageRows.map((row) =>
+          NotificationService.formatNotification(
+            row,
+            undefined,
+            saasAdminUserIds,
+          ),
+        ),
       ),
       count: currentStatusCount,
       unreadCount,
@@ -2344,9 +2422,19 @@ export class NotificationService {
       },
       orderBy: { createdAt: 'desc' },
     });
+    const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+      params.userId,
+      ...rows.map((row) => row.notification?.createdBy),
+    ]);
 
     return Promise.all(
-      rows.map((row) => NotificationService.formatNotification(row)),
+      rows.map((row) =>
+        NotificationService.formatNotification(
+          row,
+          undefined,
+          saasAdminUserIds,
+        ),
+      ),
     );
   }
 

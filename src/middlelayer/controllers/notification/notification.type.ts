@@ -1,4 +1,9 @@
 export type NotificationActionType =
+  | 'INITIATE'
+  | 'MODIFICATION'
+  | 'ACTIVE'
+  | 'INACTIVE'
+  | 'ARCHIVE'
   | 'Pending Approval - INITIATE'
   | 'Pending Approval - MODIFICATION'
   | 'Pending Approval - ACTIVE'
