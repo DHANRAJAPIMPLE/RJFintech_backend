@@ -87,6 +87,8 @@ export const orgHistory = z
   .object({
     nodeName: nameSchema('Node name').optional(),
     nodePath: z.string().trim().optional(),
+    nodeType: nodeTypeSchema.optional(),
+    _nodeType: nodeTypeSchema.optional(),
     pending: z.boolean().optional(),
     parentNodePath: z
       .string()

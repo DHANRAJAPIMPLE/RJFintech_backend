@@ -212,6 +212,109 @@ export class OrgStructureDbController {
     return Number.isNaN(date.getTime()) ? 'N/A' : date.toISOString();
   }
 
+  private static buildSyntheticOrgHistoryId(
+    sourceHistoryId: string,
+    orgReqId: string,
+    event: string,
+    suffix?: string | number | null,
+  ) {
+    const normalizedSuffix =
+      suffix === null || suffix === undefined || suffix === ''
+        ? 'base'
+        : String(suffix);
+    return [
+      'synthetic-org-history',
+      sourceHistoryId,
+      orgReqId,
+      event,
+      normalizedSuffix,
+    ].join('::');
+  }
+
+  private static resolveBaseOrgHistoryId(historyId: string) {
+    if (!historyId.startsWith('synthetic-org-history::')) {
+      return historyId;
+    }
+
+    const parts = historyId.split('::');
+    return parts[1] || historyId;
+  }
+
+  private static normalizeOrgNodeType(value: unknown) {
+    return typeof value === 'string' && value.trim()
+      ? value.trim().toUpperCase()
+      : null;
+  }
+
+  private static buildOrgHistoryNodeIdentity(data: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const nodeName =
+      typeof source?.newNodeName === 'string' && source.newNodeName.trim()
+        ? source.newNodeName.trim().toLowerCase()
+        : typeof source?.nodeName === 'string' && source.nodeName.trim()
+          ? source.nodeName.trim().toLowerCase()
+          : typeof source?.currentData?.nodeName === 'string' &&
+              source.currentData.nodeName.trim()
+            ? source.currentData.nodeName.trim().toLowerCase()
+            : null;
+    const nodeType = OrgStructureDbController.normalizeOrgNodeType(
+      source?.nodeType || source?._nodeType || source?.currentData?.nodeType,
+    );
+    const nodePath =
+      typeof source?.nodePath === 'string' && source.nodePath.trim()
+        ? source.nodePath.trim()
+        : typeof source?.currentData?.nodePath === 'string' &&
+            source.currentData.nodePath.trim()
+          ? source.currentData.nodePath.trim()
+          : typeof source?.targetNodePath === 'string' &&
+              source.targetNodePath.trim()
+            ? source.targetNodePath.trim()
+            : null;
+    const parentNodePath =
+      typeof source?.parentNode?.nodePath === 'string' &&
+      source.parentNode.nodePath.trim()
+        ? source.parentNode.nodePath.trim()
+        : typeof source?.parentNodePath === 'string' &&
+            source.parentNodePath.trim()
+          ? source.parentNodePath.trim()
+          : null;
+
+    return {
+      nodeName,
+      nodeType,
+      nodePath,
+      parentNodePath,
+    };
+  }
+
+  private static orgHistoryNodeIdentityMatches(left: any, right: any) {
+    const leftIdentity =
+      OrgStructureDbController.buildOrgHistoryNodeIdentity(left);
+    const rightIdentity =
+      OrgStructureDbController.buildOrgHistoryNodeIdentity(right);
+
+    if (
+      leftIdentity.nodePath &&
+      rightIdentity.nodePath &&
+      leftIdentity.nodePath === rightIdentity.nodePath
+    ) {
+      if (
+        leftIdentity.nodeType &&
+        rightIdentity.nodeType &&
+        leftIdentity.nodeType !== rightIdentity.nodeType
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    return (
+      leftIdentity.nodeName === rightIdentity.nodeName &&
+      leftIdentity.nodeType === rightIdentity.nodeType &&
+      leftIdentity.parentNodePath === rightIdentity.parentNodePath
+    );
+  }
+
   private static normalizePendingUserPermission(
     permission: any,
   ): PendingUserPermissionSnapshot {
@@ -4202,6 +4305,9 @@ export class OrgStructureDbController {
         companyId,
         nodeName,
         nodePath,
+        nodeType,
+        _nodeType,
+        parentNodePath,
         userId: viewerUserId,
       } = req.body;
       let resolvedCompanyId = companyId;
@@ -4220,18 +4326,31 @@ export class OrgStructureDbController {
       let whereCondition: any = { companyId: resolvedCompanyId };
       let applyHistoryFilter = false;
       const normalizedNodeName = nodeName?.trim().toLowerCase() || null;
-      let selectedNodeType: string | null = null;
+      let selectedNodeType =
+        OrgStructureDbController.normalizeOrgNodeType(nodeType) ||
+        OrgStructureDbController.normalizeOrgNodeType(_nodeType);
+      const normalizedParentNodePath =
+        typeof parentNodePath === 'string' && parentNodePath.trim()
+          ? parentNodePath.trim()
+          : null;
       if (typeof nodePath === 'string' && nodePath.length > 0) {
         const selectedNode = await prisma.orgStructure.findFirst({
           where: { companyId: resolvedCompanyId, nodePath },
           select: { nodeType: true },
         });
-        selectedNodeType = selectedNode?.nodeType || null;
+        selectedNodeType =
+          OrgStructureDbController.normalizeOrgNodeType(
+            selectedNode?.nodeType,
+          ) || selectedNodeType;
       }
       const matchesNodeFilter = (data: any) => {
         if (!data) return false;
+        const identity =
+          OrgStructureDbController.buildOrgHistoryNodeIdentity(data);
+        const candidateNodeType = identity.nodeType;
         const candidateNodeNames = [
           data?.newNodeName,
+          data?.nodeName,
           data?.currentData?.nodeName,
         ]
           .filter((value): value is string => typeof value === 'string')
@@ -4266,10 +4385,22 @@ export class OrgStructureDbController {
                 (selectedNodeType === 'ROOT' && parentNodePath === nodePath)
               : nodeNameMatches
             : true;
-        return nodeNameMatches && nodePathMatches;
+        const nodeTypeMatches = selectedNodeType
+          ? candidateNodeType === selectedNodeType
+          : true;
+        const parentNodePathMatches = normalizedParentNodePath
+          ? identity.parentNodePath === normalizedParentNodePath ||
+            parentNodePath === normalizedParentNodePath
+          : true;
+        return (
+          nodeNameMatches &&
+          nodePathMatches &&
+          nodeTypeMatches &&
+          parentNodePathMatches
+        );
       };
 
-      if (nodeName || nodePath) {
+      if (nodeName || nodePath || selectedNodeType || normalizedParentNodePath) {
         const matchingReqs = (
           await prisma.orgStructureReq.findMany({
             where: { companyId: resolvedCompanyId },
@@ -4791,7 +4922,13 @@ export class OrgStructureDbController {
         if (isApproved && isMultiLevel) {
           suppressApprovedForReqIds.add(h.orgReqId);
           syntheticEvents.push({
-            id: syntheticSource.id,
+            id: OrgStructureDbController.buildSyntheticOrgHistoryId(
+              syntheticSource.id,
+              h.orgReqId,
+              'APPROVED',
+              approvalStepMetaByReqId.get(h.orgReqId)?.totalApprovalSteps ||
+                approvalSummary.totalLevels,
+            ),
             orgReqId: h.orgReqId,
             type: requestType,
             impact: syntheticSource.orgReq?.impact || null,
@@ -4840,7 +4977,13 @@ export class OrgStructureDbController {
           }
 
           syntheticEvents.push({
-            id: syntheticSource.id,
+            id: OrgStructureDbController.buildSyntheticOrgHistoryId(
+              syntheticSource.id,
+              h.orgReqId,
+              'APPROVAL_PROGRESS',
+              (approvalSummary as any).rejectedAtLevel ||
+                approvalSummary.completedLevels,
+            ),
             orgReqId: h.orgReqId,
             type: requestType,
             impact: syntheticSource.orgReq?.impact || null,
@@ -4883,7 +5026,12 @@ export class OrgStructureDbController {
           const eligibleApprovers = buildEligibleApprovers(h.orgReqId);
 
           syntheticEvents.push({
-            id: syntheticSource.id,
+            id: OrgStructureDbController.buildSyntheticOrgHistoryId(
+              syntheticSource.id,
+              h.orgReqId,
+              'PENDING',
+              pendingLevel,
+            ),
             orgReqId: h.orgReqId,
             type: requestType,
             impact: syntheticSource.orgReq?.impact || null,
@@ -5015,9 +5163,12 @@ export class OrgStructureDbController {
         resolvedCompanyId = company.id;
       }
 
+      const resolvedHistoryId =
+        OrgStructureDbController.resolveBaseOrgHistoryId(id);
+
       const history = await prisma.orgHistory.findFirst({
         where: {
-          id,
+          id: resolvedHistoryId,
           companyId: resolvedCompanyId,
         },
         include: {
@@ -5062,14 +5213,13 @@ export class OrgStructureDbController {
           createdAt: true,
         },
       });
-      const targetNodePath =
-        OrgStructureDbController.extractOrgTargetPath(requestData);
       const historyRequests = allRequests
         .filter((request) => {
-          const requestTargetNodePath =
-            OrgStructureDbController.extractOrgTargetPath(request.data);
           return (
-            requestTargetNodePath === targetNodePath &&
+            OrgStructureDbController.orgHistoryNodeIdentityMatches(
+              request.data,
+              requestData,
+            ) &&
             (request.status !== 'REJECTED' || request.id === history.orgReqId)
           );
         })
