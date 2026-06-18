@@ -217,9 +217,36 @@ export class CompanyDbController {
 
   private static getCompanySignatoryCount(company: any) {
     if (Array.isArray(company?.signatories)) return company.signatories.length;
-    if (Array.isArray(company?.userAccesses))
-      return company.userAccesses.length;
+    if (Array.isArray(company?.userAccesses)) {
+      return company.userAccesses.filter(
+        (userAccess: any) => userAccess?.roleCode === 'CORP_ADMIN',
+      ).length;
+    }
     return 0;
+  }
+
+  private static buildCompanySignatories(company: any) {
+    if (!Array.isArray(company?.userAccesses)) return [];
+
+    return company.userAccesses
+      .filter((userAccess: any) => userAccess?.roleCode === 'CORP_ADMIN')
+      .map((userAccess: any) => {
+        const mapping = Array.isArray(userAccess.user?.userMappings)
+          ? userAccess.user.userMappings.find(
+              (userMapping: any) =>
+                userMapping.companyId === company.id &&
+                userMapping.status === 'ACTIVE',
+            )
+          : null;
+
+        return {
+          name: userAccess.user?.name || '',
+          email: userAccess.user?.email || '',
+          phone: userAccess.user?.phone || '',
+          designation: mapping?.designation || null,
+          employeeId: mapping?.employeeId || null,
+        };
+      });
   }
 
   private static matchesAppliedCompanyFilters(
@@ -620,7 +647,10 @@ export class CompanyDbController {
           },
         },
         userAccesses: {
-          where: { isGlobalAccess: true },
+          where: {
+            isGlobalAccess: true,
+            roleCode: 'CORP_ADMIN',
+          },
           include: {
             user: { include: { userMappings: true } },
           },
@@ -698,18 +728,8 @@ export class CompanyDbController {
 
         if (statusType === 'active') {
           const companies = pageData.pageRows.map((company: any) => {
-            const signatories = company.userAccesses.map((userAccess: any) => {
-              const mapping = userAccess.user.userMappings.find(
-                (userMapping: any) => userMapping.companyId === company.id,
-              );
-              return {
-                name: userAccess.user.name,
-                email: userAccess.user.email,
-                phone: userAccess.user.phone,
-                designation: mapping?.designation || null,
-                employeeId: mapping?.employeeId || null,
-              };
-            });
+            const signatories =
+              CompanyDbController.buildCompanySignatories(company);
             const companyData = { ...company };
             delete companyData.userAccesses;
             return { ...companyData, signatories };
@@ -816,18 +836,8 @@ export class CompanyDbController {
 
       if (statusType === 'active') {
         const companies = pageData.pageRows.map((company: any) => {
-          const signatories = company.userAccesses.map((userAccess: any) => {
-            const mapping = userAccess.user.userMappings.find(
-              (userMapping: any) => userMapping.companyId === company.id,
-            );
-            return {
-              name: userAccess.user.name,
-              email: userAccess.user.email,
-              phone: userAccess.user.phone,
-              designation: mapping?.designation || null,
-              employeeId: mapping?.employeeId || null,
-            };
-          });
+          const signatories =
+            CompanyDbController.buildCompanySignatories(company);
           const companyData = { ...company };
           delete companyData.userAccesses;
           return { ...companyData, signatories };
@@ -916,7 +926,10 @@ export class CompanyDbController {
             },
           },
           userAccesses: {
-            where: { isGlobalAccess: true },
+            where: {
+              isGlobalAccess: true,
+              roleCode: 'CORP_ADMIN',
+            },
             include: {
               user: { include: { userMappings: true } },
             },
@@ -925,18 +938,7 @@ export class CompanyDbController {
       });
 
       if (company) {
-        const signatories = company.userAccesses.map((userAccess: any) => {
-          const mapping = userAccess.user.userMappings.find(
-            (userMapping: any) => userMapping.companyId === company.id,
-          );
-          return {
-            name: userAccess.user.name,
-            email: userAccess.user.email,
-            phone: userAccess.user.phone,
-            designation: mapping?.designation || null,
-            employeeId: mapping?.employeeId || null,
-          };
-        });
+        const signatories = CompanyDbController.buildCompanySignatories(company);
         const group = company.companyMappings?.[0]?.group;
 
         return res.status(200).json({
@@ -1635,6 +1637,7 @@ export class CompanyDbController {
           createdBy: approverId,
           recipientUserIds: notificationRecipientUserIds,
           requiredRecipientUserIds: notificationRecipientUserIds,
+          includeCreatedBy: true,
           isPending: false,
         });
       }
