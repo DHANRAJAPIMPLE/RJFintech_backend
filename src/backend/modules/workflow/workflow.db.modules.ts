@@ -1080,6 +1080,15 @@ export class WorkflowDbController {
     companyId: string,
   ) {
     if (!userId) return [];
+    const activeCompanyUserIds =
+      await WorkflowApproverUtil.filterUsersToActiveCompanyMembers(
+        prisma as any,
+        companyId,
+        [userId],
+      );
+    if (!activeCompanyUserIds.includes(userId)) {
+      return [];
+    }
 
     const [approverRows, initiatedRows] = await Promise.all([
       prisma.workflowApprover.findMany({

@@ -2328,6 +2328,17 @@ export class OrgStructureDbController {
     companyId?: string | null,
   ) {
     if (!userId) return [];
+    if (companyId) {
+      const activeCompanyUserIds =
+        await WorkflowApproverUtil.filterUsersToActiveCompanyMembers(
+          prisma as any,
+          companyId,
+          [userId],
+        );
+      if (!activeCompanyUserIds.includes(userId)) {
+        return [];
+      }
+    }
 
     const approverRows = await prisma.workflowApprover.findMany({
       where: { reqTable, status: 'PENDING' },

@@ -1742,6 +1742,7 @@ export class NotificationService {
     params: {
       companyId: string;
       recipientUserIds: string[];
+      requiredRecipientUserIds?: string[];
       referenceType?: string | null;
       referenceId?: string | null;
     },
@@ -1778,7 +1779,11 @@ export class NotificationService {
     });
 
     const hiddenUserIds = new Set<string>();
+    const requiredRecipientUserIds = new Set(
+      NotificationService.unique(params.requiredRecipientUserIds || []),
+    );
     params.recipientUserIds.forEach((userId) => {
+      if (requiredRecipientUserIds.has(userId)) return;
       const disabledNodeIds = disabledByUser.get(userId);
       if (!disabledNodeIds) return;
       const isHiddenForAllNodes = context.nodeIds.every((nodeId) =>
@@ -2045,10 +2050,17 @@ export class NotificationService {
           requestedRecipients,
         ),
         NotificationService.filterExistingUserIds(
-          normalizedInput.requiredRecipientUserIds || [],
+          NotificationService.mergeRecipientUserIds(
+            normalizedInput.requiredRecipientUserIds || [],
+            normalizedInput.includeCreatedBy === true
+              ? normalizedInput.createdBy
+              : null,
+          ),
         ),
       ]);
     const requiredRecipientSet = new Set(requiredRecipientUserIds);
+    // SAAS admins remain global notification recipients even when they are not
+    // mapped to the target company or eligible to approve its requests.
     const recipientUserIds = NotificationService.unique([
       ...companyRecipientUserIds,
       ...requiredRecipientUserIds,
@@ -2070,6 +2082,7 @@ export class NotificationService {
         await NotificationService.resolveHiddenRecipientUserIds(tx, {
           companyId: normalizedInput.companyId,
           recipientUserIds,
+          requiredRecipientUserIds,
           referenceType: normalizedInput.referenceType,
           referenceId: normalizedInput.referenceId,
         });

@@ -589,6 +589,36 @@ export class WorkflowApproverUtil {
   }
 
   /**
+   * Keeps only users who are actively mapped to the provided company.
+   * This protects runtime approver displays from stale or cross-company IDs.
+   */
+  static async filterUsersToActiveCompanyMembers(
+    tx: TxClient,
+    companyId: string,
+    userIds: string[],
+  ): Promise<string[]> {
+    const normalizedUserIds = this.unique(userIds);
+    if (normalizedUserIds.length === 0) return [];
+
+    const mappings = await (tx as any).userMapping.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        userId: { in: normalizedUserIds },
+      },
+      select: { userId: true },
+    });
+
+    const activeUserIds = new Set<string>(
+      mappings.map((mapping: any) => String(mapping.userId || '').trim()),
+    );
+
+    return normalizedUserIds.filter((userId: string) =>
+      activeUserIds.has(userId),
+    );
+  }
+
+  /**
    * Returns the flat current eligible approver list for a request. The stored
    * workflow_approver rows are authoritative, and already-approved users are
    * removed so callers do not offer an approval action twice.
@@ -741,7 +771,7 @@ export class WorkflowApproverUtil {
    * and users who have already approved this request.
    */
   static async getEnrichedApproverIds(
-    _companyId: string,
+    companyId: string,
     storedApproverIds: string[],
     initiatorId: string | null,
     _subModule: string,
@@ -750,7 +780,13 @@ export class WorkflowApproverUtil {
     const excludedUsers = new Set(approvedUserIds);
     if (initiatorId) excludedUsers.add(initiatorId);
 
-    return this.unique(storedApproverIds).filter(
+    const companyScopedApprovers = await this.filterUsersToActiveCompanyMembers(
+      prisma as any,
+      companyId,
+      storedApproverIds,
+    );
+
+    return companyScopedApprovers.filter(
       (userId) => !excludedUsers.has(userId),
     );
   }

@@ -173,6 +173,25 @@ export class OrgController {
     };
   }
 
+  private static sanitizePendingNewData(newData: unknown) {
+    if (!newData || typeof newData !== 'object' || Array.isArray(newData)) {
+      return newData ?? null;
+    }
+
+    const sanitized = {
+      ...(newData as Record<string, unknown>),
+    };
+
+    delete sanitized.impactSummary;
+    delete sanitized.newNodeName;
+    delete sanitized.nodeName;
+    delete sanitized.nodeType;
+    delete sanitized.status;
+    delete sanitized.parentNode;
+
+    return sanitized;
+  }
+
   static async initiateOrgRequest(
     req: Request & { user?: { id: string; companyId?: string } },
     res: Response<InitiateOrgRequestResponse>,
@@ -540,7 +559,9 @@ export class OrgController {
             type: req.type,
             impact: req.impact ?? null,
             oldData: req.oldData ?? reqData.oldData ?? null,
-            newData: req.newData ?? reqData ?? null,
+            newData: OrgController.sanitizePendingNewData(
+              req.newData ?? reqData ?? null,
+            ),
             newNodeName: reqData.newNodeName ?? reqData.targetNodePath ?? '',
             nodeType: reqData.nodeType ?? null,
             status: reqData.status ?? null,

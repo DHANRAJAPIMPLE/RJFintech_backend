@@ -4314,7 +4314,7 @@ export class UserDbController {
           await UserDbController.formatPendingUsers(
             pendingOnboardingRows,
             companyId,
-            { detail: true },
+            { detail: true, viewerUserId: userId },
           )
         ).filter(
           (pendingUser, index) =>
@@ -5124,6 +5124,17 @@ export class UserDbController {
     companyId?: string | null,
   ) {
     if (!userId) return [];
+    if (companyId) {
+      const activeCompanyUserIds =
+        await WorkflowApproverUtil.filterUsersToActiveCompanyMembers(
+          prisma as any,
+          companyId,
+          [userId],
+        );
+      if (!activeCompanyUserIds.includes(userId)) {
+        return [];
+      }
+    }
 
     const approverRows = await prisma.workflowApprover.findMany({
       where: { reqTable, status: 'PENDING' },
@@ -5868,7 +5879,7 @@ export class UserDbController {
   private static async formatPendingUsers(
     pendingOnboardings: any[],
     resolvedCompanyId: string,
-    options: { detail?: boolean } = {},
+    options: { detail?: boolean; viewerUserId?: string | null } = {},
   ) {
     const detail = options.detail === true;
     const pendingEmails = pendingOnboardings
@@ -5981,13 +5992,20 @@ export class UserDbController {
             select: { id: true, name: true, email: true },
           })
         : [];
+    const eligibleApproverSaasAdminUserIds =
+      await HistoryUserUtil.getSaasAdminUserIds([
+        options.viewerUserId,
+        ...Array.from(allEligibleApproverIds),
+      ]);
     const eligibleApproverMap = new Map(
       eligibleApproverUsers.map((user) => [
         user.id,
-        {
-          name: user.name || 'System',
-          email: user.email || 'system@internal',
-        },
+        HistoryUserUtil.formatAuditUser(
+          user,
+          user.id,
+          eligibleApproverSaasAdminUserIds,
+          options.viewerUserId,
+        ),
       ]),
     );
 
@@ -6125,12 +6143,18 @@ export class UserDbController {
         const pendingLevel = levels.find(
           (level: any) => level.status === 'PENDING',
         );
-        const eligibleApproverIds =
+        const rawEligibleApproverIds =
           pendingLevel && Array.isArray(pendingLevel.approversList)
             ? (pendingLevel.approversList as string[])
             : Array.isArray(onb.eligibleApprovers)
               ? (onb.eligibleApprovers as string[])
               : [];
+        const eligibleApproverIds =
+          await WorkflowApproverUtil.filterUsersToActiveCompanyMembers(
+            prisma as any,
+            resolvedCompanyId,
+            rawEligibleApproverIds,
+          );
         const eligibleapprovers = eligibleApproverIds
           .map((id: string) => eligibleApproverMap.get(id))
           .filter(Boolean);
@@ -6770,7 +6794,7 @@ export class UserDbController {
         const allPendingFormatted = await UserDbController.formatPendingUsers(
           queryMatchedPendingRows,
           resolvedCompanyId,
-          { detail: true },
+          { detail: true, viewerUserId: userId },
         );
         const filteredPendingUsersDetailed = queryMatchedPendingRows
           .map((row: any, index: number) => ({
@@ -7151,7 +7175,7 @@ export class UserDbController {
       const pendingUsers = await UserDbController.formatPendingUsers(
         pendingResult.pendingOnboardings,
         resolvedCompanyId,
-        { detail: true },
+        { detail: true, viewerUserId: userId },
       );
       const fetchedPendingCount =
         listType === 'active' || listType === 'archive'
@@ -7276,7 +7300,7 @@ export class UserDbController {
         const [detail] = await UserDbController.formatPendingUsers(
           [pendingOnboarding],
           resolvedCompanyId,
-          { detail: true },
+          { detail: true, viewerUserId: userId },
         );
 
         return res.status(200).json({
@@ -9814,10 +9838,12 @@ export class UserDbController {
       const eligibleApproverMap = new Map(
         approverDetails.map((u) => [
           u.id,
-          {
-            name: u.name || 'System',
-            email: u.email || 'system@internal',
-          },
+          HistoryUserUtil.formatAuditUser(
+            u,
+            u.id,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
         ]),
       );
       const historyUserMap = new Map(

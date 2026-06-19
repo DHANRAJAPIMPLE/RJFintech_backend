@@ -28,28 +28,6 @@ type NormalizedCompanyListAppliedFilters = {
  * Handles the transition from a pending company request to a live production environment.
  */
 export class CompanyDbController {
-  private static async getActiveSaasAdminUserIds(tx: any): Promise<string[]> {
-    const accesses = await tx.userAccess.findMany({
-      where: {
-        roleCode: 'SAAS_ADMIN',
-        user: {
-          userMappings: {
-            some: { status: 'ACTIVE' },
-          },
-        },
-      },
-      select: { userId: true },
-    });
-
-    return Array.from(
-      new Set(
-        accesses
-          .map((access: any) => String(access.userId || '').trim())
-          .filter(Boolean),
-      ),
-    );
-  }
-
   private static normalizeFilterText(value: unknown) {
     if (typeof value !== 'string') return null;
 
@@ -1525,39 +1503,6 @@ export class CompanyDbController {
           });
         }
 
-        const signatoryUserIds = new Set<string>(
-          createdUserNotifications.map((user) => user.userId),
-        );
-        const saasAdminUserIds: string[] = (
-          await CompanyDbController.getActiveSaasAdminUserIds(tx)
-        ).filter((userId) => !signatoryUserIds.has(userId));
-
-        if (saasAdminUserIds.length > 0) {
-          await tx.userMapping.createMany({
-            data: saasAdminUserIds.map((userId) => ({
-              userId,
-              companyId: newCompany.id,
-              status: 'ACTIVE',
-              designation: '',
-              employeeId: '',
-            })),
-            skipDuplicates: true,
-          });
-
-          await tx.userAccess.createMany({
-            data: saasAdminUserIds.map((userId) => ({
-              userId,
-              roleCode: 'SAAS_ADMIN',
-              nodeId: rootNode.id,
-              accessType: 'PRIMARY',
-              companyId: newCompany.id,
-              isGlobalAccess: true,
-              accessCategory: 'ALL_CHILD',
-            })),
-            skipDuplicates: true,
-          });
-        }
-
         // 6. Finalize request
         await tx.companyOnboarding.update({
           where: { id },
@@ -1591,7 +1536,6 @@ export class CompanyDbController {
         const notificationSettingUserIds: string[] = Array.from(
           new Set([
             ...createdUserNotifications.map((user) => user.userId),
-            ...saasAdminUserIds,
           ]),
         );
 
