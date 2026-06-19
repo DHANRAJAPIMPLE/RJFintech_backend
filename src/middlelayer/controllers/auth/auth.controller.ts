@@ -41,6 +41,15 @@ import type {
 } from './auth.type';
 
 export class AuthController {
+  private static getReporteeCountByCompanyId(
+    managedUsers: Array<{ companyId: string }> = [],
+  ) {
+    return managedUsers.reduce<Record<string, number>>((acc, mapping) => {
+      acc[mapping.companyId] = (acc[mapping.companyId] ?? 0) + 1;
+      return acc;
+    }, {});
+  }
+
   static async register(req: Request, res: Response, next: NextFunction) {
     try {
       const validatedData = zodParse(registerSchema, { body: req.body });
@@ -215,7 +224,13 @@ export class AuthController {
       res.locals.companyId = companyId;
 
       // 9. Response shaping
-      const groups = formatUserGroups(user.userMappings) as AuthUserGroup[];
+      const reporteeCountByCompanyId = AuthController.getReporteeCountByCompanyId(
+        user.managedUsers,
+      );
+      const groups = formatUserGroups(
+        user.userMappings,
+        reporteeCountByCompanyId,
+      ) as AuthUserGroup[];
 
       const response: AuthLoginResponse = {
         message: 'Login successful',
@@ -366,7 +381,13 @@ export class AuthController {
       }
 
       // 2. Format User Groups in Middle Layer
-      const groups = formatUserGroups(user.userMappings) as AuthUserGroup[];
+      const reporteeCountByCompanyId = AuthController.getReporteeCountByCompanyId(
+        user.managedUsers,
+      );
+      const groups = formatUserGroups(
+        user.userMappings,
+        reporteeCountByCompanyId,
+      ) as AuthUserGroup[];
 
       res.locals.userId = user.id;
       res.locals.companyId = user.userMappings?.[0]?.companyId;

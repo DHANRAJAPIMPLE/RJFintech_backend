@@ -2,6 +2,7 @@ export type AuthCompany = {
   legalName: string;
   brandName: string;
   companyCode: string;
+  reporteeCount: number;
 };
 
 export type AuthUserGroup = {
@@ -121,12 +122,17 @@ export type AuthBackendUserMapping = {
   company: AuthBackendCompany;
 };
 
+export type AuthBackendManagedUser = {
+  companyId: string;
+};
+
 export type AuthBackendUser = {
   id: string;
   name: string;
   email: string;
   phone: string;
   password?: string;
+  managedUsers?: AuthBackendManagedUser[];
   userMappings: AuthBackendUserMapping[];
 };
 

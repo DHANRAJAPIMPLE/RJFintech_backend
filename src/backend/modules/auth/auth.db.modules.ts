@@ -26,6 +26,14 @@ export class AuthDbController {
       const user = await prisma.user.findUnique({
         where: whereCondition,
         include: {
+          managedUsers: {
+            where: {
+              status: Status.ACTIVE,
+            },
+            select: {
+              companyId: true,
+            },
+          },
           userMappings: {
             include: {
               company: {
