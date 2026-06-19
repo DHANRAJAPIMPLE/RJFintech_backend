@@ -1441,16 +1441,14 @@ export class OrgStructureDbController {
     for (const source of parentWorkflows) {
       const targetType =
         source.type === 'IMMEDIATE_CHILD' ? 'NODE' : source.type;
-      const duplicate = await tx.workflow.findUnique({
+      const duplicate = await tx.workflow.findFirst({
         where: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
-          companyId_nodeId_module_subModule_levelsHash: {
-            companyId,
-            nodeId: newNode.id,
-            module: source.module,
-            subModule: source.subModule,
-            levelsHash: source.levelsHash,
-          },
+          companyId,
+          nodeId: newNode.id,
+          module: source.module,
+          subModule: source.subModule,
+          levelsHash: source.levelsHash,
+          status: { not: 'ARCHIVE' },
         },
         select: { id: true },
       });

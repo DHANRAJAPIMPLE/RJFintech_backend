@@ -1241,11 +1241,33 @@ export class NotificationService {
         includeAllCompanies,
       );
 
+    if (allowAll) {
+      return prisma.company.findMany({
+        where: {
+          status: 'ACTIVE',
+        },
+        select: {
+          id: true,
+          companyCode: true,
+          legalName: true,
+          brandName: true,
+        },
+        orderBy: {
+          companyCode: 'asc',
+        },
+      }).then((companies) =>
+        companies.map((company) => ({
+          companyId: company.id,
+          company,
+        })),
+      );
+    }
+
     return prisma.userMapping.findMany({
       where: {
         userId,
         status: 'ACTIVE',
-        ...(allowAll ? {} : { companyId }),
+        companyId,
       },
       select: {
         companyId: true,
@@ -1269,6 +1291,31 @@ export class NotificationService {
     companyId: string,
     userId: string,
   ): Promise<NotificationAccessScopeNode[]> {
+    const isSaasAdmin = await NotificationService.canReadAllCompanyNotifications(
+      userId,
+      true,
+    );
+    if (isSaasAdmin) {
+      const nodes = await tx.orgStructure.findMany({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+        },
+        select: {
+          id: true,
+          nodeName: true,
+          nodePath: true,
+        },
+        orderBy: { nodePath: 'asc' },
+      });
+
+      return nodes.map((node: any) => ({
+        ...node,
+        levelCount: getNodeLevelCount(node.nodePath),
+        modules: [...NOTIFICATION_MODULES],
+      }));
+    }
+
     const accesses = await tx.userAccess.findMany({
       where: {
         companyId,
