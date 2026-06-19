@@ -28,6 +28,14 @@ type WorkflowTarget = {
   levelsHash: string;
 };
 
+type WorkflowIdentity = {
+  companyId: string;
+  nodeId: string;
+  module: string;
+  subModule: string;
+  levelsHash: string;
+};
+
 type HistoryChangeCount = {
   added: number;
   modify: number;
@@ -70,6 +78,44 @@ type NormalizedWorkflowListAppliedFilters = {
  * and the retrieval of active workflows and their histories.
  */
 export class WorkflowDbController {
+  private static buildWorkflowIdentityWhere(identity: WorkflowIdentity) {
+    return {
+      companyId: identity.companyId,
+      nodeId: identity.nodeId,
+      module: identity.module,
+      subModule: identity.subModule,
+      levelsHash: identity.levelsHash,
+    };
+  }
+
+  private static async findWorkflowByIdentity(
+    client: any,
+    identity: WorkflowIdentity,
+    options: {
+      excludeWorkflowId?: string;
+      includeArchived?: boolean;
+      select?: Record<string, boolean>;
+      include?: Record<string, any>;
+    } = {},
+  ) {
+    const {
+      excludeWorkflowId,
+      includeArchived = true,
+      select,
+      include,
+    } = options;
+
+    return client.workflow.findFirst({
+      where: {
+        ...WorkflowDbController.buildWorkflowIdentityWhere(identity),
+        ...(includeArchived ? {} : { status: { not: 'ARCHIVE' } }),
+        ...(excludeWorkflowId ? { id: { not: excludeWorkflowId } } : {}),
+      },
+      ...(select ? { select } : {}),
+      ...(include ? { include } : {}),
+    });
+  }
+
   private static normalizeFilterText(value: unknown) {
     if (typeof value !== 'string') return null;
 
@@ -249,7 +295,9 @@ export class WorkflowDbController {
         ? (source.nodeName as Record<string, unknown>)
         : null;
     const nodeNameValues =
-      typeof source.nodeName === 'string' ? [source.nodeName] : nodeName?.values;
+      typeof source.nodeName === 'string'
+        ? [source.nodeName]
+        : nodeName?.values;
     const levels = Array.isArray(source.levels)
       ? source.levels
           .map((level: any) => {
@@ -278,9 +326,8 @@ export class WorkflowDbController {
       ),
     );
     const normalized: NormalizedWorkflowListAppliedFilters = {
-      nodeValues: WorkflowDbController.normalizeAppliedFilterValues(
-        nodeNameValues,
-      ),
+      nodeValues:
+        WorkflowDbController.normalizeAppliedFilterValues(nodeNameValues),
       nodeType: WorkflowDbController.normalizeAppliedFilterValues(
         source.nodeType,
       ),
@@ -601,9 +648,7 @@ export class WorkflowDbController {
     ) {
       return false;
     }
-    if (
-      !WorkflowDbController.matchesWorkflowLevels(levels, alias, filters)
-    ) {
+    if (!WorkflowDbController.matchesWorkflowLevels(levels, alias, filters)) {
       return false;
     }
     if (filters.hasLinkedOrg !== null) {
@@ -688,10 +733,14 @@ export class WorkflowDbController {
       return 'ONBOARDED' as const;
     }
 
-    if (normalizedType === 'UPDATE') return 'Pending Approval - MODIFICATION' as const;
-    if (normalizedType === 'ACTIVE') return 'Pending Approval - ACTIVE' as const;
-    if (normalizedType === 'INACTIVE') return 'Pending Approval - INACTIVE' as const;
-    if (normalizedType === 'ARCHIVE') return 'Pending Approval - ARCHIVED' as const;
+    if (normalizedType === 'UPDATE')
+      return 'Pending Approval - MODIFICATION' as const;
+    if (normalizedType === 'ACTIVE')
+      return 'Pending Approval - ACTIVE' as const;
+    if (normalizedType === 'INACTIVE')
+      return 'Pending Approval - INACTIVE' as const;
+    if (normalizedType === 'ARCHIVE')
+      return 'Pending Approval - ARCHIVED' as const;
 
     return 'Pending Approval - INITIATE' as const;
   }
@@ -1279,7 +1328,8 @@ export class WorkflowDbController {
 
   private static formatWorkflowSummary(row: any) {
     const nodePath = row.orgStructure?.nodePath ?? null;
-    const levelCount = WorkflowDbController.getNodeHierarchyLevelCount(nodePath);
+    const levelCount =
+      WorkflowDbController.getNodeHierarchyLevelCount(nodePath);
     return {
       id: row.id,
       name: row.name,
@@ -2588,19 +2638,20 @@ export class WorkflowDbController {
 
     const generated = [];
     for (const targetNode of targetNodes) {
-      const duplicate = await tx.workflow.findUnique({
-        where: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
-          companyId_nodeId_module_subModule_levelsHash: {
-            companyId,
-            nodeId: targetNode.id,
-            module: sourceWorkflow.module,
-            subModule: sourceWorkflow.subModule,
-            levelsHash: sourceWorkflow.levelsHash,
-          },
+      const duplicate = await WorkflowDbController.findWorkflowByIdentity(
+        tx,
+        {
+          companyId,
+          nodeId: targetNode.id,
+          module: sourceWorkflow.module,
+          subModule: sourceWorkflow.subModule,
+          levelsHash: sourceWorkflow.levelsHash,
         },
-        select: { id: true },
-      });
+        {
+          includeArchived: false,
+          select: { id: true },
+        },
+      );
       if (duplicate) continue;
 
       const levelsPayload = levels.reduce(
@@ -3026,19 +3077,23 @@ export class WorkflowDbController {
       select: { id: true },
     });
     const target = targetNode
-      ? await prisma.workflow.findFirst({
-          where: {
+      ? await WorkflowDbController.findWorkflowByIdentity(
+          prisma,
+          {
             companyId,
             nodeId: targetNode.id,
             module: requestedTarget.module,
             subModule: requestedTarget.subModule,
             levelsHash: requestedTarget.levelsHash,
           },
-          include: {
-            orgStructure: true,
-            levels: { orderBy: { level: 'asc' } },
+          {
+            includeArchived: false,
+            include: {
+              orgStructure: true,
+              levels: { orderBy: { level: 'asc' } },
+            },
           },
-        })
+        )
       : null;
 
     if (!target) {
@@ -3143,21 +3198,26 @@ export class WorkflowDbController {
 
     const changeData = buildJsonPatch(currentData, newData);
 
-    const duplicateActive = await prisma.workflow.findUnique({
-      where: {
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
-        companyId_nodeId_module_subModule_levelsHash: {
-          companyId,
-          nodeId: proposedNode.id,
-          module: newData.module,
-          subModule: newData.subModule,
-          levelsHash: newData.levelsHash,
-        },
+    const duplicateWorkflow = await WorkflowDbController.findWorkflowByIdentity(
+      prisma,
+      {
+        companyId,
+        nodeId: proposedNode.id,
+        module: newData.module,
+        subModule: newData.subModule,
+        levelsHash: newData.levelsHash,
       },
-      select: { id: true, name: true },
-    });
-    if (duplicateActive && duplicateActive.id !== target.id) {
-      throw new AppError(`Already active: "${duplicateActive.name}"`, 409);
+      {
+        includeArchived: false,
+        excludeWorkflowId: target.id,
+        select: { id: true, name: true, status: true },
+      },
+    );
+    if (duplicateWorkflow) {
+      throw new AppError(
+        `Workflow "${duplicateWorkflow.name}" already exists with status ${duplicateWorkflow.status}. Please modify the existing workflow instead of creating a duplicate.`,
+        409,
+      );
     }
 
     const duplicatePending = await prisma.workflowReq.findFirst({
@@ -3358,19 +3418,23 @@ export class WorkflowDbController {
       select: { id: true },
     });
     const target = originalNode
-      ? await tx.workflow.findFirst({
-          where: {
+      ? await WorkflowDbController.findWorkflowByIdentity(
+          tx,
+          {
             companyId: request.companyId,
             nodeId: originalNode.id,
             module: requestedTarget.module,
             subModule: requestedTarget.subModule,
             levelsHash: requestedTarget.levelsHash,
           },
-          include: {
-            levels: { orderBy: { level: 'asc' } },
-            orgStructure: { select: { nodePath: true } },
+          {
+            includeArchived: false,
+            include: {
+              levels: { orderBy: { level: 'asc' } },
+              orgStructure: { select: { nodePath: true } },
+            },
           },
-        })
+        )
       : null;
     if (!target) {
       throw new AppError('Target workflow no longer exists', 409);
@@ -3493,21 +3557,27 @@ export class WorkflowDbController {
         throw new AppError('Workflow level hash is invalid', 409);
       }
 
-      const duplicateActive = await tx.workflow.findUnique({
-        where: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
-          companyId_nodeId_module_subModule_levelsHash: {
+      const duplicateWorkflow =
+        await WorkflowDbController.findWorkflowByIdentity(
+          tx,
+          {
             companyId: request.companyId,
             nodeId: node.id,
             module: nextData.module,
             subModule: nextData.subModule,
             levelsHash: calculatedHash,
           },
-        },
-        select: { id: true, name: true },
-      });
-      if (duplicateActive && duplicateActive.id !== target.id) {
-        throw new AppError(`Already active: "${duplicateActive.name}"`, 409);
+          {
+            includeArchived: false,
+            excludeWorkflowId: target.id,
+            select: { id: true, name: true, status: true },
+          },
+        );
+      if (duplicateWorkflow) {
+        throw new AppError(
+          `Workflow "${duplicateWorkflow.name}" already exists with status ${duplicateWorkflow.status}. Please modify the existing workflow instead of creating a duplicate.`,
+          409,
+        );
       }
 
       const roleRecord = await tx.roles.findFirst({
@@ -3745,19 +3815,21 @@ export class WorkflowDbController {
       // 2. Block if duplicate exists on the same unique workflow identity.
       // If an inactive record exists, callers must modify/reactivate it instead
       // of creating a brand new INITIATE workflow request.
-      const existingWorkflow = await prisma.workflow.findUnique({
-        where: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
-          companyId_nodeId_module_subModule_levelsHash: {
+      const existingWorkflow =
+        await WorkflowDbController.findWorkflowByIdentity(
+          prisma,
+          {
             companyId: resolvedCompanyId,
             nodeId,
             module,
             subModule,
             levelsHash,
           },
-        },
-        select: { id: true, name: true, status: true },
-      });
+          {
+            includeArchived: false,
+            select: { id: true, name: true, status: true },
+          },
+        );
       if (existingWorkflow?.status === 'ACTIVE') {
         throw new AppError(`Already active: "${existingWorkflow.name}"`, 409);
       }
@@ -3825,19 +3897,17 @@ export class WorkflowDbController {
 
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         if (initiatorId) {
-          const {
-            workflowId: resolvedWorkflowId,
-            currentLevelApprovers,
-          } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
-            levelsHash: parentLevelsHash || null,
-            module: 'SYSTEM_ACCESS',
-            subModule: 'WORK_FLOW',
-            companyId: resolvedCompanyId,
-            nodeId,
-            initiatorId,
-            reqId: request.id,
-            reqTable: 'workflow_req',
-          });
+          const { workflowId: resolvedWorkflowId, currentLevelApprovers } =
+            await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
+              levelsHash: parentLevelsHash || null,
+              module: 'SYSTEM_ACCESS',
+              subModule: 'WORK_FLOW',
+              companyId: resolvedCompanyId,
+              nodeId,
+              initiatorId,
+              reqId: request.id,
+              reqTable: 'workflow_req',
+            });
           notificationRecipients = currentLevelApprovers;
 
           // Keep workflowId for the business workflow; store approval config separately.
@@ -4130,19 +4200,21 @@ export class WorkflowDbController {
           const { companyId, nodeId, module, subModule, levelsHash } = request;
 
           // Block if duplicate exists on the same unique workflow identity.
-          const existingWorkflow = await tx.workflow.findUnique({
-            where: {
-              // eslint-disable-next-line @typescript-eslint/naming-convention -- Prisma compound unique field.
-              companyId_nodeId_module_subModule_levelsHash: {
+          const existingWorkflow =
+            await WorkflowDbController.findWorkflowByIdentity(
+              tx,
+              {
                 companyId,
                 nodeId,
                 module,
                 subModule,
                 levelsHash,
               },
-            },
-            select: { id: true, name: true, status: true },
-          });
+              {
+                includeArchived: false,
+                select: { id: true, name: true, status: true },
+              },
+            );
           if (existingWorkflow?.status === 'ACTIVE') {
             throw new AppError(
               `Already active: "${existingWorkflow.name}"`,
@@ -4364,14 +4436,13 @@ export class WorkflowDbController {
       const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
         request.companyId,
       );
-      const notificationRecipientUserIds =
-        isPartialApproval
-          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
-          : NotificationService.mergeRecipientUserIds(
-              notificationRecipients,
-              requestInitiatorId,
-              requestInitiatorReportingManagerUserIds,
-            );
+      const notificationRecipientUserIds = isPartialApproval
+        ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+        : NotificationService.mergeRecipientUserIds(
+            notificationRecipients,
+            requestInitiatorId,
+            requestInitiatorReportingManagerUserIds,
+          );
       const workflowReferenceName =
         (request.data as any)?.name || request.alias || request.id;
       const workflowNotificationRequestType =
@@ -4382,13 +4453,12 @@ export class WorkflowDbController {
             : request.impact === 'ARCHIVE'
               ? 'ARCHIVE'
               : request.type;
-      const workflowNotificationContent =
-        isPartialApproval
-          ? WorkflowDbController.getWorkflowPendingApprovalNotificationContent(
-              workflowNotificationRequestType,
-              workflowReferenceName,
-            )
-          : requestType !== 'INITIATE' && result?.status
+      const workflowNotificationContent = isPartialApproval
+        ? WorkflowDbController.getWorkflowPendingApprovalNotificationContent(
+            workflowNotificationRequestType,
+            workflowReferenceName,
+          )
+        : requestType !== 'INITIATE' && result?.status
           ? WorkflowDbController.getWorkflowNotificationContent(
               workflowNotificationRequestType,
               result.status === 'REJECTED' ? 'rejected' : 'approved',
@@ -5044,7 +5114,10 @@ export class WorkflowDbController {
           levelStartByLevel.set(level.level, nextStep);
           getSortedApprovedEvents(reqId, level.level).forEach(
             (event: any, index: number) => {
-              approvedEventStepByHistoryId.set(event.historyId, nextStep + index);
+              approvedEventStepByHistoryId.set(
+                event.historyId,
+                nextStep + index,
+              );
             },
           );
           nextStep += getMandatoryApprovalCount(level);
@@ -5055,7 +5128,8 @@ export class WorkflowDbController {
         });
       }
       const getLevelStartStep = (reqId: string, level: number) =>
-        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ?? null;
+        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ??
+        null;
       const getApprovedEventStep = (
         reqId: string,
         level: number,
@@ -7374,10 +7448,7 @@ export class WorkflowDbController {
         const requestData = (req.data as any) || {};
         const target = requestData?.target || {};
         const resolvedNodePath =
-          node?.nodePath ||
-          requestData?.nodePath ||
-          target?.nodePath ||
-          null;
+          node?.nodePath || requestData?.nodePath || target?.nodePath || null;
         const nodeType = node?.nodeType || null;
         const linkedOrgStructure = WorkflowDbController.buildLinkedOrgStructure(
           allOrgNodes,

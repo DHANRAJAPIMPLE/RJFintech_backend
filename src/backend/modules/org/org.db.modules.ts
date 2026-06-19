@@ -293,11 +293,14 @@ export class OrgStructureDbController {
     const rightIdentity =
       OrgStructureDbController.buildOrgHistoryNodeIdentity(right);
 
-    if (
-      leftIdentity.nodePath &&
-      rightIdentity.nodePath &&
-      leftIdentity.nodePath === rightIdentity.nodePath
-    ) {
+    if (leftIdentity.nodePath || rightIdentity.nodePath) {
+      if (
+        !leftIdentity.nodePath ||
+        !rightIdentity.nodePath ||
+        leftIdentity.nodePath !== rightIdentity.nodePath
+      ) {
+        return false;
+      }
       if (
         leftIdentity.nodeType &&
         rightIdentity.nodeType &&
@@ -4376,18 +4379,27 @@ export class OrgStructureDbController {
         if (!data) return false;
         const identity =
           OrgStructureDbController.buildOrgHistoryNodeIdentity(data);
+        const exactCandidatePaths = [
+          data?.targetNodePath,
+          data?.currentData?.nodePath,
+          data?.nodePath,
+          identity.nodePath,
+        ].filter((value): value is string => typeof value === 'string');
+        const resolvedRequestedNodePath =
+          OrgStructureDbController.resolveRequestedNodePath(data);
         const derivedNodePath =
           typeof data?.parentNode?.nodePath === 'string' &&
           typeof data?.newNodeName === 'string'
             ? `${data.parentNode.nodePath}.${OrgStructureDbController.pathSegment(data.newNodeName)}`
             : null;
-        const candidatePaths = [
-          data?.targetNodePath,
-          data?.currentData?.nodePath,
-          data?.nodePath,
-          identity.nodePath,
-          derivedNodePath,
-        ].filter((value): value is string => typeof value === 'string');
+        const candidatePaths =
+          typeof nodePath === 'string' && nodePath.length > 0
+            ? exactCandidatePaths
+            : [
+                ...exactCandidatePaths,
+                resolvedRequestedNodePath,
+                derivedNodePath,
+              ].filter((value): value is string => typeof value === 'string');
         const matchedOrgNode = candidatePaths
           .map((path) => orgNodeByPath.get(path))
           .find(Boolean);
@@ -4414,15 +4426,17 @@ export class OrgStructureDbController {
           .map((p) => p.split('.').pop()?.toLowerCase())
           .filter((value): value is string => Boolean(value));
         const allCandidateNames = [...candidateNodeNames, ...extractedNames];
-        const nodeNameMatches = normalizedNodeName
-          ? allCandidateNames.includes(normalizedNodeName)
-          : true;
+        const nodeNameMatches =
+          typeof nodePath === 'string' && nodePath.length > 0
+            ? true
+            : normalizedNodeName
+              ? allCandidateNames.includes(normalizedNodeName)
+              : true;
         const nodePathMatches =
           typeof nodePath === 'string' && nodePath.length > 0
             ? hasPathSignals
-              ? candidatePaths.some((path) => path === nodePath) ||
-                (selectedNodeType === 'ROOT' && parentNodePath === nodePath)
-              : nodeNameMatches
+              ? candidatePaths.some((path) => path === nodePath)
+              : false
             : true;
         const nodeTypeMatches = selectedNodeType
           ? candidateNodeType === selectedNodeType

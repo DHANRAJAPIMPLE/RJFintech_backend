@@ -412,7 +412,8 @@ model Workflow {
   orgStructure      OrgStructure    @relation(fields: [nodeId], references: [id])
   levels            WorkflowLevel[]
 
-  @@unique([companyId, nodeId, module, subModule, levelsHash])
+  // Partial unique index for non-archived workflows is managed in SQL migration.
+  @@index([companyId, nodeId, module, subModule, levelsHash])
   @@index([nodeId])
   @@index([companyId])
   @@index([roleCode])
