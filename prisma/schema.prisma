@@ -639,6 +639,7 @@ enum ApproverType {
   REPORTING_MANAGER
   NODE_APPROVER
   HIERARCHY_APPROVER
+  NO_APPROVER
 }
 
 enum ApprovalType {

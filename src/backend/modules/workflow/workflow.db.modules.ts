@@ -205,6 +205,13 @@ export class WorkflowDbController {
     if (upper === 'GLOBAL_APPROVER') {
       return 'GLOBAL_APPROVER';
     }
+    if (
+      upper === 'NO_APPROVER' ||
+      upper === 'NOAPPROVER' ||
+      upper === 'NO_APPROVAL'
+    ) {
+      return 'NO_APPROVER';
+    }
 
     return upper;
   }
@@ -1430,10 +1437,283 @@ export class WorkflowDbController {
       if (!level) continue;
       totalLevels++;
       const current = level as any;
+      if (current.approver1 === 'NO_APPROVER') {
+        continue;
+      }
       totalApprovers += current.approver2 && current.type === 'AND' ? 2 : 1;
     }
 
     return `1M_${totalApprovers}C_${totalLevels}`;
+  }
+
+  private static isNoApproverLevel(level: any) {
+    return Boolean(level) && level.approver1 === 'NO_APPROVER' && !level.approver2;
+  }
+
+  private static isNoApproverWorkflow(levels: any) {
+    const configuredLevels = Object.values(levels || {}).filter(Boolean) as any[];
+    return (
+      configuredLevels.length > 0 &&
+      configuredLevels.every((level) =>
+        WorkflowDbController.isNoApproverLevel(level),
+      )
+    );
+  }
+
+  private static doesAccessCoverNode(
+    access: {
+      isGlobalAccess?: boolean | null;
+      accessCategory?: string | null;
+      orgStructure?: { nodePath?: string | null } | null;
+    },
+    targetNodePath: string,
+  ) {
+    if (access.isGlobalAccess) return true;
+
+    const accessNodePath =
+      typeof access.orgStructure?.nodePath === 'string'
+        ? access.orgStructure.nodePath.trim()
+        : '';
+    if (!accessNodePath) return false;
+
+    const normalizedCategory = String(access.accessCategory || 'NODE')
+      .trim()
+      .toUpperCase();
+
+    if (targetNodePath === accessNodePath) return true;
+    if (normalizedCategory === 'ALL_CHILD') {
+      return targetNodePath.startsWith(`${accessNodePath}.`);
+    }
+    if (normalizedCategory === 'IMMEDIATE_CHILD') {
+      const parentPath = targetNodePath.split('.').slice(0, -1).join('.');
+      return parentPath === accessNodePath;
+    }
+
+    return false;
+  }
+
+  private static async getNodeAccessNotificationRecipientIds(
+    companyId: string,
+    nodePaths: string[],
+  ) {
+    const normalizedNodePaths = Array.from(
+      new Set(
+        nodePaths
+          .map((nodePath) =>
+            typeof nodePath === 'string' ? nodePath.trim() : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+
+    if (normalizedNodePaths.length === 0) return [];
+
+    const mappedUsers = await prisma.userMapping.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+      },
+      select: { userId: true },
+    });
+    const mappedUserIds = Array.from(
+      new Set(
+        mappedUsers
+          .map((mapping) => String(mapping.userId || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (mappedUserIds.length === 0) return [];
+
+    const userAccesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        userId: { in: mappedUserIds },
+      },
+      include: {
+        role: {
+          select: { isActive: true },
+        },
+        orgStructure: {
+          select: {
+            nodePath: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    return Array.from(
+      new Set(
+        userAccesses
+          .filter((access) => {
+            if (access.role?.isActive === false) return false;
+            if (!access.isGlobalAccess && access.orgStructure?.status !== 'ACTIVE') {
+              return false;
+            }
+
+            return normalizedNodePaths.some((nodePath) =>
+              WorkflowDbController.doesAccessCoverNode(access, nodePath),
+            );
+          })
+          .map((access) => access.userId),
+      ),
+    );
+  }
+
+  private static async finalizeApprovedInitiation(
+    tx: any,
+    request: any,
+    approverId: string,
+    remark?: string | null,
+  ) {
+    const { companyId, nodeId, module, subModule, levelsHash } = request;
+
+    const existingWorkflow = await WorkflowDbController.findWorkflowByIdentity(
+      tx,
+      {
+        companyId,
+        nodeId,
+        module,
+        subModule,
+        levelsHash,
+      },
+      {
+        includeArchived: false,
+        select: { id: true, name: true, status: true },
+      },
+    );
+    if (existingWorkflow?.status === 'ACTIVE') {
+      throw new AppError(`Already active: "${existingWorkflow.name}"`, 409);
+    }
+    if (existingWorkflow) {
+      throw new AppError(
+        `Workflow "${existingWorkflow.name}" already exists with status ${existingWorkflow.status}. Please modify the existing workflow instead of initiating a new one.`,
+        409,
+      );
+    }
+
+    const alreadyPending = await tx.workflowReq.findFirst({
+      where: {
+        companyId,
+        nodeId,
+        module,
+        subModule,
+        levelsHash,
+        alias: request.alias || undefined,
+        status: 'PENDING',
+        id: { not: request.id },
+      },
+    });
+    if (alreadyPending) {
+      throw new AppError(
+        `Already pending: "${WorkflowDbController.getWorkflowRequestDisplayName(alreadyPending)}"`,
+        409,
+      );
+    }
+
+    const reqData = (request.data as any) || {};
+    const reqTarget = reqData?.target || {};
+    const name = reqData?.name || reqTarget?.name || request.alias || 'Workflow';
+    const reqModule = reqData?.module || reqTarget?.module || request.module;
+    const reqSubModule =
+      reqData?.subModule || reqTarget?.subModule || request.subModule;
+    const nodePath = reqData?.nodePath || reqTarget?.nodePath;
+    const levels = reqData?.levels;
+    const workflowType = WorkflowDbController.normalizeWorkflowType(
+      reqData?.workflowType,
+    );
+
+    if (!reqModule || !reqSubModule) {
+      throw new AppError(
+        'Workflow request is missing module or sub-module details',
+        400,
+      );
+    }
+
+    const nodeRecord = await tx.orgStructure.findFirst({
+      where: {
+        companyId: request.companyId,
+        ...(request.nodeId ? { id: request.nodeId } : nodePath ? { nodePath } : {}),
+      },
+    });
+
+    if (!nodeRecord) {
+      if (!nodePath && !request.nodeId) {
+        throw new AppError(
+          'Workflow request is missing target node information',
+          400,
+        );
+      }
+      throw new AppError(`Node path '${nodePath || request.nodeId}' not found`, 404);
+    }
+
+    const roleRecord = await tx.roles.findFirst({
+      where: {
+        category: reqModule,
+        subCategory: reqSubModule,
+        permissionLevel: 'MANAGER',
+      },
+    });
+
+    const workflow = await tx.workflow.create({
+      data: {
+        name,
+        alias: request.alias,
+        module: reqModule,
+        subModule: reqSubModule,
+        roleCode: roleRecord?.roleCode || null,
+        companyId: request.companyId,
+        nodeId: nodeRecord.id,
+        type: workflowType,
+        levelsHash: request.levelsHash,
+        workflowReqIds: [request.id],
+      },
+    });
+
+    const levelData = [];
+    if (levels) {
+      for (const [key, level] of Object.entries(levels)) {
+        if (!level) continue;
+        const resolved = level as any;
+        levelData.push({
+          workflowId: workflow.id,
+          level: parseInt(key.replace('l', ''), 10),
+          approver1: resolved.approver1,
+          approver2: resolved.approver2 || null,
+          approverType: resolved.type || 'OR',
+        });
+      }
+    }
+    if (levelData.length > 0) {
+      await tx.workflowLevel.createMany({ data: levelData });
+    }
+
+    await tx.workflowReq.update({
+      where: { id: request.id },
+      data: {
+        workflowId: workflow.id,
+      },
+    });
+
+    const updated = await tx.workflowReq.update({
+      where: { id: request.id },
+      data: {
+        status: 'APPROVED',
+        approvalRemark: remark || null,
+      },
+    });
+
+    const autoGeneratedWorkflowNotifications =
+      await WorkflowDbController.autoGenerateExistingChildWorkflows(tx, {
+        companyId: request.companyId,
+        sourceWorkflow: workflow,
+        sourceNode: nodeRecord,
+        levels: levelData,
+        actorId: approverId,
+        sourceWorkflowReqId: request.id,
+      });
+
+    return { updated, autoGeneratedWorkflowNotifications };
   }
 
   private static toLevelsPayload(levels: any[]) {
@@ -3288,11 +3568,6 @@ export class WorkflowDbController {
           reqTable: 'workflow_req',
         },
       );
-      notificationRecipients = approval.currentLevelApprovers;
-      const requestWithApprovalWorkflow = await tx.workflowReq.update({
-        where: { id: created.id },
-        data: { approvalWorkflowId: approval.workflowId },
-      });
       await tx.workflowReqHistory.create({
         data: {
           workflowReqId: created.id,
@@ -3302,13 +3577,45 @@ export class WorkflowDbController {
           remarks: remarks || null,
         },
       });
-      return requestWithApprovalWorkflow;
+      if (approval.autoApprove) {
+        notificationRecipients = [];
+        await WorkflowDbController.applyApprovedModification(
+          tx,
+          created,
+          'Auto-approved: selected workflow has NO_APPROVER',
+          initiatorId,
+        );
+        await tx.workflowReqHistory.create({
+          data: {
+            workflowReqId: created.id,
+            companyId,
+            event: 'APPROVED',
+            eventUserId: initiatorId,
+            remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+          },
+        });
+        return await tx.workflowReq.update({
+          where: { id: created.id },
+          data: {
+            approvalWorkflowId: approval.workflowId,
+            status: 'APPROVED',
+            approvalRemark: 'Auto-approved: selected workflow has NO_APPROVER',
+          },
+        });
+      }
+
+      notificationRecipients = approval.currentLevelApprovers;
+      return await tx.workflowReq.update({
+        where: { id: created.id },
+        data: { approvalWorkflowId: approval.workflowId },
+      });
     });
 
+    const isAutoApproved = request?.status === 'APPROVED';
     const modificationNotification =
       WorkflowDbController.getWorkflowNotificationContent(
         type,
-        'initiated',
+        isAutoApproved ? 'approved' : 'initiated',
         newData.name,
       );
     const initiatorReportingManagerUserIds =
@@ -3319,7 +3626,10 @@ export class WorkflowDbController {
       );
     await NotificationService.createRequestNotification({
       companyId,
-      type: WorkflowDbController.getWorkflowNotificationType(type, 'PENDING'),
+      type: WorkflowDbController.getWorkflowNotificationType(
+        type,
+        isAutoApproved ? 'APPROVED' : 'PENDING',
+      ),
       name: modificationNotification.name,
       message: modificationNotification.message,
       referenceType: 'WORKFLOW',
@@ -3332,6 +3642,7 @@ export class WorkflowDbController {
         await NotificationService.getCorpAdminUserIds(companyId),
       ),
       includeCreatedBy: true,
+      isPending: isAutoApproved ? false : undefined,
     });
 
     return request;
@@ -3811,6 +4122,8 @@ export class WorkflowDbController {
       const nodeId = node.id;
       const levelsHash = WorkflowDbController.buildLevelsHash(levels);
       const generatedAlias = WorkflowDbController.buildAlias(levels);
+      const autoApproveOnCreate =
+        WorkflowDbController.isNoApproverWorkflow(levels);
 
       // 2. Block if duplicate exists on the same unique workflow identity.
       // If an inactive record exists, callers must modify/reactivate it instead
@@ -3895,6 +4208,39 @@ export class WorkflowDbController {
           include: { company: true },
         });
 
+        // Record the initiation in history for auditing
+        await tx.workflowReqHistory.create({
+          data: {
+            workflowReqId: request.id,
+            companyId: resolvedCompanyId,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+          },
+        });
+
+        if (autoApproveOnCreate) {
+          notificationRecipients = [];
+          const { updated } = await WorkflowDbController.finalizeApprovedInitiation(
+            tx,
+            request,
+            initiatorId,
+            'Auto-approved: workflow configured with NO_APPROVER',
+          );
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: request.id,
+              companyId: resolvedCompanyId,
+              event: 'APPROVED',
+              eventUserId: initiatorId,
+              remarks: 'Auto-approved: workflow configured with NO_APPROVER',
+            },
+          });
+          return {
+            ...updated,
+            company: request.company,
+          };
+        }
+
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         if (initiatorId) {
           const { workflowId: resolvedWorkflowId, currentLevelApprovers } =
@@ -3917,16 +4263,6 @@ export class WorkflowDbController {
           });
         }
 
-        // Record the initiation in history for auditing
-        await tx.workflowReqHistory.create({
-          data: {
-            workflowReqId: request.id,
-            companyId: resolvedCompanyId,
-            event: 'INITIATE',
-            eventUserId: initiatorId,
-          },
-        });
-
         return request;
       });
 
@@ -3936,9 +4272,21 @@ export class WorkflowDbController {
           initiatorId,
           'WORK_FLOW',
         );
+      const nodeAccessRecipientUserIds = autoApproveOnCreate
+        ? await WorkflowDbController.getNodeAccessNotificationRecipientIds(
+            resolvedCompanyId,
+            [nodePath],
+          )
+        : [];
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
-        type: 'INITIATE',
+        type: autoApproveOnCreate ? 'ONBOARDED' : 'INITIATE',
+        ...(autoApproveOnCreate
+          ? {
+              name: 'Workflow onboarded',
+              message: `Workflow was onboarded for ${workflowData?.name || generatedAlias}`,
+            }
+          : {}),
         referenceType: 'WORKFLOW',
         referenceId: result.id,
         referenceName: workflowData?.name,
@@ -3946,9 +4294,11 @@ export class WorkflowDbController {
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipients,
           initiatorReportingManagerUserIds,
+          nodeAccessRecipientUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
         includeCreatedBy: true,
+        isPending: autoApproveOnCreate ? false : undefined,
       });
 
       res.status(201).json(result);
@@ -4197,194 +4547,17 @@ export class WorkflowDbController {
           }
 
           // ── DUPLICATE CHECKS (only for full approval) ──────────────────
-          const { companyId, nodeId, module, subModule, levelsHash } = request;
-
-          // Block if duplicate exists on the same unique workflow identity.
-          const existingWorkflow =
-            await WorkflowDbController.findWorkflowByIdentity(
+          const finalized =
+            await WorkflowDbController.finalizeApprovedInitiation(
               tx,
-              {
-                companyId,
-                nodeId,
-                module,
-                subModule,
-                levelsHash,
-              },
-              {
-                includeArchived: false,
-                select: { id: true, name: true, status: true },
-              },
+              request,
+              approverId,
+              remark,
             );
-          if (existingWorkflow?.status === 'ACTIVE') {
-            throw new AppError(
-              `Already active: "${existingWorkflow.name}"`,
-              409,
-            );
-          }
-          if (existingWorkflow) {
-            throw new AppError(
-              `Workflow "${existingWorkflow.name}" already exists with status ${existingWorkflow.status}. Please modify the existing workflow instead of initiating a new one.`,
-              409,
-            );
-          }
-
-          // Block if OTHER PENDING duplicates exist
-          const alreadyPending = await tx.workflowReq.findFirst({
-            where: {
-              companyId,
-              nodeId,
-              module,
-              subModule,
-              levelsHash,
-              alias: request.alias || undefined,
-              status: 'PENDING',
-              id: { not: id },
-            },
-          });
-          if (alreadyPending) {
-            throw new AppError(
-              `Already pending: "${WorkflowDbController.getWorkflowRequestDisplayName(alreadyPending)}"`,
-              409,
-            );
-          }
-
-          // ── All levels approved — proceed with production workflow creation ──
-          const reqData = (request.data as any) || {};
-          const reqTarget = reqData?.target || {};
-          const name =
-            reqData?.name || reqTarget?.name || request.alias || 'Workflow';
-          const reqModule =
-            reqData?.module || reqTarget?.module || request.module;
-          const reqSubModule =
-            reqData?.subModule || reqTarget?.subModule || request.subModule;
-          const nodePath = reqData?.nodePath || reqTarget?.nodePath;
-          const levels = reqData?.levels;
-          const workflowType = WorkflowDbController.normalizeWorkflowType(
-            reqData?.workflowType,
-          );
-
-          if (!reqModule || !reqSubModule) {
-            throw new AppError(
-              'Workflow request is missing module or sub-module details',
-              400,
-            );
-          }
-
-          // 1. Resolve the organizational node from the path
-          const nodeRecord = await tx.orgStructure.findFirst({
-            where: {
-              companyId: request.companyId,
-              ...(request.nodeId
-                ? { id: request.nodeId }
-                : nodePath
-                  ? { nodePath }
-                  : {}),
-            },
-          });
-
-          if (!nodeRecord) {
-            if (!nodePath && !request.nodeId) {
-              throw new AppError(
-                'Workflow request is missing target node information',
-                400,
-              );
-            }
-            throw new AppError(
-              `Node path '${nodePath || request.nodeId}' not found`,
-              404,
-            );
-          }
-
-          // Fetch the corresponding roleCode for the module and subModule
-          const roleRecord = await tx.roles.findFirst({
-            where: {
-              category: reqModule,
-              subCategory: reqSubModule,
-              permissionLevel: 'MANAGER',
-            },
-          });
-
-          // 2. Generate Workflow Alias: 1M_{TotalApprovers}C_{TotalLevels}
-          let totalApprovers = 0;
-          let totalLevels = 0;
-          if (levels) {
-            for (const level of Object.values(levels)) {
-              if (level) {
-                totalLevels++;
-                const l = level as any;
-                if (l.approver2 && l.type === 'AND') {
-                  totalApprovers += 2;
-                } else {
-                  totalApprovers += 1;
-                }
-              }
-            }
-          }
-          const generatedAlias = `1M_${totalApprovers}C_${totalLevels}`;
-
-          // 3. Create the production Workflow record
-          const workflow = await tx.workflow.create({
-            data: {
-              name,
-              alias: generatedAlias,
-              module: reqModule,
-              subModule: reqSubModule,
-              roleCode: roleRecord?.roleCode || null,
-              companyId: request.companyId,
-              nodeId: nodeRecord.id,
-              type: workflowType,
-              levelsHash: request.levelsHash,
-              workflowReqIds: [id],
-            },
-          });
-
-          // 4. Create the specific Approval Levels for this workflow
-          const levelData = [];
-          if (levels) {
-            for (const [key, level] of Object.entries(levels)) {
-              if (level) {
-                const l = level as any;
-                levelData.push({
-                  workflowId: workflow.id,
-                  level: parseInt(key.replace('l', '')),
-                  approver1: l.approver1,
-                  approver2: l.approver2 || null,
-                  approverType: l.type || 'OR',
-                });
-              }
-            }
-          }
-          if (levelData.length > 0) {
-            await tx.workflowLevel.createMany({ data: levelData });
-          }
-
-          await tx.workflowReq.update({
-            where: { id },
-            data: {
-              workflowId: workflow.id,
-            },
-          });
-
-          // 5. Finalize the request status
-          const updated = await tx.workflowReq.update({
-            where: { id },
-            data: {
-              status: 'APPROVED',
-              approvalRemark: remark,
-            },
-          });
-
           autoGeneratedWorkflowNotifications =
-            await WorkflowDbController.autoGenerateExistingChildWorkflows(tx, {
-              companyId: request.companyId,
-              sourceWorkflow: workflow,
-              sourceNode: nodeRecord,
-              levels: levelData,
-              actorId: approverId,
-              sourceWorkflowReqId: id,
-            });
+            finalized.autoGeneratedWorkflowNotifications;
 
-          return { ...updated, status: 'APPROVED' };
+          return { ...finalized.updated, status: 'APPROVED' };
         }
 
         throw new Error('Invalid status');
@@ -4443,6 +4616,17 @@ export class WorkflowDbController {
             requestInitiatorId,
             requestInitiatorReportingManagerUserIds,
           );
+      const approvedNodeRecipientUserIds =
+        result?.status === 'APPROVED' && requestType === 'INITIATE'
+          ? await WorkflowDbController.getNodeAccessNotificationRecipientIds(
+              request.companyId,
+              [
+                (request.data as any)?.nodePath ||
+                  (request.data as any)?.target?.nodePath ||
+                  '',
+              ],
+            )
+          : [];
       const workflowReferenceName =
         (request.data as any)?.name || request.alias || request.id;
       const workflowNotificationRequestType =
@@ -4479,6 +4663,7 @@ export class WorkflowDbController {
         createdBy: approverId,
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipientUserIds,
+          approvedNodeRecipientUserIds,
           ...(isPartialApproval ? [] : [corpAdminUserIds]),
         ),
         requiredRecipientUserIds: isPartialApproval

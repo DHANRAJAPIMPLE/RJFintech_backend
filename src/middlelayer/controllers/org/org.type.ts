@@ -11,6 +11,7 @@ export type OrgNodeStatus = 'ACTIVE' | 'INACTIVE' | 'ARCHIVE';
 export type OrgImpactUserAccessItem = {
   name: string;
   email: string | null;
+  access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
 };
 
 export type OrgImpactWorkflowItem = {

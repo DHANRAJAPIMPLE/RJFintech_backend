@@ -27,6 +27,7 @@ type OrgInactivationNotification = {
   users: Array<{
     name: string;
     email: string | null;
+    access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
   }>;
   workflowCount: number;
   workflowNames: string[];
@@ -40,6 +41,7 @@ type OrgImpactSummary = {
   userAccess: Array<{
     name: string;
     email: string | null;
+    access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
   }>;
   workflow: Array<{
     workflowName: string;
@@ -962,6 +964,7 @@ export class OrgStructureDbController {
     userAccess: Array<{
       name: string;
       email: string | null;
+      access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
     }>,
     workflow: Array<{
       workflowName: string;
@@ -984,12 +987,15 @@ export class OrgStructureDbController {
                 return { name: entry.trim(), email: null };
               }
               if (typeof entry?.name === 'string' && entry.name.trim()) {
+                const normalizedAccess =
+                  OrgStructureDbController.normalizeImpactAccess(entry?.access);
                 return {
                   name: entry.name.trim(),
                   email:
                     typeof entry?.email === 'string' && entry.email.trim()
                       ? entry.email.trim()
                       : null,
+                  ...(normalizedAccess ? { access: normalizedAccess } : {}),
                 };
               }
               return null;
@@ -1021,6 +1027,197 @@ export class OrgStructureDbController {
     };
   }
 
+  private static normalizeImpactAccess(access: any) {
+    if (!access || typeof access !== 'object') return null;
+
+    const normalized: Partial<Record<'user' | 'workflow' | 'org', string[]>> =
+      {};
+
+    for (const moduleName of ['user', 'workflow', 'org'] as const) {
+      const values = Array.isArray(access?.[moduleName])
+        ? access[moduleName]
+            .map((value: any) =>
+              typeof value === 'string' ? value.trim().toLowerCase() : '',
+            )
+            .filter(Boolean)
+        : [];
+      const uniqueValues = OrgStructureDbController.sortImpactAccessLevels(
+        Array.from(new Set(values)),
+      );
+      if (uniqueValues.length > 0) {
+        normalized[moduleName] = uniqueValues;
+      }
+    }
+
+    return Object.keys(normalized).length > 0 ? normalized : null;
+  }
+
+  private static sortImpactAccessLevels(levels: string[]) {
+    const order = new Map<string, number>([
+      ['maker', 0],
+      ['checker', 1],
+      ['viewer', 2],
+    ]);
+
+    return [...levels].sort((left, right) => {
+      const leftOrder = order.get(left) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = order.get(right) ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return left.localeCompare(right);
+    });
+  }
+
+  private static mapImpactAccessModule(subCategory: string | null | undefined) {
+    const normalized = String(subCategory || '').trim().toUpperCase();
+    if (normalized === 'USER_ACC') return 'user' as const;
+    if (normalized === 'WORK_FLOW') return 'workflow' as const;
+    if (normalized === 'ORG_STR') return 'org' as const;
+    return null;
+  }
+
+  private static resolveImpactAccessLevel(access: any) {
+    const permissionLevel = String(
+      access?.role?.permissionLevel ?? '',
+    ).toUpperCase();
+    const canView = Boolean(access?.role?.view);
+    const canModify = Boolean(access?.role?.modify);
+    const canApprove = Boolean(access?.role?.approve);
+    const canInitiate = Boolean(access?.role?.initiate);
+
+    if (
+      permissionLevel === 'MANAGER' ||
+      (canApprove && !canModify && !canInitiate)
+    ) {
+      return 'checker' as const;
+    }
+
+    if (
+      permissionLevel === 'VIEWER' ||
+      (canView && !canModify && !canApprove && !canInitiate)
+    ) {
+      return 'viewer' as const;
+    }
+
+    if (
+      permissionLevel === 'USER' ||
+      ((canInitiate || canModify) && !canApprove)
+    ) {
+      return 'maker' as const;
+    }
+
+    return null;
+  }
+
+  private static buildImpactUsersFromAccessRows(
+    accessRows: Array<{
+      user?: { name?: string | null; email?: string | null } | null;
+      role?: {
+        subCategory?: string | null;
+        permissionLevel?: string | null;
+        view?: boolean | null;
+        modify?: boolean | null;
+        approve?: boolean | null;
+        initiate?: boolean | null;
+      } | null;
+    }>,
+  ) {
+    const groupedUsers = accessRows.reduce(
+      (
+        map: Map<
+          string,
+          {
+            name: string;
+            email: string | null;
+            access: {
+              user: Set<string>;
+              workflow: Set<string>;
+              org: Set<string>;
+            };
+          }
+        >,
+        row,
+      ) => {
+        const name =
+          typeof row.user?.name === 'string' ? row.user.name.trim() : '';
+        if (!name) return map;
+
+        const email =
+          typeof row.user?.email === 'string' && row.user.email.trim()
+            ? row.user.email.trim()
+            : null;
+        const key = `${name.toLowerCase()}::${(email || '').toLowerCase()}`;
+        const current = map.get(key) || {
+          name,
+          email,
+          access: {
+            user: new Set<string>(),
+            workflow: new Set<string>(),
+            org: new Set<string>(),
+          },
+        };
+
+        const moduleName = OrgStructureDbController.mapImpactAccessModule(
+          row.role?.subCategory,
+        );
+        const accessLevel =
+          OrgStructureDbController.resolveImpactAccessLevel(row);
+
+        if (moduleName && accessLevel) {
+          current.access[moduleName].add(accessLevel);
+        }
+
+        map.set(key, current);
+        return map;
+      },
+      new Map<
+        string,
+        {
+          name: string;
+          email: string | null;
+          access: {
+            user: Set<string>;
+            workflow: Set<string>;
+            org: Set<string>;
+          };
+        }
+      >(),
+    );
+
+    return Array.from(groupedUsers.values())
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((user) => {
+        const access = {
+          user: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.user),
+          ),
+          workflow: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.workflow),
+          ),
+          org: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.org),
+          ),
+        };
+
+        return {
+          name: user.name,
+          email: user.email,
+          ...(access.user.length > 0 ||
+          access.workflow.length > 0 ||
+          access.org.length > 0
+            ? {
+                access: {
+                  ...(access.user.length > 0 ? { user: access.user } : {}),
+                  ...(access.workflow.length > 0
+                    ? { workflow: access.workflow }
+                    : {}),
+                  ...(access.org.length > 0 ? { org: access.org } : {}),
+                },
+              }
+            : {}),
+        };
+      });
+  }
+
   private static async resolveImpactSummary(
     client: any,
     companyId: string,
@@ -1028,12 +1225,11 @@ export class OrgStructureDbController {
     reqData: any,
   ): Promise<OrgImpactSummary> {
     const summary = reqData?.impactSummary;
+    const normalizedSummary = OrgStructureDbController.normalizeImpactSummary(
+      reqData,
+    );
     const hasImpactSummary =
       Array.isArray(summary?.userAccess) && Array.isArray(summary?.workflow);
-
-    if (hasImpactSummary) {
-      return OrgStructureDbController.normalizeImpactSummary(reqData);
-    }
 
     if (reqType === 'INITIATE') {
       const requestedNodePath =
@@ -1050,7 +1246,14 @@ export class OrgStructureDbController {
           companyId,
           reqData.parentNode?.nodePath,
         );
-      return { userAccess, workflow };
+      return {
+        userAccess,
+        workflow: hasImpactSummary ? normalizedSummary.workflow : workflow,
+      };
+    }
+
+    if (hasImpactSummary) {
+      return normalizedSummary;
     } else {
       const nodePath = reqData?.targetNodePath || reqData?.nodePath || null;
       if (!nodePath) {
@@ -1723,6 +1926,11 @@ export class OrgStructureDbController {
             roleName: true,
             category: true,
             subCategory: true,
+            permissionLevel: true,
+            view: true,
+            modify: true,
+            approve: true,
+            initiate: true,
           },
         },
       },
@@ -2040,7 +2248,13 @@ export class OrgStructureDbController {
     client: any,
     companyId: string,
     newNodePath: string | null,
-  ): Promise<Array<{ name: string; email: string | null }>> {
+  ): Promise<
+    Array<{
+      name: string;
+      email: string | null;
+      access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
+    }>
+  > {
     if (!newNodePath) return [];
 
     const parentAccesses =
@@ -2050,27 +2264,8 @@ export class OrgStructureDbController {
         newNodePath,
       );
 
-    const uniqueUsers = new Map<
-      string,
-      { name: string; email: string | null }
-    >();
-    parentAccesses.forEach((access: any) => {
-      const name =
-        typeof access.user?.name === 'string' ? access.user.name.trim() : '';
-      if (!name) return;
-
-      const email =
-        typeof access.user?.email === 'string' && access.user.email.trim()
-          ? access.user.email.trim()
-          : null;
-      const key = `${name.toLowerCase()}::${(email || '').toLowerCase()}`;
-      if (!uniqueUsers.has(key)) {
-        uniqueUsers.set(key, { name, email });
-      }
-    });
-
-    return Array.from(uniqueUsers.values()).sort((left, right) =>
-      left.name.localeCompare(right.name),
+    return OrgStructureDbController.buildImpactUsersFromAccessRows(
+      parentAccesses,
     );
   }
 
@@ -2679,6 +2874,16 @@ export class OrgStructureDbController {
           user: {
             select: { name: true, email: true },
           },
+          role: {
+            select: {
+              subCategory: true,
+              permissionLevel: true,
+              view: true,
+              modify: true,
+              approve: true,
+              initiate: true,
+            },
+          },
         },
       }),
       client.workflow.findMany({
@@ -2712,27 +2917,8 @@ export class OrgStructureDbController {
       ),
     ).sort() as string[];
 
-    const users = Array.from(
-      new Map(
-        accessRows
-          .map((row: any) => {
-            const name =
-              typeof row.user?.name === 'string' ? row.user.name.trim() : '';
-            if (!name) return null;
-            const email =
-              typeof row.user?.email === 'string' && row.user.email.trim()
-                ? row.user.email.trim()
-                : null;
-            return [
-              `${name.toLowerCase()}::${(email || '').toLowerCase()}`,
-              { name, email },
-            ];
-          })
-          .filter(Boolean) as Array<
-          [string, { name: string; email: string | null }]
-        >,
-      ).values(),
-    ).sort((left, right) => left.name.localeCompare(right.name));
+    const users =
+      OrgStructureDbController.buildImpactUsersFromAccessRows(accessRows);
 
     const workflowNames = Array.from(
       new Set(
@@ -2980,13 +3166,6 @@ export class OrgStructureDbController {
             reqTable: 'org_structure_req',
           },
         );
-        notificationRecipients = workflow.currentLevelApprovers;
-        await tx.orgStructureReq.update({
-          where: { id: requestRecord.id },
-          data: {
-            workflowId: workflow.workflowId,
-          },
-        });
         await tx.orgHistory.create({
           data: {
             companyId,
@@ -2996,13 +3175,50 @@ export class OrgStructureDbController {
             remarks: remarks || null,
           },
         });
+        if (workflow.autoApprove) {
+          notificationRecipients = [];
+          await OrgStructureDbController.applyApprovedModification(
+            tx,
+            requestRecord,
+            {
+              inactivation: impactSummaryNotification,
+            },
+            initiatorId,
+          );
+          await tx.orgHistory.create({
+            data: {
+              companyId,
+              event: 'APPROVED',
+              eventUserId: initiatorId,
+              orgReqId: requestRecord.id,
+              remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+            },
+          });
+          return await tx.orgStructureReq.update({
+            where: { id: requestRecord.id },
+            data: {
+              workflowId: workflow.workflowId,
+              status: 'APPROVED',
+              remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+            },
+          });
+        }
+
+        notificationRecipients = workflow.currentLevelApprovers;
+        await tx.orgStructureReq.update({
+          where: { id: requestRecord.id },
+          data: {
+            workflowId: workflow.workflowId,
+          },
+        });
         return requestRecord;
       });
 
+      const isAutoApproved = request?.status === 'APPROVED';
       const modificationNotification =
         OrgStructureDbController.getOrgNotificationContent(
           'UPDATE',
-          'initiated',
+          isAutoApproved ? 'approved' : 'initiated',
           targetNodePath,
         );
       const corpAdminUserIds =
@@ -3017,7 +3233,7 @@ export class OrgStructureDbController {
         companyId,
         type: OrgStructureDbController.getOrgNotificationType(
           'UPDATE',
-          'PENDING',
+          isAutoApproved ? 'APPROVED' : 'PENDING',
         ),
         name: modificationNotification.name,
         message: modificationNotification.message,
@@ -3031,6 +3247,7 @@ export class OrgStructureDbController {
           corpAdminUserIds,
         ),
         includeCreatedBy: true,
+        isPending: isAutoApproved ? false : undefined,
       });
       res.status(201).json(request);
     } catch (error) {
@@ -3327,6 +3544,222 @@ export class OrgStructureDbController {
     });
   }
 
+  private static async finalizeApprovedInitiation(
+    tx: any,
+    request: any,
+    approverId: string,
+    remark?: string | null,
+  ) {
+    const requestData = (request.data as any) || {};
+    const newNodePath =
+      requestData.nodePath ||
+      requestData.newNodePath ||
+      OrgStructureDbController.resolveRequestedNodePath(requestData);
+    const newNodeName =
+      requestData.newNodeName || requestData.nodeName || requestData.name;
+    const nodeType =
+      requestData.nodeType ||
+      requestData._nodeType ||
+      requestData.currentData?.nodeType;
+    const parentPath = requestData.parentNode?.nodePath || null;
+    let parentId = requestData.parentId || null;
+
+    if (!newNodePath || !newNodeName || !nodeType) {
+      throw new Error('Missing node details for approval');
+    }
+
+    if (!parentId && parentPath) {
+      const parentNode = await tx.orgStructure.findFirst({
+        where: {
+          companyId: request.companyId,
+          nodePath: parentPath,
+          status: 'ACTIVE',
+        },
+        select: { id: true },
+      });
+      parentId = parentNode?.id || null;
+    }
+
+    const resolvedNodePath =
+      await OrgStructureDbController.resolveUniqueNodePath(
+        tx,
+        request.companyId,
+        newNodePath,
+      );
+
+    const newNode = await tx.orgStructure.create({
+      data: {
+        companyId: request.companyId,
+        nodePath: resolvedNodePath,
+        nodeName: newNodeName,
+        nodeType,
+        parentId: parentId || null,
+      },
+    });
+
+    const autoGeneratedWorkflowNotifications =
+      await OrgStructureDbController.autoGenerateChildWorkflows(tx, {
+        companyId: request.companyId,
+        parentNodeId: parentId || null,
+        newNode,
+        orgReqId: request.id,
+        actorId: approverId,
+      });
+
+    const parentAccesses =
+      await OrgStructureDbController.getPropagatingParentAccesses(
+        tx,
+        request.companyId,
+        resolvedNodePath,
+      );
+    const newAccesses = OrgStructureDbController.buildPropagatedAccesses(
+      parentAccesses,
+      newNode.id,
+      {
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
+      },
+    );
+
+    let userAccessImpactNotification: any = null;
+    if (newAccesses.length > 0) {
+      await tx.userAccess.createMany({
+        data: newAccesses.map(
+          ({
+            userName,
+            userEmail,
+            roleName,
+            roleCategory,
+            roleSubCategory,
+            nodeName,
+            nodePath,
+            ...access
+          }: any) => access,
+        ),
+        skipDuplicates: true,
+      });
+      await OrgStructureDbController.createAutoApprovedUserAccessAuditRows(tx, {
+        companyId: request.companyId,
+        actorId: approverId,
+        type: 'AUTO_GENERATE',
+        impact: 'UPGRADE',
+        remarks: `Auto generated because organization node ${newNode.nodeName} (${newNode.nodePath}) was created.`,
+        entries: newAccesses,
+      });
+      const impactedUserIds: string[] = Array.from(
+        new Set(
+          newAccesses
+            .map((access: any) => String(access.userId || '').trim())
+            .filter(Boolean),
+        ),
+      );
+      for (const userId of impactedUserIds) {
+        await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+          companyId: request.companyId,
+          userId,
+          eventUserId: approverId,
+          createReason:
+            'Default notification setting created because access was granted.',
+          removeReason:
+            'Notification setting removed because access was removed.',
+        });
+      }
+      await OrgStructureDbController.syncNotificationSettingsForGlobalAccessUsers(
+        tx,
+        {
+          companyId: request.companyId,
+          eventUserId: approverId,
+          removeReason:
+            'Notification setting removed because access was removed.',
+          excludeUserIds: impactedUserIds,
+        },
+      );
+      userAccessImpactNotification = {
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
+        accessChanges: newAccesses.map((access: any) => ({
+          userId: access.userId,
+          userName: access.userName,
+          userEmail: access.userEmail,
+          roleName: access.roleName,
+          roleCode: access.roleCode,
+        })),
+      };
+    }
+
+    const updated = await tx.orgStructureReq.update({
+      where: { id: request.id },
+      data: {
+        status: 'APPROVED',
+        impact: OrgStructureDbController.formatUserAccessImpact(
+          newAccesses.length,
+        ),
+        data: {
+          ...requestData,
+          nodePath: resolvedNodePath,
+          impactSummary: OrgStructureDbController.buildImpactSummary(
+            Array.from(
+              new Map(
+                newAccesses
+                  .map((access: any) => {
+                    const name =
+                      typeof access.userName === 'string'
+                        ? access.userName.trim()
+                        : '';
+                    if (!name) return null;
+                    const email =
+                      typeof access.userEmail === 'string' &&
+                      access.userEmail.trim()
+                        ? access.userEmail.trim()
+                        : null;
+                    return [
+                      `${name.toLowerCase()}::${(email || '').toLowerCase()}`,
+                      { name, email },
+                    ];
+                  })
+                  .filter(Boolean) as Array<
+                  [string, { name: string; email: string | null }]
+                >,
+              ).values(),
+            ).sort((left, right) => left.name.localeCompare(right.name)),
+            Array.from(
+              new Map(
+                autoGeneratedWorkflowNotifications
+                  .map((workflow: any) => {
+                    const workflowName =
+                      typeof workflow.workflowName === 'string'
+                        ? workflow.workflowName.trim()
+                        : '';
+                    if (!workflowName) return null;
+                    const alias =
+                      typeof workflow.alias === 'string' && workflow.alias.trim()
+                        ? workflow.alias.trim()
+                        : null;
+                    return [
+                      `${workflowName.toLowerCase()}::${(alias || '').toLowerCase()}`,
+                      { workflowName, alias },
+                    ];
+                  })
+                  .filter(Boolean) as Array<
+                  [string, { workflowName: string; alias: string | null }]
+                >,
+              ).values(),
+            ).sort((left, right) =>
+              left.workflowName.localeCompare(right.workflowName),
+            ),
+          ),
+        } as any,
+        remarks: remark || null,
+      },
+    });
+
+    return {
+      updated,
+      userAccessImpactNotification,
+      autoGeneratedWorkflowNotifications,
+    };
+  }
+
   // --- Internal Atomic Operations ---
 
   /**
@@ -3387,10 +3820,6 @@ export class OrgStructureDbController {
         status, // 'approved' | 'rejected'
         approverId,
         remarks,
-        newNodePath,
-        newNodeName,
-        nodeType,
-        parentId,
       } = req.body;
 
       if (!id || !companyId || !status) {
@@ -3590,197 +4019,23 @@ export class OrgStructureDbController {
           }
 
           // ── All levels approved — proceed with node creation ─────────────
-          if (!newNodePath || !newNodeName || !nodeType) {
-            throw new Error('Missing node details for approval');
-          }
-
-          const resolvedNodePath =
-            await OrgStructureDbController.resolveUniqueNodePath(
+          const finalized =
+            await OrgStructureDbController.finalizeApprovedInitiation(
               tx,
-              request.companyId,
-              newNodePath,
-            );
-
-          // 1. Create the actual node in the production organization structure
-          const newNode = await tx.orgStructure.create({
-            data: {
-              companyId: request.companyId,
-              nodePath: resolvedNodePath,
-              nodeName: newNodeName,
-              nodeType: nodeType,
-              parentId: parentId || null,
-            },
-          });
-
-          autoGeneratedWorkflowNotifications =
-            await OrgStructureDbController.autoGenerateChildWorkflows(tx, {
-              companyId: request.companyId,
-              parentNodeId: parentId || null,
-              newNode,
-              orgReqId: id,
-              actorId: approverId,
-            });
-
-          const parentAccesses =
-            await OrgStructureDbController.getPropagatingParentAccesses(
-              tx,
-              request.companyId,
-              resolvedNodePath,
-            );
-          const newAccesses = OrgStructureDbController.buildPropagatedAccesses(
-            parentAccesses,
-            newNode.id,
-            {
-              nodeName: newNode.nodeName,
-              nodePath: newNode.nodePath,
-            },
-          );
-
-          if (newAccesses.length > 0) {
-            await tx.userAccess.createMany({
-              data: newAccesses.map(
-                ({
-                  userName,
-                  userEmail,
-                  roleName,
-                  roleCategory,
-                  roleSubCategory,
-                  nodeName,
-                  nodePath,
-                  ...access
-                }: any) => access,
-              ),
-              skipDuplicates: true,
-            });
-            await OrgStructureDbController.createAutoApprovedUserAccessAuditRows(
-              tx,
-              {
-                companyId: request.companyId,
-                actorId: approverId,
-                type: 'AUTO_GENERATE',
-                impact: 'UPGRADE',
-                remarks: `Auto generated because organization node ${newNode.nodeName} (${newNode.nodePath}) was created.`,
-                entries: newAccesses,
-              },
-            );
-            const impactedUserIds: string[] = Array.from(
-              new Set(
-                newAccesses
-                  .map((access: any) => String(access.userId || '').trim())
-                  .filter(Boolean),
-              ),
-            );
-            for (const userId of impactedUserIds) {
-              await NotificationService.syncNotificationSettingsForUserAccess(
-                tx,
-                {
-                  companyId: request.companyId,
-                  userId,
-                  eventUserId: approverId,
-                  createReason:
-                    'Default notification setting created because access was granted.',
-                  removeReason:
-                    'Notification setting removed because access was removed.',
-                },
-              );
-            }
-            await OrgStructureDbController.syncNotificationSettingsForGlobalAccessUsers(
-              tx,
-              {
-                companyId: request.companyId,
-                eventUserId: approverId,
-                removeReason:
-                  'Notification setting removed because access was removed.',
-                excludeUserIds: impactedUserIds,
-              },
-            );
-            userAccessImpactNotification = {
-              nodeName: newNode.nodeName,
-              nodePath: newNode.nodePath,
-              accessChanges: newAccesses.map((access: any) => ({
-                userId: access.userId,
-                userName: access.userName,
-                userEmail: access.userEmail,
-                roleName: access.roleName,
-                roleCode: access.roleCode,
-              })),
-            };
-          }
-
-          // 2. Update the onboarding request status
-          const updated = await tx.orgStructureReq.update({
-            where: { id },
-            data: {
-              status: 'APPROVED',
-              impact: OrgStructureDbController.formatUserAccessImpact(
-                newAccesses.length,
-              ),
-              data: {
-                ...((request.data as any) || {}),
-                nodePath: resolvedNodePath,
-                impactSummary: OrgStructureDbController.buildImpactSummary(
-                  Array.from(
-                    new Map(
-                      newAccesses
-                        .map((access: any) => {
-                          const name =
-                            typeof access.userName === 'string'
-                              ? access.userName.trim()
-                              : '';
-                          if (!name) return null;
-                          const email =
-                            typeof access.userEmail === 'string' &&
-                            access.userEmail.trim()
-                              ? access.userEmail.trim()
-                              : null;
-                          return [
-                            `${name.toLowerCase()}::${(email || '').toLowerCase()}`,
-                            { name, email },
-                          ];
-                        })
-                        .filter(Boolean) as Array<
-                        [string, { name: string; email: string | null }]
-                      >,
-                    ).values(),
-                  ).sort((left, right) => left.name.localeCompare(right.name)),
-                  Array.from(
-                    new Map(
-                      autoGeneratedWorkflowNotifications
-                        .map((workflow: any) => {
-                          const workflowName =
-                            typeof workflow.workflowName === 'string'
-                              ? workflow.workflowName.trim()
-                              : '';
-                          if (!workflowName) return null;
-                          const alias =
-                            typeof workflow.alias === 'string' &&
-                            workflow.alias.trim()
-                              ? workflow.alias.trim()
-                              : null;
-                          return [
-                            `${workflowName.toLowerCase()}::${(alias || '').toLowerCase()}`,
-                            { workflowName, alias },
-                          ];
-                        })
-                        .filter(Boolean) as Array<
-                        [string, { workflowName: string; alias: string | null }]
-                      >,
-                    ).values(),
-                  ).sort((left, right) =>
-                    left.workflowName.localeCompare(right.workflowName),
-                  ),
-                ),
-              } as any,
+              request,
+              approverId,
               remarks,
-            },
-          });
+            );
+          userAccessImpactNotification =
+            finalized.userAccessImpactNotification;
+          autoGeneratedWorkflowNotifications =
+            finalized.autoGeneratedWorkflowNotifications;
 
           return {
-            ...updated,
+            ...finalized.updated,
             status: 'APPROVED',
             data: {
-              ...(((updated as any).data || {}) as any),
-              nodePath: resolvedNodePath,
+              ...(((finalized.updated as any).data || {}) as any),
             },
           };
         }
@@ -4087,6 +4342,19 @@ export class OrgStructureDbController {
         (id) => id !== initiatorId,
       );
       let notificationRecipients = rest.eligibleApprovers;
+      let userAccessImpactNotification: any = null;
+      let autoGeneratedWorkflowNotifications: Array<{
+        workflowName: string;
+        alias: string;
+        module: string;
+        subModule: string;
+        workflowType: string;
+        nodeName: string;
+        nodePath: string;
+        sourceWorkflowName: string;
+        sourceNodeName: string;
+        sourceNodePath: string;
+      }> = [];
 
       const request = await prisma.$transaction(async (tx) => {
         const reqData = rest.data || {};
@@ -4133,6 +4401,14 @@ export class OrgStructureDbController {
           },
           include: { company: true },
         });
+        await tx.orgHistory.create({
+          data: {
+            companyId: resolvedCompanyId,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+            orgReqId: reqRecord.id,
+          },
+        });
 
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         // Determine node for approver resolution from the request data
@@ -4158,7 +4434,11 @@ export class OrgStructureDbController {
         }
 
         if (nodeId && initiatorId) {
-          const { workflowId: resolvedWorkflowId, currentLevelApprovers } =
+          const {
+            workflowId: resolvedWorkflowId,
+            currentLevelApprovers,
+            autoApprove,
+          } =
             await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
               levelsHash: levelsHash || null,
               module: 'SYSTEM_ACCESS',
@@ -4169,6 +4449,35 @@ export class OrgStructureDbController {
               reqId: reqRecord.id,
               reqTable: 'org_structure_req',
             });
+          if (autoApprove) {
+            notificationRecipients = [];
+            const finalized =
+              await OrgStructureDbController.finalizeApprovedInitiation(
+                tx,
+                reqRecord,
+                initiatorId,
+                'Auto-approved: selected workflow has NO_APPROVER',
+              );
+            userAccessImpactNotification =
+              finalized.userAccessImpactNotification;
+            autoGeneratedWorkflowNotifications =
+              finalized.autoGeneratedWorkflowNotifications;
+            await tx.orgHistory.create({
+              data: {
+                companyId: resolvedCompanyId,
+                event: 'APPROVED',
+                eventUserId: initiatorId,
+                orgReqId: reqRecord.id,
+                remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+              },
+            });
+            return await tx.orgStructureReq.update({
+              where: { id: reqRecord.id },
+              data: { workflowId: resolvedWorkflowId },
+              include: { company: true },
+            });
+          }
+
           notificationRecipients = currentLevelApprovers;
 
           // Store the resolved workflowId in the request record
@@ -4177,17 +4486,9 @@ export class OrgStructureDbController {
             data: { workflowId: resolvedWorkflowId },
           });
         }
-
-        await tx.orgHistory.create({
-          data: {
-            companyId: resolvedCompanyId,
-            event: 'INITIATE',
-            eventUserId: initiatorId,
-            orgReqId: reqRecord.id,
-          },
-        });
         return reqRecord;
       });
+      const isAutoApproved = request?.status === 'APPROVED';
       const initiatorReportingManagerUserIds =
         await NotificationService.getReportingManagerUserIds(
           resolvedCompanyId,
@@ -4196,7 +4497,13 @@ export class OrgStructureDbController {
         );
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
-        type: 'INITIATE',
+        type: isAutoApproved ? 'ONBOARDED' : 'INITIATE',
+        ...(isAutoApproved
+          ? {
+              name: 'Organization onboarding approved',
+              message: `Organization onboarding approved for ${rest.data?.newNodeName || rest.data?.nodePath || 'organization node'}`,
+            }
+          : {}),
         referenceType: 'ORG',
         referenceId: request.id,
         referenceName: rest.data?.newNodeName,
@@ -4207,7 +4514,26 @@ export class OrgStructureDbController {
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
         includeCreatedBy: true,
+        isPending: isAutoApproved ? false : undefined,
       });
+      if (isAutoApproved && userAccessImpactNotification) {
+        await OrgStructureDbController.notifyUserAccessImpact({
+          companyId: resolvedCompanyId,
+          orgReqId: request.id,
+          nodeName: userAccessImpactNotification.nodeName,
+          nodePath: userAccessImpactNotification.nodePath,
+          createdBy: initiatorId,
+          accessChanges: userAccessImpactNotification.accessChanges,
+        });
+      }
+      if (isAutoApproved && autoGeneratedWorkflowNotifications.length > 0) {
+        await OrgStructureDbController.notifyAutoGeneratedWorkflows({
+          companyId: resolvedCompanyId,
+          orgReqId: request.id,
+          createdBy: initiatorId,
+          generatedWorkflows: autoGeneratedWorkflowNotifications,
+        });
+      }
       res.status(201).json(request);
     } catch (error) {
       next(error);

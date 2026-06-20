@@ -45,6 +45,14 @@ interface WorkflowLevelLike {
   approverType: string;
 }
 
+interface ResolveApproversResult {
+  workflowId: string;
+  approvers: any[];
+  eligibleApprovers: string[];
+  currentLevelApprovers: string[];
+  autoApprove: boolean;
+}
+
 interface ApproverRowDraft {
   workflowId: string;
   reqId: string;
@@ -85,7 +93,7 @@ export class WorkflowApproverUtil {
   static async resolveAndCreateApprovers(
     tx: TxClient,
     params: ResolveApproversParams,
-  ) {
+  ): Promise<ResolveApproversResult> {
     const {
       levelsHash,
       module,
@@ -123,6 +131,9 @@ export class WorkflowApproverUtil {
       levelsHash,
       subModule,
     });
+    const approvalLevels = levels.filter(
+      (level) => !this.isNoApproverLevel(level),
+    );
 
     const rmChain = await this.getReportingManagerChain(
       tx,
@@ -142,7 +153,7 @@ export class WorkflowApproverUtil {
     const approverRows: ApproverRowDraft[] = [];
     const requestEligibleApprovers = new Set<string>();
 
-    for (const level of levels) {
+    for (const level of approvalLevels) {
       const approverSet = new Set<string>();
 
       const primaryApprovers = await this.resolveByApproverType(tx, {
@@ -226,6 +237,7 @@ export class WorkflowApproverUtil {
       approvers: created,
       eligibleApprovers: Array.from(requestEligibleApprovers),
       currentLevelApprovers: this.unique(currentLevelApprovers),
+      autoApprove: approverRows.length === 0,
     };
   }
 
@@ -374,6 +386,9 @@ export class WorkflowApproverUtil {
           opts.node.nodePath,
           opts.subModule,
         );
+
+      case 'NO_APPROVER':
+        return [];
 
       default:
         return this.getAllEligibleApproverIds(
@@ -817,6 +832,10 @@ export class WorkflowApproverUtil {
 
   private static getMandatoryCount(level: WorkflowLevelLike): number {
     return level.approverType === 'AND' && level.approver2 ? 2 : 1;
+  }
+
+  private static isNoApproverLevel(level: WorkflowLevelLike) {
+    return level.approver1 === 'NO_APPROVER' && !level.approver2;
   }
 
   private static getAncestorPaths(nodePath: string): string[] {

@@ -45,6 +45,29 @@ import type {
 } from './org.type';
 
 export class OrgController {
+  private static normalizeImpactAccess(access: unknown) {
+    if (!access || typeof access !== 'object') return undefined;
+
+    const source = access as Partial<Record<'user' | 'workflow' | 'org', unknown>>;
+    const normalized: Partial<Record<'user' | 'workflow' | 'org', string[]>> =
+      {};
+
+    for (const key of ['user', 'workflow', 'org'] as const) {
+      const values = Array.isArray(source[key])
+        ? source[key]
+            .map((value) =>
+              typeof value === 'string' ? value.trim().toLowerCase() : '',
+            )
+            .filter(Boolean)
+        : [];
+      if (values && values.length > 0) {
+        normalized[key] = Array.from(new Set(values));
+      }
+    }
+
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+  }
+
   private static normalizeImpactSummary(summary: unknown) {
     const impactSummary = summary as {
       userAccess?: unknown[];
@@ -65,6 +88,9 @@ export class OrgController {
                 typeof entry.name === 'string' &&
                 entry.name.trim()
               ) {
+                const normalizedAccess = OrgController.normalizeImpactAccess(
+                  'access' in entry ? entry.access : undefined,
+                );
                 return {
                   name: entry.name.trim(),
                   email:
@@ -73,6 +99,7 @@ export class OrgController {
                     entry.email.trim()
                       ? entry.email.trim()
                       : null,
+                  ...(normalizedAccess ? { access: normalizedAccess } : {}),
                 };
               }
               return null;

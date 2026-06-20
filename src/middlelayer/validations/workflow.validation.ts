@@ -21,6 +21,7 @@ const approverTypeEnum = z.enum([
   'REPORTING_MANAGER',
   'NODE_APPROVER',
   'HIERARCHY_APPROVER',
+  'NO_APPROVER',
 ]);
 const approvalTypeEnum = z.enum(['AND', 'OR']);
 
@@ -29,6 +30,17 @@ const levelSchema = z
     approver1: approverTypeEnum,
     type: approvalTypeEnum.default('OR'),
     approver2: approverTypeEnum.nullable().optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.approver1 !== 'NO_APPROVER') return;
+
+    if (value.approver2) {
+      context.addIssue({
+        code: 'custom',
+        message: 'approver2 is not allowed when approver1 is NO_APPROVER',
+        path: ['approver2'],
+      });
+    }
   })
   .nullable()
   .optional();
@@ -74,6 +86,13 @@ const normalizeApproverType = (value: unknown) => {
   }
   if (normalized === 'NODE_APPROER') {
     return 'NODE_APPROVER';
+  }
+  if (
+    normalized === 'NO_APPROVER' ||
+    normalized === 'NOAPPROVER' ||
+    normalized === 'NO_APPROVAL'
+  ) {
+    return 'NO_APPROVER';
   }
   return normalized;
 };

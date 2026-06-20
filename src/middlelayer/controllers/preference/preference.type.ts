@@ -11,6 +11,7 @@ export type WorkflowPreferenceNode = {
   nodeName: string;
   nodePath: string;
   nodeType: string;
+  levelCount: number;
   modules: Partial<
     Record<
       WorkflowPreferenceModule,

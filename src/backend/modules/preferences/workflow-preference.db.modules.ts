@@ -20,6 +20,7 @@ type PreferenceNodeScope = {
   nodeName: string;
   nodePath: string;
   nodeType: string;
+  levelCount: number;
   modules: Set<PreferenceModule>;
 };
 
@@ -95,6 +96,15 @@ const buildPreferenceRemark = (input: {
     ? `Workflow preference set for ${input.module} on ${input.nodeName} (${input.nodePath}) to ${input.workflowName} (${input.workflowAlias}).`
     : `Workflow preference removed for ${input.module} on ${input.nodeName} (${input.nodePath}) from ${input.workflowName} (${input.workflowAlias}).`;
 
+const getNodeLevelCount = (nodePath: string) => {
+  const segments = String(nodePath || '')
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  return Math.max(segments.length, 1);
+};
+
 class PreferenceService {
   private static async getVisibleNodesForSubCategory(
     tx: typeof prisma,
@@ -128,6 +138,7 @@ class PreferenceService {
         nodeName: string;
         nodePath: string;
         nodeType: string;
+        levelCount: number;
       }>;
     }
 
@@ -173,6 +184,7 @@ class PreferenceService {
       nodeName: node.nodeName,
       nodePath: node.nodePath,
       nodeType: String(node.nodeType),
+      levelCount: getNodeLevelCount(node.nodePath),
     }));
   }
 
@@ -216,6 +228,7 @@ class PreferenceService {
         nodeName: node.nodeName,
         nodePath: node.nodePath,
         nodeType: String(node.nodeType),
+        levelCount: getNodeLevelCount(node.nodePath),
         modules: new Set(PREFERENCE_MODULES),
       }));
     }
@@ -431,6 +444,7 @@ class PreferenceService {
         nodeName: scope.nodeName,
         nodePath: scope.nodePath,
         nodeType: scope.nodeType,
+        levelCount: scope.levelCount,
         modules,
       };
     });

@@ -8188,13 +8188,6 @@ export class UserDbController {
           reqTable: 'user_onboarding',
         },
       );
-      notificationRecipients = workflow.currentLevelApprovers;
-      await tx.userOnboarding.update({
-        where: { id: request.id },
-        data: {
-          workflowId: workflow.workflowId,
-        },
-      });
       await tx.userHistory.create({
         data: {
           email: current.user.email,
@@ -8206,18 +8199,57 @@ export class UserDbController {
         },
       });
 
+      if (workflow.autoApprove) {
+        notificationRecipients = [];
+        await UserDbController.applyApprovedUserModification(
+          tx,
+          request,
+          initiatorId,
+        );
+        await tx.userOnboarding.update({
+          where: { id: request.id },
+          data: {
+            workflowId: workflow.workflowId,
+            status: 'APPROVED',
+            approvalRemark: 'Auto-approved: selected workflow has NO_APPROVER',
+          },
+        });
+        await tx.userHistory.create({
+          data: {
+            email: current.user.email,
+            event: 'APPROVED',
+            eventUserId: initiatorId,
+            companyId,
+            reqId: request.id,
+            remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+          },
+        });
+        return await tx.userOnboarding.findUnique({ where: { id: request.id } });
+      }
+
+      notificationRecipients = workflow.currentLevelApprovers;
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          workflowId: workflow.workflowId,
+        },
+      });
+
       return request;
     });
+    if (!onboarding) {
+      throw new AppError('User onboarding request could not be created', 500);
+    }
 
     const userReferenceName = UserDbController.formatUserReferenceName(
       current.user,
     );
-    const modificationNotification =
-      UserDbController.getUserNotificationContent(
-        type,
-        'initiated',
-        userReferenceName,
-      );
+    const isAutoApproved = onboarding?.status === 'APPROVED';
+    const modificationNotification = UserDbController.getUserNotificationContent(
+      type,
+      isAutoApproved ? 'approved' : 'initiated',
+      userReferenceName,
+    );
     const corpAdminUserIds =
       await NotificationService.getCorpAdminUserIds(companyId);
     const initiatorReportingManagerUserIds =
@@ -8233,7 +8265,10 @@ export class UserDbController {
       );
     await NotificationService.createRequestNotification({
       companyId,
-      type: UserDbController.getUserNotificationType(type, 'PENDING'),
+      type: UserDbController.getUserNotificationType(
+        type,
+        isAutoApproved ? 'APPROVED' : 'PENDING',
+      ),
       name: modificationNotification.name,
       message: modificationNotification.message,
       referenceType: 'USER',
@@ -8250,6 +8285,7 @@ export class UserDbController {
         notificationRecipients,
       ),
       includeCreatedBy: true,
+      isPending: isAutoApproved ? false : undefined,
     });
 
     res.status(201).json(onboarding);
@@ -8510,6 +8546,257 @@ export class UserDbController {
     });
   }
 
+  private static async finalizeApprovedUserInitiation(
+    tx: any,
+    onboarding: any,
+    eventUserId: string,
+    remark?: string | null,
+  ) {
+    const rawRequestData = (onboarding.data as any) || {};
+    const requestData = {
+      ...rawRequestData,
+      permissions: await UserDbController.expandInitiatePermissionsForChildNodes(
+        onboarding.companyId,
+        Array.isArray(rawRequestData?.permissions)
+          ? rawRequestData.permissions
+          : [],
+      ),
+    };
+    const { basicDetails, permissions } = requestData || {};
+    const { name, email, phone, reportingManager, designation, employeeId } =
+      basicDetails || {};
+    const hasCorpAdminRole =
+      Array.isArray(permissions) &&
+      permissions.some((p: any) => p.roleName === 'Corp Admin');
+
+    const actor = await tx.user.findUnique({
+      where: { id: eventUserId },
+      include: {
+        userMappings: {
+          include: { company: true },
+        },
+      },
+    });
+
+    let reportingManagerId: string | null = null;
+    if (reportingManager) {
+      const reportingManagerCheck = await tx.user.findUnique({
+        where: { email: reportingManager },
+        include: {
+          userMappings: {
+            include: { company: true },
+          },
+        },
+      });
+
+      if (!reportingManagerCheck) {
+        throw new AppError('Reporting Manager not found', 404);
+      }
+      reportingManagerId = reportingManagerCheck.id;
+    }
+
+    if (!actor) throw new AppError('Manager not found', 404);
+
+    const company = await tx.company.findUnique({
+      where: { id: onboarding.companyId },
+    });
+
+    if (!company) throw new AppError('Company not found', 404);
+
+    let user = await tx.user.findUnique({ where: { email } });
+    if (!user) {
+      const defaultPassword = await HashUtil.hash('Welcome@123');
+      user = await tx.user.create({
+        data: {
+          email,
+          name,
+          phone,
+          password: defaultPassword,
+        },
+      });
+    }
+
+    await tx.userMapping.create({
+      data: {
+        userId: user.id,
+        companyId: company.id,
+        reportingManager: reportingManagerId,
+        status: 'ACTIVE',
+        designation,
+        employeeId,
+      },
+    });
+
+    if (hasCorpAdminRole) {
+      const globalPerm = Array.isArray(permissions)
+        ? permissions.find(
+            (p: any) => p.roleName === 'Corp Admin' || p.isGlobalAccess,
+          )
+        : null;
+      const rootNode = await tx.orgStructure.findFirst({
+        where: {
+          companyId: company.id,
+          status: 'ACTIVE',
+          ...(globalPerm?.nodePath
+            ? { nodePath: globalPerm.nodePath }
+            : { nodeType: 'ROOT' }),
+        },
+      });
+
+      if (rootNode) {
+        const existingAccess = await tx.userAccess.findFirst({
+          where: {
+            userId: user.id,
+            roleCode: 'CORP_ADMIN',
+            companyId: company.id,
+            nodeId: rootNode.id,
+          },
+        });
+
+        if (existingAccess) {
+          await tx.userAccess.update({
+            where: { id: existingAccess.id },
+            data: {
+              isGlobalAccess: true,
+              accessCategory: globalPerm?.accessCategory || 'ALL_CHILD',
+              accessType: 'PRIMARY',
+            },
+          });
+        } else {
+          await tx.userAccess.create({
+            data: {
+              userId: user.id,
+              roleCode: 'CORP_ADMIN',
+              nodeId: rootNode.id,
+              companyId: company.id,
+              isGlobalAccess: true,
+              accessCategory: globalPerm?.accessCategory || 'ALL_CHILD',
+              accessType: 'PRIMARY',
+            },
+          });
+        }
+      }
+    }
+    if (Array.isArray(permissions)) {
+      for (const perm of permissions) {
+        const { accessType, roleName, nodePath, accessCategory } = perm;
+        if (!roleName || roleName === 'Corp Admin') continue;
+        const finalCategory = accessCategory;
+
+        const role = await tx.roles.findUnique({
+          where: { roleName },
+        });
+
+        const node = await tx.orgStructure.findFirst({
+          where: { nodePath, companyId: company.id, status: 'ACTIVE' },
+        });
+
+        if (role && node) {
+          await tx.userAccess.upsert({
+            where: {
+              userId_roleCode_companyId_nodeId: {
+                userId: user.id,
+                roleCode: role.roleCode,
+                companyId: company.id,
+                nodeId: node.id,
+              },
+            },
+            update: {
+              accessType: accessType as any,
+              accessCategory: finalCategory as any,
+            },
+            create: {
+              userId: user.id,
+              roleCode: role.roleCode,
+              nodeId: node.id,
+              accessType: accessType as any,
+              accessCategory: finalCategory as any,
+              companyId: company.id,
+              isGlobalAccess: false,
+            },
+          });
+
+          const parentPaths = ltree.getAncestors(nodePath);
+          if (parentPaths.length > 0) {
+            const parentNodes = await tx.orgStructure.findMany({
+              where: {
+                companyId: company.id,
+                nodePath: { in: parentPaths },
+              },
+            });
+            const parentNodeIds = parentNodes.map((n: any) => n.id);
+            const directParentPath = ltree.getParent(nodePath);
+            const directParentId = parentNodes.find(
+              (n: any) => n.nodePath === directParentPath,
+            )?.id;
+
+            if (parentNodeIds.length > 0) {
+              const propagatingParentAccesses = await tx.userAccess.findMany({
+                where: {
+                  companyId: company.id,
+                  nodeId: { in: parentNodeIds },
+                  isGlobalAccess: false,
+                  OR: [
+                    { accessCategory: 'ALL_CHILD' },
+                    directParentId
+                      ? {
+                          nodeId: directParentId,
+                          accessCategory: 'IMMEDIATE_CHILD',
+                        }
+                      : undefined,
+                  ].filter(Boolean) as any,
+                },
+              });
+
+              const parentToChildAccesses = propagatingParentAccesses.map(
+                (access: any) => ({
+                  userId: access.userId,
+                  roleCode: access.roleCode,
+                  nodeId: node.id,
+                  accessType: 'SECONDARY' as any,
+                  accessCategory:
+                    access.accessCategory === 'IMMEDIATE_CHILD'
+                      ? ('NODE' as any)
+                      : access.accessCategory,
+                  companyId: company.id,
+                  isGlobalAccess: false,
+                }),
+              );
+
+              if (parentToChildAccesses.length > 0) {
+                await tx.userAccess.createMany({
+                  data: parentToChildAccesses,
+                  skipDuplicates: true,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    await tx.userOnboarding.update({
+      where: { id: onboarding.id },
+      data: {
+        status: 'APPROVED',
+        approvalRemark: remark || null,
+        data: requestData as any,
+      },
+    });
+
+    await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+      companyId: company.id,
+      userId: user.id,
+      eventUserId,
+      createReason:
+        'Default notification setting created because access was granted.',
+      removeReason:
+        'Notification setting removed because access was removed.',
+    });
+
+    return { userId: user.id, email };
+  }
+
   /**
    * Creates a new user onboarding request in the database.
    * Performs an atomic transaction to create the request and the initial history log.
@@ -8721,6 +9008,7 @@ export class UserDbController {
           const {
             workflowId: resolvedWorkflowId,
             currentLevelApprovers,
+            autoApprove,
           } = await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
             levelsHash: levelsHash || null,
             module: 'SYSTEM_ACCESS',
@@ -8731,13 +9019,37 @@ export class UserDbController {
             reqId: onb.id,
             reqTable: 'user_onboarding',
           });
-          notificationRecipients = currentLevelApprovers;
+          if (autoApprove) {
+            notificationRecipients = [];
+            await UserDbController.finalizeApprovedUserInitiation(
+              tx,
+              onb,
+              initiatorId,
+              'Auto-approved: selected workflow has NO_APPROVER',
+            );
+            await tx.userOnboarding.update({
+              where: { id: onb.id },
+              data: { workflowId: resolvedWorkflowId },
+            });
+            await tx.userHistory.create({
+              data: {
+                email,
+                event: 'APPROVED',
+                eventUserId: initiatorId,
+                companyId: resolvedCompanyId,
+                reqId: onb.id,
+                remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+              },
+            });
+          } else {
+            notificationRecipients = currentLevelApprovers;
 
-          // Store the resolved workflowId in the onboarding record
-          await tx.userOnboarding.update({
-            where: { id: onb.id },
-            data: { workflowId: resolvedWorkflowId },
-          });
+            // Store the resolved workflowId in the onboarding record
+            await tx.userOnboarding.update({
+              where: { id: onb.id },
+              data: { workflowId: resolvedWorkflowId },
+            });
+          }
         }
 
         // Log INITIATE event with reqId reference
@@ -8760,9 +9072,16 @@ export class UserDbController {
           initiatorId,
           'USER_ACC',
         );
+      const isAutoApproved = onboarding?.status === 'APPROVED';
+      const nodeAccessRecipientUserIds = isAutoApproved
+        ? await UserDbController.getNodeAccessNotificationRecipientIds(
+            resolvedCompanyId,
+            requestedNodePaths,
+          )
+        : [];
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
-        type: 'INITIATE',
+        type: isAutoApproved ? 'ONBOARDED' : 'INITIATE',
         referenceType: 'USER',
         referenceId: onboarding.id,
         referenceName: userReferenceName,
@@ -8770,28 +9089,31 @@ export class UserDbController {
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipients,
           initiatorReportingManagerUserIds,
+          nodeAccessRecipientUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
         requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipients,
         ),
         includeCreatedBy: true,
+        isPending: isAutoApproved ? false : undefined,
         message: (() => {
           const summary = UserDbController.formatInitiatePermissionSummary(
             originalPermissions,
             expandedInitiatePermissions,
           );
+          const phase = isAutoApproved ? 'approved' : 'initiated';
           return summary
             ? `${
                 UserDbController.getUserNotificationContent(
                   'INITIATE',
-                  'initiated',
+                  phase,
                   userReferenceName,
                 ).message
               } with ${summary}`
             : UserDbController.getUserNotificationContent(
                 'INITIATE',
-                'initiated',
+                phase,
                 userReferenceName,
               ).message;
         })(),
@@ -8802,8 +9124,14 @@ export class UserDbController {
           expandedInitiatePermissions,
         );
       const responseMessage = generatedPermissionMessage
-        ? `User onboarding initiated successfully. ${generatedPermissionMessage}`
-        : 'User onboarding initiated successfully';
+        ? `${
+            isAutoApproved
+              ? 'User onboarded successfully.'
+              : 'User onboarding initiated successfully.'
+          } ${generatedPermissionMessage}`
+        : isAutoApproved
+          ? 'User onboarded successfully'
+          : 'User onboarding initiated successfully';
 
       res.status(201).json({
         ...onboarding,
@@ -9134,242 +9462,12 @@ export class UserDbController {
             return { status: 'APPROVED', requestType: onboarding.type };
           }
 
-          // ── All levels approved — proceed with production user creation ───
-          const manager = await tx.user.findUnique({
-            where: { id: approverId },
-            include: {
-              userMappings: {
-                include: { company: true },
-              },
-            },
-          });
-
-          let reportingManagerId: string | null = null;
-          if (reportingManager) {
-            const reportingManagerCheck = await tx.user.findUnique({
-              where: { email: reportingManager },
-              include: {
-                userMappings: {
-                  include: { company: true },
-                },
-              },
-            });
-
-            if (!reportingManagerCheck) {
-              throw new AppError('Reporting Manager not found', 404);
-            }
-            reportingManagerId = reportingManagerCheck.id;
-          }
-
-          if (!manager) throw new AppError('Manager not found', 404);
-
-          const company = await tx.company.findUnique({
-            where: { id: onboarding.companyId },
-          });
-
-          if (!company) throw new AppError('Company not found', 404);
-
-          // 1. Production User Creation
-          let user = await tx.user.findUnique({ where: { email } });
-          if (!user) {
-            const defaultPassword = await HashUtil.hash('Welcome@123');
-            user = await tx.user.create({
-              data: {
-                email,
-                name,
-                phone,
-                password: defaultPassword,
-              },
-            });
-          }
-
-          // 2. Map User to Company
-          await tx.userMapping.create({
-            data: {
-              userId: user.id,
-              companyId: company.id,
-              reportingManager: reportingManagerId,
-              status: 'ACTIVE',
-              designation,
-              employeeId,
-            },
-          });
-
-          // 3. Setup Granular Access Permissions
-          // Rule: isGlobalUser flag OR assigning Corp Admin role grants global access
-          if (hasCorpAdminRole) {
-            // Use nodePath from permissions if available, otherwise fallback to company ROOT node
-            const globalPerm = Array.isArray(permissions)
-              ? permissions.find(
-                  (p: any) => p.roleName === 'Corp Admin' || p.isGlobalAccess,
-                )
-              : null;
-            const rootNode = await tx.orgStructure.findFirst({
-              where: {
-                companyId: company.id,
-                status: 'ACTIVE',
-                ...(globalPerm?.nodePath
-                  ? { nodePath: globalPerm.nodePath }
-                  : { nodeType: 'ROOT' }),
-              },
-            });
-
-            if (rootNode) {
-              const existingAccess = await tx.userAccess.findFirst({
-                where: {
-                  userId: user.id,
-                  roleCode: 'CORP_ADMIN',
-                  companyId: company.id,
-                  nodeId: rootNode.id,
-                },
-              });
-
-              if (existingAccess) {
-                await tx.userAccess.update({
-                  where: { id: existingAccess.id },
-                  data: {
-                    isGlobalAccess: true,
-                    accessCategory: globalPerm?.accessCategory || 'ALL_CHILD',
-                    accessType: 'PRIMARY',
-                  },
-                });
-              } else {
-                await tx.userAccess.create({
-                  data: {
-                    userId: user.id,
-                    roleCode: 'CORP_ADMIN',
-                    nodeId: rootNode.id,
-                    companyId: company.id,
-                    isGlobalAccess: true,
-                    accessCategory: globalPerm?.accessCategory || 'ALL_CHILD',
-                    accessType: 'PRIMARY',
-                  },
-                });
-              }
-            }
-          }
-          if (Array.isArray(permissions)) {
-            for (const perm of permissions) {
-              const { accessType, roleName, nodePath, accessCategory } = perm;
-              if (!roleName || roleName === 'Corp Admin') continue; // Skip Corp Admin as it's handled above
-              const finalCategory = accessCategory;
-
-              const role = await tx.roles.findUnique({
-                where: { roleName },
-              });
-
-              const node = await tx.orgStructure.findFirst({
-                where: { nodePath, companyId: company.id, status: 'ACTIVE' },
-              });
-
-              if (role && node) {
-                // Use upsert to handle overlapping permissions (e.g. explicit child node vs propagated from parent)
-                await tx.userAccess.upsert({
-                  where: {
-                    userId_roleCode_companyId_nodeId: {
-                      userId: user.id,
-                      roleCode: role.roleCode,
-                      companyId: company.id,
-                      nodeId: node.id,
-                    },
-                  },
-                  update: {
-                    accessType: accessType as any,
-                    accessCategory: finalCategory as any,
-                  },
-                  create: {
-                    userId: user.id,
-                    roleCode: role.roleCode,
-                    nodeId: node.id,
-                    accessType: accessType as any,
-                    accessCategory: finalCategory as any,
-                    companyId: company.id,
-                    isGlobalAccess: false,
-                  },
-                });
-
-                // ─── A. UPWARD PROPAGATION: Existing parent-level users to this node ───
-                const parentPaths = ltree.getAncestors(nodePath);
-                if (parentPaths.length > 0) {
-                  const parentNodes = await tx.orgStructure.findMany({
-                    where: {
-                      companyId: company.id,
-                      nodePath: { in: parentPaths },
-                    },
-                  });
-                  const parentNodeIds = parentNodes.map((n) => n.id);
-                  const directParentPath = ltree.getParent(nodePath);
-                  const directParentId = parentNodes.find(
-                    (n) => n.nodePath === directParentPath,
-                  )?.id;
-
-                  if (parentNodeIds.length > 0) {
-                    const propagatingParentAccesses =
-                      await tx.userAccess.findMany({
-                        where: {
-                          companyId: company.id,
-                          nodeId: { in: parentNodeIds },
-                          isGlobalAccess: false,
-                          OR: [
-                            { accessCategory: 'ALL_CHILD' },
-                            directParentId
-                              ? {
-                                  nodeId: directParentId,
-                                  accessCategory: 'IMMEDIATE_CHILD',
-                                }
-                              : undefined,
-                          ].filter(Boolean) as any,
-                        },
-                      });
-
-                    const parentToChildAccesses = propagatingParentAccesses.map(
-                      (access) => ({
-                        userId: access.userId,
-                        roleCode: access.roleCode,
-                        nodeId: node.id,
-                        accessType: 'SECONDARY' as any,
-                        accessCategory:
-                          access.accessCategory === 'IMMEDIATE_CHILD'
-                            ? ('NODE' as any)
-                            : access.accessCategory,
-                        companyId: company.id,
-                        isGlobalAccess: false,
-                      }),
-                    );
-
-                    if (parentToChildAccesses.length > 0) {
-                      await tx.userAccess.createMany({
-                        data: parentToChildAccesses,
-                        skipDuplicates: true,
-                      });
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          // 4. Update request status to fully APPROVED
-          await tx.userOnboarding.update({
-            where: { id },
-            data: {
-              status: 'APPROVED',
-              approvalRemark: remark,
-              ...(onboarding.type === 'INITIATE'
-                ? { data: requestData as any }
-                : {}),
-            },
-          });
-
-          await NotificationService.syncNotificationSettingsForUserAccess(tx, {
-            companyId: company.id,
-            userId: user.id,
-            eventUserId: approverId,
-            createReason:
-              'Default notification setting created because access was granted.',
-            removeReason:
-              'Notification setting removed because access was removed.',
-          });
+          await UserDbController.finalizeApprovedUserInitiation(
+            tx,
+            onboarding,
+            approverId,
+            remark,
+          );
 
           return { status: 'APPROVED' };
         }
