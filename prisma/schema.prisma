@@ -25,6 +25,8 @@ model User {
   notificationSettingHistory NotificationSettingHistory[] @relation("UserNotificationSettingHistoryRel")
   notificationUsers          NotificationUser[]
   orgHistory                 OrgHistory[]                 @relation("UserOrgHistoryRel")
+  userWorkflowPreferenceHistories UserWorkflowPreferenceHistory[] @relation("UserWorkflowPreferenceHistoryRel")
+  userWorkflowPreferences    UserWorkflowPreference[]     @relation("UserWorkflowPreferenceRel")
   userAccesses               UserAccess[]
   userActivities             UserActivity[]
   userHistory                UserHistory[]                @relation("UserHistoryRel")
@@ -56,6 +58,8 @@ model Company {
   orgHistories               OrgHistory[]                 @relation("CompanyOrgHistoryRel")
   orgStructures              OrgStructure[]
   orgStructureReqs           OrgStructureReq[]
+  userWorkflowPreferenceHistories UserWorkflowPreferenceHistory[] @relation("CompanyUserWorkflowPreferenceHistoryRel")
+  userWorkflowPreferences    UserWorkflowPreference[]     @relation("CompanyUserWorkflowPreferenceRel")
   userAccesses               UserAccess[]
   userHistories              UserHistory[]                @relation("CompanyUserHistoryRel")
   userMappings               UserMapping[]
@@ -286,6 +290,51 @@ model NotificationSettingHistory {
   @@map("notification_setting_history")
 }
 
+model UserWorkflowPreference {
+  id         String   @id @default(uuid())
+  companyId  String   @map("company_id")
+  userId     String   @map("user_id")
+  module     String
+  nodeId     String   @map("node_id")
+  workflowId String   @map("workflow_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  company   Company                        @relation("CompanyUserWorkflowPreferenceRel", fields: [companyId], references: [id])
+  user      User                           @relation("UserWorkflowPreferenceRel", fields: [userId], references: [id])
+  node      OrgStructure                   @relation("OrgUserWorkflowPreferenceRel", fields: [nodeId], references: [id])
+  workflow  Workflow                       @relation("WorkflowUserWorkflowPreferenceRel", fields: [workflowId], references: [id])
+  histories UserWorkflowPreferenceHistory[]
+
+  @@unique([userId, module, nodeId])
+  @@index([companyId])
+  @@index([userId])
+  @@index([module])
+  @@index([nodeId])
+  @@index([workflowId])
+  @@map("user_workflow_preference")
+}
+
+model UserWorkflowPreferenceHistory {
+  id           String   @id @default(uuid())
+  preferenceId String?  @map("preference_id")
+  companyId    String   @map("company_id")
+  eventUserId  String   @map("event_user_id")
+  oldData      Json?    @map("old_data")
+  newData      Json?    @map("new_data")
+  remarks      String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  preference UserWorkflowPreference? @relation(fields: [preferenceId], references: [id])
+  company    Company                 @relation("CompanyUserWorkflowPreferenceHistoryRel", fields: [companyId], references: [id])
+  eventUser  User                    @relation("UserWorkflowPreferenceHistoryRel", fields: [eventUserId], references: [id])
+
+  @@index([preferenceId])
+  @@index([companyId])
+  @@index([eventUserId])
+  @@map("user_workflow_preference_history")
+}
+
 model OrgStructureReq {
   id                String           @id @default(uuid())
   data              Json
@@ -342,6 +391,7 @@ model OrgStructure {
   children             OrgStructure[]        @relation("ParentChild")
   userAccess           UserAccess[]
   notificationSettings NotificationSetting[] @relation("OrgNotificationSettingRel")
+  userWorkflowPreferences UserWorkflowPreference[] @relation("OrgUserWorkflowPreferenceRel")
   workflows            Workflow[]
 
   @@index([companyId])
@@ -410,6 +460,7 @@ model Workflow {
   updatedAt         DateTime        @updatedAt @map("updated_at")
   company           Company         @relation(fields: [companyId], references: [id])
   orgStructure      OrgStructure    @relation(fields: [nodeId], references: [id])
+  userWorkflowPreferences UserWorkflowPreference[] @relation("WorkflowUserWorkflowPreferenceRel")
   levels            WorkflowLevel[]
 
   // Partial unique index for non-archived workflows is managed in SQL migration.

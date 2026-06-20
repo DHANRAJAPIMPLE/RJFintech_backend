@@ -26,6 +26,7 @@ import workflowDbRoutes from './routes/workflow.db.routes';
 import editLockDbRoutes from './routes/edit-lock.db.routes';
 import monitoringDbRoutes from './routes/monitoring.db.routes';
 import notificationDbRoutes from './routes/notification.db.routes';
+import preferenceDbRoutes from './routes/preference.db.routes';
 import { createErrorMiddleware } from '../shared/middlewares/error.middleware';
 import { apiMonitoringMiddleware } from './middlewares/apiMonitoring.middleware';
 
@@ -51,6 +52,7 @@ app1.use('/internal/org', orgDbRoutes);
 app1.use('/internal/workflow', workflowDbRoutes);
 app1.use('/internal/edit-lock', editLockDbRoutes);
 app1.use('/internal/notifications', notificationDbRoutes);
+app1.use('/internal/preferences', preferenceDbRoutes);
 app1.use('/monitoring', monitoringDbRoutes);
 
 // Health check

@@ -10,6 +10,7 @@ import authRoutes from './routes/auth.routes';
 import companyRoutes from './routes/company-setting.routes';
 import adminRoutes from './routes/admin.routes';
 import notificationRoutes from './routes/notification.routes';
+import preferenceRoutes from './routes/preference.routes';
 import { createErrorMiddleware } from '../shared/middlewares/error.middleware';
 import { traceMonitoringMiddleware } from './middlewares/traceMonitoring.middleware';
 const allowedOrigins = ['http://localhost:8080', 'http://192.168.1.6:8080'];
@@ -36,6 +37,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/company-settings', companyRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1', preferenceRoutes);
 
 app.get('/', (req, res) => {
   console.log('Health check received');
