@@ -16,6 +16,7 @@ export type UserCompanyNodeWorkflow = {
   name: string;
   alias: string;
   status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
+  selected: boolean;
 };
 
 export type UserCompanyNode = {
@@ -177,25 +178,7 @@ export type FetchCompanyNodesInternalResponse =
 export type FetchCompanyNodesResponse = {
   message: 'User nodes fetched successfully!' | 'User nodes not found';
   code: 200;
-  data: Array<{
-    nodeName: string;
-    nodePath: string;
-    nodeType: string;
-    levelCount: number;
-    modules: Partial<
-      Record<
-        'USER' | 'ORG' | 'WORKFLOW',
-        {
-          workflows: Array<{
-            levelsHash: string;
-            name: string;
-            alias: string;
-            selected: boolean;
-          }>;
-        }
-      >
-    >;
-  }>;
+  data: UserCompanyNode[];
 };
 
 export type FetchCompanyNodesControllerResponse =

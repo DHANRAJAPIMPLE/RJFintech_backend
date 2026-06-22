@@ -3374,10 +3374,9 @@ export class UserDbController {
   ) {
     if (!preference) return workflows;
 
-    return [
-      workflows.find((workflow) => workflow.id === preference.workflowId) ||
-        preference.workflow,
-    ];
+    return workflows.some((workflow) => workflow.id === preference.workflowId)
+      ? workflows
+      : [...workflows, preference.workflow];
   }
 
   private static workflowIdentityKey(target: {
@@ -11109,6 +11108,9 @@ export class UserDbController {
               name: workflow.name,
               alias: workflow.alias,
               status: workflow.status,
+              selected:
+                workflowPreferencesByNodePath.get(node.nodePath)?.workflowId ===
+                workflow.id,
             })),
             roleName: globalAccess.role?.roleName || globalAccess.roleCode,
           };
@@ -11204,6 +11206,10 @@ export class UserDbController {
                 name: workflow.name,
                 alias: workflow.alias,
                 status: workflow.status,
+                selected:
+                  workflowPreferencesByNodePath.get(
+                    ua.orgStructure.nodePath,
+                  )?.workflowId === workflow.id,
               })),
               roleName: ua.role?.roleName || ua.roleCode,
             };
