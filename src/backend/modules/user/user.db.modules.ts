@@ -10981,15 +10981,10 @@ export class UserDbController {
       const [
         pendingOrgNodePaths,
         pendingWorkflowKeys,
-        pendingWorkflowOptionsByNodePath,
         workflowPreferencesByNodePath,
       ] = await Promise.all([
         UserDbController.getPendingOrgNodePathsForFetch(companyId),
         UserDbController.getPendingWorkflowKeysForFetch(companyId),
-        UserDbController.getPendingWorkflowOptionsForFetch(
-          companyId,
-          workflowSubCategory,
-        ),
         UserDbController.getCompanyNodeWorkflowPreferences(
           userId,
           companyId,
@@ -11090,7 +11085,6 @@ export class UserDbController {
                       }) || '',
                     ),
                 ),
-                ...(pendingWorkflowOptionsByNodePath.get(node.nodePath) || []),
               ],
             },
             visibleDefaultWorkflow,
@@ -11185,9 +11179,6 @@ export class UserDbController {
                           }) || '',
                         ),
                     ),
-                    ...(pendingWorkflowOptionsByNodePath.get(
-                      ua.orgStructure.nodePath,
-                    ) || []),
                   ],
                 },
                 visibleDefaultWorkflow,
