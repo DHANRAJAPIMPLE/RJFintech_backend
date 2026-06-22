@@ -417,7 +417,7 @@ class PreferenceService {
         const nodeWorkflowOptions = workflowsByNodeAndModule.get(key) || [];
         const defaultWorkflow = defaultWorkflowMap.get(module) || null;
         const selectedPreference = preferenceByKey.get(key) || null;
-        const selectedWorkflowId = selectedPreference?.workflowId || defaultWorkflow?.id || null;
+        const selectedWorkflowId = selectedPreference?.workflowId || null;
         const workflowMap = new Map<string, PreferenceWorkflowOption>();
 
         if (defaultWorkflow) {

@@ -114,6 +114,11 @@ type CompanyNodeWorkflowOption = {
   nodePath?: string;
 };
 
+type CompanyNodeWorkflowPreference = {
+  workflowId: string;
+  workflow: CompanyNodeWorkflowOption;
+};
+
 type UserRequestType =
   | 'INITIATE'
   | 'UPDATE'
@@ -3283,6 +3288,96 @@ export class UserDbController {
           ? workflows
           : [defaultWorkflow],
     };
+  }
+
+  private static getPreferenceModuleForSubCategory(subCategory: unknown) {
+    const normalizedSubCategory =
+      UserDbController.normalizeFilterText(subCategory);
+    const moduleBySubCategory: Record<string, 'USER' | 'ORG' | 'WORKFLOW'> = {
+      USER_ACC: 'USER',
+      ORG_STR: 'ORG',
+      WORK_FLOW: 'WORKFLOW',
+    };
+
+    return normalizedSubCategory
+      ? moduleBySubCategory[normalizedSubCategory] || null
+      : null;
+  }
+
+  private static async getCompanyNodeWorkflowPreferences(
+    userId: string,
+    companyId: string,
+    subCategory: unknown,
+  ) {
+    const module =
+      UserDbController.getPreferenceModuleForSubCategory(subCategory);
+    const normalizedSubCategory =
+      UserDbController.normalizeFilterText(subCategory);
+
+    if (!module || !normalizedSubCategory) {
+      return new Map<string, CompanyNodeWorkflowPreference>();
+    }
+
+    const preferences = await prisma.userWorkflowPreference.findMany({
+      where: {
+        userId,
+        companyId,
+        module,
+        node: { companyId, status: 'ACTIVE' },
+        workflow: {
+          companyId,
+          subModule: normalizedSubCategory,
+          status: 'ACTIVE',
+        },
+      },
+      select: {
+        workflowId: true,
+        node: { select: { nodePath: true } },
+        workflow: {
+          select: {
+            id: true,
+            levelsHash: true,
+            name: true,
+            alias: true,
+            status: true,
+            module: true,
+            subModule: true,
+            orgStructure: { select: { nodePath: true } },
+          },
+        },
+      },
+    });
+
+    return new Map(
+      preferences.map((preference) => [
+        preference.node.nodePath,
+        {
+          workflowId: preference.workflowId,
+          workflow: {
+            id: preference.workflow.id,
+            levelsHash: preference.workflow.levelsHash,
+            name: preference.workflow.name,
+            alias: preference.workflow.alias,
+            status: preference.workflow.status,
+            module: preference.workflow.module,
+            subModule: preference.workflow.subModule,
+            nodePath: preference.workflow.orgStructure?.nodePath,
+          },
+        },
+      ]),
+    );
+  }
+
+  private static withPreferredWorkflowOption(
+    workflows: CompanyNodeWorkflowOption[],
+    preference: CompanyNodeWorkflowPreference | undefined,
+  ) {
+    if (!preference) return workflows;
+
+    return [
+      workflows.find((workflow) => workflow.id === preference.workflowId) ||
+        preference.workflow,
+    ];
   }
 
   private static workflowIdentityKey(target: {
@@ -10888,10 +10983,16 @@ export class UserDbController {
         pendingOrgNodePaths,
         pendingWorkflowKeys,
         pendingWorkflowOptionsByNodePath,
+        workflowPreferencesByNodePath,
       ] = await Promise.all([
         UserDbController.getPendingOrgNodePathsForFetch(companyId),
         UserDbController.getPendingWorkflowKeysForFetch(companyId),
         UserDbController.getPendingWorkflowOptionsForFetch(
+          companyId,
+          workflowSubCategory,
+        ),
+        UserDbController.getCompanyNodeWorkflowPreferences(
+          userId,
           companyId,
           workflowSubCategory,
         ),
@@ -10996,9 +11097,14 @@ export class UserDbController {
             visibleDefaultWorkflow,
           );
 
+          const visibleWorkflows = UserDbController.withPreferredWorkflowOption(
+            nodeWithWorkflows.workflows,
+            workflowPreferencesByNodePath.get(node.nodePath),
+          );
+
           return {
             ...nodeWithWorkflows,
-            workflows: nodeWithWorkflows.workflows.map((workflow: any) => ({
+            workflows: visibleWorkflows.map((workflow: any) => ({
               levelsHash: workflow.levelsHash,
               name: workflow.name,
               alias: workflow.alias,
@@ -11085,9 +11191,15 @@ export class UserDbController {
                 visibleDefaultWorkflow,
               );
 
+            const visibleWorkflows =
+              UserDbController.withPreferredWorkflowOption(
+                nodeWithWorkflows.workflows,
+                workflowPreferencesByNodePath.get(ua.orgStructure.nodePath),
+              );
+
             return {
               ...nodeWithWorkflows,
-              workflows: nodeWithWorkflows.workflows.map((workflow: any) => ({
+              workflows: visibleWorkflows.map((workflow: any) => ({
                 levelsHash: workflow.levelsHash,
                 name: workflow.name,
                 alias: workflow.alias,
