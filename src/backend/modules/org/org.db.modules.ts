@@ -69,6 +69,19 @@ type PendingUserAccessRemovalNotification = {
   }>;
 };
 
+type PendingUserAccessAdditionNotification = {
+  requestId: string;
+  initiatorId: string | null;
+  eligibleApprovers: string[];
+  targetUserName: string;
+  targetUserEmail: string | null;
+  addedPermissions: Array<{
+    nodeName: string;
+    nodePath: string;
+    roleName: string;
+  }>;
+};
+
 type PendingWorkflowDeletionNotification = {
   requestId: string;
   initiatorId: string | null;
@@ -800,6 +813,111 @@ export class OrgStructureDbController {
           : [],
         ...OrgStructureDbController.getPendingUserTargetName(requestData),
         removedPermissions,
+      });
+    }
+
+    return notifications;
+  }
+
+  private static async addInheritedAccessToPendingUserRequests(
+    tx: any,
+    params: {
+      companyId: string;
+      nodeName: string;
+      nodePath: string;
+      nodeType: string;
+      parentNodePath: string | null;
+    },
+  ): Promise<PendingUserAccessAdditionNotification[]> {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: 'INITIATE',
+      },
+      select: {
+        id: true,
+        data: true,
+        initiatorId: true,
+        eligibleApprovers: true,
+      },
+    });
+    const notifications: PendingUserAccessAdditionNotification[] = [];
+
+    for (const request of pendingRequests) {
+      const requestData = (request.data || {}) as any;
+      const permissions = Array.isArray(requestData.permissions)
+        ? requestData.permissions
+        : [];
+      const existingKeys = new Set(
+        permissions.map((permission: any) =>
+          [permission?.roleName || '', permission?.nodePath || ''].join('|'),
+        ),
+      );
+      const addedPermissions: PendingUserAccessAdditionNotification['addedPermissions'] =
+        [];
+      const generatedPermissions: any[] = [];
+
+      for (const permission of permissions) {
+        const operation =
+          permission?.remove === true
+            ? 'REMOVE'
+            : String(permission?.operation || '').trim().toUpperCase();
+        const sourceNodePath = String(permission?.nodePath || '').trim();
+        const accessCategory = String(
+          permission?.accessCategory || '',
+        ).toUpperCase();
+        const appliesToNewNode =
+          operation !== 'REMOVE' &&
+          permission?.roleName !== 'Corp Admin' &&
+          ((accessCategory === 'ALL_CHILD' &&
+            sourceNodePath &&
+            params.nodePath.startsWith(`${sourceNodePath}.`)) ||
+            (accessCategory === 'IMMEDIATE_CHILD' &&
+              sourceNodePath === params.parentNodePath));
+        const permissionKey = [
+          permission?.roleName || '',
+          params.nodePath,
+        ].join('|');
+
+        if (!appliesToNewNode || existingKeys.has(permissionKey)) continue;
+        existingKeys.add(permissionKey);
+        generatedPermissions.push({
+          ...permission,
+          accessType: 'SECONDARY',
+          nodeName: params.nodeName,
+          nodePath: params.nodePath,
+          nodeType: params.nodeType,
+          sourceTag: 'AUTO_GENERATED',
+          accessCategory:
+            accessCategory === 'IMMEDIATE_CHILD' ? 'NODE' : 'ALL_CHILD',
+        });
+        addedPermissions.push({
+          nodeName: params.nodeName,
+          nodePath: params.nodePath,
+          roleName: permission?.roleName || 'role access',
+        });
+      }
+
+      if (generatedPermissions.length === 0) continue;
+
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          data: {
+            ...requestData,
+            permissions: [...permissions, ...generatedPermissions],
+          } as any,
+        },
+      });
+      notifications.push({
+        requestId: request.id,
+        initiatorId: request.initiatorId || null,
+        eligibleApprovers: Array.isArray(request.eligibleApprovers)
+          ? request.eligibleApprovers
+          : [],
+        ...OrgStructureDbController.getPendingUserTargetName(requestData),
+        addedPermissions,
       });
     }
 
@@ -1893,8 +2011,8 @@ export class OrgStructureDbController {
     await NotificationService.createRequestNotification({
       companyId,
       type: 'ONBOARDED',
-      name: 'Workflow auto-generated',
-      message: `System auto-generated ${generatedWorkflows.length} workflow(s): ${generatedSummary}.`,
+      name: 'Active workflow auto-generated',
+      message: `System auto-generated ${generatedWorkflows.length} active workflow(s): ${generatedSummary}.`,
       referenceType: 'WORKFLOW',
       referenceId: params.orgReqId,
       referenceName: generatedWorkflows[0]?.nodeName || 'workflow',
@@ -1953,8 +2071,8 @@ export class OrgStructureDbController {
     await NotificationService.createRequestNotification({
       companyId: params.companyId,
       type: 'AUTO_DELETE',
-      name: 'Workflow deleted because organization was inactivated',
-      message: `Workflow(s) were deleted because the related organization node was inactivated: ${deletedSummary || 'workflow'}.`,
+      name: 'Active workflow deleted',
+      message: `Active workflow(s) were deleted because the related organization node was inactivated: ${deletedSummary || 'workflow'}.`,
       referenceType: 'WORKFLOW',
       referenceId: params.orgReqId,
       referenceName: deletedSummary || 'workflow',
@@ -2532,9 +2650,9 @@ export class OrgStructureDbController {
         type: params.changeAction === 'REMOVED' ? 'INACTIVE' : 'MODIFICATION',
         name:
           params.changeAction === 'REMOVED'
-            ? 'Organization user access removed'
-            : 'Organization user access added',
-        message: `${params.changeAction === 'REMOVED' ? 'User access removed' : 'User access added'} for organization changes:\n${stakeholderLines.join('\n')}`,
+            ? 'Active user access removed'
+            : 'Active user access added',
+        message: `${params.changeAction === 'REMOVED' ? 'Active user access removed' : 'Active user access added'} for organization changes:\n${stakeholderLines.join('\n')}`,
         referenceType: 'ORG',
         referenceId: params.orgReqId,
         referenceName: stakeholderReference,
@@ -2556,9 +2674,9 @@ export class OrgStructureDbController {
         type: params.changeAction === 'REMOVED' ? 'INACTIVE' : 'MODIFICATION',
         name:
           params.changeAction === 'REMOVED'
-            ? 'Organization user access removed'
-            : 'Organization user access added',
-        message: `User access ${params.changeAction === 'REMOVED' ? 'removed' : 'added'} for ${change.userName}${change.userEmail ? ` (${change.userEmail})` : ''}. Role ${roleLabel} was ${params.changeAction === 'REMOVED' ? 'removed from' : 'added to'} organization ${change.nodeName} (${change.nodePath}).`,
+            ? 'Active user access removed'
+            : 'Active user access added',
+        message: `Active user access ${params.changeAction === 'REMOVED' ? 'removed' : 'added'} for ${change.userName}${change.userEmail ? ` (${change.userEmail})` : ''}. Role ${roleLabel} was ${params.changeAction === 'REMOVED' ? 'removed from' : 'added to'} organization ${change.nodeName} (${change.nodePath}).`,
         referenceType: 'ORG',
         referenceId: params.orgReqId,
         referenceName: change.nodePath,
@@ -2622,6 +2740,48 @@ export class OrgStructureDbController {
     }
   }
 
+  private static async notifyPendingUserAccessAdded(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    changes: PendingUserAccessAdditionNotification[];
+  }) {
+    if (params.changes.length === 0) return;
+
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      params.companyId,
+    );
+
+    for (const change of params.changes) {
+      const roleNames = Array.from(
+        new Set(change.addedPermissions.map((permission) => permission.roleName)),
+      ).sort();
+      const node = change.addedPermissions[0];
+
+      await NotificationService.createRequestNotification({
+        companyId: params.companyId,
+        type: 'MODIFICATION',
+        name: 'Pending user access added',
+        message: `Inherited access was added to the pending user request for ${change.targetUserName}${change.targetUserEmail ? ` (${change.targetUserEmail})` : ''}. Role ${roleNames.join(', ')} was added to organization ${node?.nodeName || 'organization'} (${node?.nodePath || 'unknown'}).`,
+        referenceType: 'USER',
+        referenceId: change.requestId,
+        referenceName: change.targetUserEmail || change.targetUserName,
+        createdBy: params.createdBy,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.initiatorId,
+          change.eligibleApprovers,
+          corpAdminUserIds,
+        ),
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.initiatorId,
+          change.eligibleApprovers,
+        ),
+        includeCreatedBy: true,
+        isPending: false,
+      });
+    }
+  }
+
   private static async notifyPendingWorkflowDeleted(params: {
     companyId: string;
     createdBy: string;
@@ -2635,32 +2795,29 @@ export class OrgStructureDbController {
       params.companyId,
     );
 
-    const recipientUserIds = NotificationService.mergeRecipientUserIds(
-      params.changes.map((change) => change.initiatorId),
-      params.changes.flatMap((change) => change.eligibleApprovers),
-      corpAdminUserIds,
-    );
-    const workflowLines = params.changes.map(
-      (change) => `${change.workflowName} at ${change.targetNodePath}.`,
-    );
-
-    await NotificationService.createRequestNotification({
-      companyId: params.companyId,
-      type: 'AUTO_DELETE',
-      name: 'Pending workflow request deleted',
-      message: `Pending workflow requests were removed because organization ${params.nodeName} (${params.nodePath}) was inactivated:\n${workflowLines.join('\n')}`,
-      referenceType: 'WORKFLOW',
-      referenceId: params.changes[0]?.requestId || params.nodePath,
-      referenceName: params.nodePath,
-      createdBy: params.createdBy,
-      recipientUserIds,
-      requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-        params.changes.map((change) => change.initiatorId),
-        params.changes.flatMap((change) => change.eligibleApprovers),
-      ),
-      includeCreatedBy: true,
-      isPending: false,
-    });
+    for (const change of params.changes) {
+      await NotificationService.createRequestNotification({
+        companyId: params.companyId,
+        type: 'AUTO_DELETE',
+        name: 'Pending workflow request deleted',
+        message: `Pending workflow request ${change.workflowName} at ${change.targetNodePath} was removed because organization ${params.nodeName} (${params.nodePath}) was inactivated.`,
+        referenceType: 'WORKFLOW',
+        referenceId: change.requestId,
+        referenceName: change.workflowName,
+        createdBy: params.createdBy,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.initiatorId,
+          change.eligibleApprovers,
+          corpAdminUserIds,
+        ),
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.initiatorId,
+          change.eligibleApprovers,
+        ),
+        includeCreatedBy: true,
+        isPending: false,
+      });
+    }
   }
 
   private static pathsOverlap(left: string, right: string) {
@@ -3771,6 +3928,18 @@ export class OrgStructureDbController {
       },
     });
 
+    const pendingUserAccessAdditions =
+      await OrgStructureDbController.addInheritedAccessToPendingUserRequests(
+        tx,
+        {
+          companyId: request.companyId,
+          nodeName: newNode.nodeName,
+          nodePath: newNode.nodePath,
+          nodeType: String(newNode.nodeType),
+          parentNodePath: parentPath,
+        },
+      );
+
     const autoGeneratedWorkflowNotifications =
       await OrgStructureDbController.autoGenerateChildWorkflows(tx, {
         companyId: request.companyId,
@@ -3933,6 +4102,7 @@ export class OrgStructureDbController {
       updated,
       userAccessImpactNotification,
       autoGeneratedWorkflowNotifications,
+      pendingUserAccessAdditions,
     };
   }
 
@@ -4005,6 +4175,8 @@ export class OrgStructureDbController {
       let notificationRecipients: string[] = [];
       let notificationSubject = 'Organization request';
       let userAccessImpactNotification: any = null;
+      let pendingUserAccessAdditions: PendingUserAccessAdditionNotification[] =
+        [];
       const orgLifecycleNotification: {
         inactivation: OrgInactivationNotification | null;
         autoDeletedWorkflows: OrgAutoDeletedWorkflowNotification[];
@@ -4208,6 +4380,7 @@ export class OrgStructureDbController {
             finalized.userAccessImpactNotification;
           autoGeneratedWorkflowNotifications =
             finalized.autoGeneratedWorkflowNotifications;
+          pendingUserAccessAdditions = finalized.pendingUserAccessAdditions;
 
           return {
             ...finalized.updated,
@@ -4345,6 +4518,20 @@ export class OrgStructureDbController {
           createdBy: approverId,
           accessChanges: userAccessImpactNotification.accessChanges,
           changeAction: 'ADDED',
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type !== 'UPDATE' &&
+        pendingUserAccessAdditions.length > 0
+      ) {
+        await OrgStructureDbController.notifyPendingUserAccessAdded({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          changes: pendingUserAccessAdditions,
         });
       }
 
@@ -4520,6 +4707,8 @@ export class OrgStructureDbController {
       );
       let notificationRecipients = rest.eligibleApprovers;
       let userAccessImpactNotification: any = null;
+      let pendingUserAccessAdditions: PendingUserAccessAdditionNotification[] =
+        [];
       let autoGeneratedWorkflowNotifications: Array<{
         workflowName: string;
         alias: string;
@@ -4647,6 +4836,7 @@ export class OrgStructureDbController {
               finalized.userAccessImpactNotification;
             autoGeneratedWorkflowNotifications =
               finalized.autoGeneratedWorkflowNotifications;
+            pendingUserAccessAdditions = finalized.pendingUserAccessAdditions;
             await tx.orgHistory.create({
               data: {
                 companyId: resolvedCompanyId,
@@ -4708,6 +4898,14 @@ export class OrgStructureDbController {
           createdBy: initiatorId,
           accessChanges: userAccessImpactNotification.accessChanges,
           changeAction: 'ADDED',
+        });
+      }
+      if (isAutoApproved && pendingUserAccessAdditions.length > 0) {
+        await OrgStructureDbController.notifyPendingUserAccessAdded({
+          companyId: resolvedCompanyId,
+          orgReqId: request.id,
+          createdBy: initiatorId,
+          changes: pendingUserAccessAdditions,
         });
       }
       if (isAutoApproved && autoGeneratedWorkflowNotifications.length > 0) {
