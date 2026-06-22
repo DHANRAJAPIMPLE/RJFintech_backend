@@ -49,6 +49,29 @@ type OrgImpactSummary = {
   }>;
 };
 
+type PendingUserPermissionSnapshot = {
+  accessType: 'PRIMARY' | 'SECONDARY';
+  roleName: string;
+  roleCategory: string;
+  roleSubCategory: string;
+  nodeName: string;
+  nodePath: string;
+  accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
+};
+
+type PendingUserDataSnapshot = {
+  basicDetails: {
+    name: string;
+    email: string;
+    phone: string;
+    designation: string | null;
+    employeeId: string | null;
+    reportingManager: string | null;
+    status: string;
+  };
+  permissions: PendingUserPermissionSnapshot[];
+};
+
 type OrgAutoDeletedWorkflowNotification = {
   workflowName: string;
   nodeName: string;
@@ -115,16 +138,6 @@ type AutoUserAccessAuditEntry = {
   accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
   companyId: string;
   isGlobalAccess: boolean;
-};
-
-type PendingUserPermissionSnapshot = {
-  accessType: 'PRIMARY' | 'SECONDARY';
-  roleName: string;
-  roleCategory: string;
-  roleSubCategory: string;
-  nodeName: string;
-  nodePath: string;
-  accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
 };
 
 type OrgLinkedStructureNode = {
@@ -2469,9 +2482,560 @@ export class OrgStructureDbController {
         newNodePath,
       );
 
-    return OrgStructureDbController.buildImpactUsersFromAccessRows(
-      parentAccesses,
+    const [activeImpactUsers, pendingImpactUsers] = await Promise.all([
+      Promise.resolve(
+        OrgStructureDbController.buildImpactUsersFromAccessRows(parentAccesses),
+      ),
+      OrgStructureDbController.getPendingPropagatedUserAccessSummaries(
+        client,
+        companyId,
+        newNodePath,
+      ),
+    ]);
+
+    return OrgStructureDbController.mergeImpactUserSummaries(
+      activeImpactUsers,
+      pendingImpactUsers,
     );
+  }
+
+  private static normalizePendingUserSnapshotSource(data: any) {
+    return data?.newData ?? data?.data ?? data ?? {};
+  }
+
+  private static normalizePendingPermission(
+    permission: any,
+  ): PendingUserPermissionSnapshot {
+    return {
+      accessType: permission?.accessType,
+      roleName: permission?.roleName,
+      roleCategory: permission?.roleCategory,
+      roleSubCategory: permission?.roleSubCategory,
+      nodeName: permission?.nodeName,
+      nodePath: permission?.nodePath,
+      accessCategory: permission?.accessCategory || null,
+    };
+  }
+
+  private static pendingPermissionsEqual(
+    left: PendingUserPermissionSnapshot,
+    right: PendingUserPermissionSnapshot,
+  ) {
+    return (
+      left.accessType === right.accessType &&
+      left.roleName === right.roleName &&
+      left.roleCategory === right.roleCategory &&
+      left.roleSubCategory === right.roleSubCategory &&
+      left.nodeName === right.nodeName &&
+      left.nodePath === right.nodePath &&
+      left.accessCategory === right.accessCategory
+    );
+  }
+
+  private static pendingPermissionReplacementKey(
+    permission: PendingUserPermissionSnapshot,
+  ) {
+    if (permission.accessType === 'PRIMARY') return 'PRIMARY';
+
+    return [
+      permission.accessType,
+      permission.roleName,
+      permission.nodePath,
+    ].join('|');
+  }
+
+  private static mergePendingPermissionMutations(
+    existing: PendingUserPermissionSnapshot[],
+    requested: any[],
+  ) {
+    const proposed = existing.map((permission) => ({ ...permission }));
+
+    for (const request of requested) {
+      const permission =
+        OrgStructureDbController.normalizePendingPermission(request);
+      const operation =
+        request?.remove === true
+          ? 'REMOVE'
+          : typeof request?.operation === 'string'
+            ? request.operation.toUpperCase()
+            : null;
+      const exactIndex = proposed.findIndex((stored) =>
+        OrgStructureDbController.pendingPermissionsEqual(stored, permission),
+      );
+      const replacementIndex = proposed.findIndex(
+        (stored) =>
+          OrgStructureDbController.pendingPermissionReplacementKey(stored) ===
+          OrgStructureDbController.pendingPermissionReplacementKey(permission),
+      );
+
+      if (operation === 'REMOVE') {
+        const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+        if (index >= 0) proposed.splice(index, 1);
+        continue;
+      }
+
+      if (permission.accessType === 'PRIMARY') {
+        for (let index = proposed.length - 1; index >= 0; index--) {
+          if (proposed[index]?.accessType === 'PRIMARY') {
+            proposed.splice(index, 1);
+          }
+        }
+        proposed.push(permission);
+        continue;
+      }
+
+      const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+      if (index >= 0) {
+        proposed[index] = permission;
+      } else {
+        proposed.push(permission);
+      }
+    }
+
+    return proposed;
+  }
+
+  private static extractPendingUserTargetEmail(data: any): string | null {
+    const source = OrgStructureDbController.normalizePendingUserSnapshotSource(
+      data,
+    );
+    const candidates = [
+      data?.targetUserEmail,
+      source?.targetUserEmail,
+      source?.basicDetails?.email,
+      source?.data?.basicDetails?.email,
+      source?.newData?.basicDetails?.email,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim().toLowerCase();
+      }
+    }
+
+    return null;
+  }
+
+  private static extractPendingUserSnapshot(
+    data: any,
+  ): PendingUserDataSnapshot | null {
+    const source = OrgStructureDbController.normalizePendingUserSnapshotSource(
+      data,
+    );
+    const basicDetails = source?.basicDetails || source?.data?.basicDetails;
+    const permissions = Array.isArray(source?.permissions)
+      ? source.permissions
+      : Array.isArray(source?.data?.permissions)
+        ? source.data.permissions
+        : [];
+
+    if (!basicDetails) return null;
+
+    return {
+      basicDetails: {
+        name: basicDetails.name || '',
+        email: basicDetails.email || '',
+        phone: basicDetails.phone || '',
+        designation: basicDetails.designation ?? null,
+        employeeId: basicDetails.employeeId ?? null,
+        reportingManager: basicDetails.reportingManager ?? null,
+        status: basicDetails.status || 'ACTIVE',
+      },
+      permissions: permissions.map((permission: any) =>
+        OrgStructureDbController.normalizePendingPermission(permission),
+      ),
+    };
+  }
+
+  private static applyPendingUserRequestSnapshot(
+    current: PendingUserDataSnapshot,
+    request: any,
+  ): PendingUserDataSnapshot {
+    const requestData = OrgStructureDbController.normalizePendingUserSnapshotSource(
+      request?.data,
+    );
+    const next: PendingUserDataSnapshot = cloneJson(current);
+
+    if (request?.type === 'ARCHIVE') {
+      next.permissions = [];
+      next.basicDetails.status = 'ARCHIVE';
+      return next;
+    }
+
+    const permissionMutations = Array.isArray(requestData?.permissions)
+      ? requestData.permissions
+      : [];
+    if (permissionMutations.length > 0) {
+      next.permissions = OrgStructureDbController.mergePendingPermissionMutations(
+        next.permissions,
+        permissionMutations,
+      );
+    }
+
+    const changedDetails =
+      requestData?.basicDetails || requestData?.data?.basicDetails || {};
+    for (const field of [
+      'name',
+      'email',
+      'phone',
+      'designation',
+      'employeeId',
+      'reportingManager',
+    ] as const) {
+      if (changedDetails[field] !== undefined) {
+        next.basicDetails[field] = changedDetails[field];
+      }
+    }
+
+    if (request?.type === 'ACTIVE') next.basicDetails.status = 'ACTIVE';
+    if (request?.type === 'INACTIVE') next.basicDetails.status = 'INACTIVE';
+    if (changedDetails.status !== undefined) {
+      next.basicDetails.status = changedDetails.status;
+    }
+
+    return next;
+  }
+
+  private static permissionImpactsNewNode(
+    permission: PendingUserPermissionSnapshot,
+    newNodePath: string,
+  ) {
+    const permissionNodePath =
+      typeof permission?.nodePath === 'string' ? permission.nodePath.trim() : '';
+    if (!permissionNodePath) return false;
+
+    const accessCategory = String(permission.accessCategory || 'NODE')
+      .trim()
+      .toUpperCase();
+
+    if (permissionNodePath === newNodePath) return true;
+    if (accessCategory === 'ALL_CHILD') {
+      return newNodePath.startsWith(`${permissionNodePath}.`);
+    }
+    if (accessCategory === 'IMMEDIATE_CHILD') {
+      return ltree.getParent(newNodePath) === permissionNodePath;
+    }
+
+    return false;
+  }
+
+  private static mergeImpactUserSummaries(
+    ...collections: Array<
+      Array<{
+        name: string;
+        email: string | null;
+        access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
+      }>
+    >
+  ) {
+    const merged = new Map<
+      string,
+      {
+        name: string;
+        email: string | null;
+        access: {
+          user: Set<string>;
+          workflow: Set<string>;
+          org: Set<string>;
+        };
+      }
+    >();
+
+    for (const collection of collections) {
+      for (const user of collection) {
+        const name = typeof user?.name === 'string' ? user.name.trim() : '';
+        if (!name) continue;
+
+        const email =
+          typeof user?.email === 'string' && user.email.trim()
+            ? user.email.trim()
+            : null;
+        const key = `${name.toLowerCase()}::${(email || '').toLowerCase()}`;
+        const current = merged.get(key) || {
+          name,
+          email,
+          access: {
+            user: new Set<string>(),
+            workflow: new Set<string>(),
+            org: new Set<string>(),
+          },
+        };
+
+        for (const moduleName of ['user', 'workflow', 'org'] as const) {
+          const values = Array.isArray(user?.access?.[moduleName])
+            ? user.access[moduleName]
+            : [];
+          values.forEach((value) => current.access[moduleName].add(value));
+        }
+
+        merged.set(key, current);
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((user) => {
+        const access = {
+          user: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.user),
+          ),
+          workflow: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.workflow),
+          ),
+          org: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.org),
+          ),
+        };
+
+        return {
+          name: user.name,
+          email: user.email,
+          ...(access.user.length > 0 ||
+          access.workflow.length > 0 ||
+          access.org.length > 0
+            ? {
+                access: {
+                  ...(access.user.length > 0 ? { user: access.user } : {}),
+                  ...(access.workflow.length > 0
+                    ? { workflow: access.workflow }
+                    : {}),
+                  ...(access.org.length > 0 ? { org: access.org } : {}),
+                },
+              }
+            : {}),
+        };
+      });
+  }
+
+  private static async getPendingPropagatedUserAccessSummaries(
+    client: any,
+    companyId: string,
+    newNodePath: string,
+  ) {
+    const pendingRequestsRaw = await client.userOnboarding.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+      },
+      select: {
+        id: true,
+        type: true,
+        data: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
+    if (pendingRequestsRaw.length === 0) return [];
+
+    const effectivePendingIds =
+      await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+        'user_onboarding',
+        pendingRequestsRaw.map((request: any) => request.id),
+      );
+    const pendingRequests = pendingRequestsRaw.filter((request: any) =>
+      effectivePendingIds.has(request.id),
+    );
+
+    if (pendingRequests.length === 0) return [];
+
+    const requestsByEmail = new Map<string, any[]>();
+    pendingRequests.forEach((request: any) => {
+      const email = OrgStructureDbController.extractPendingUserTargetEmail(
+        request.data,
+      );
+      if (!email) return;
+
+      const current = requestsByEmail.get(email) || [];
+      current.push(request);
+      requestsByEmail.set(email, current);
+    });
+
+    const targetEmails = Array.from(requestsByEmail.keys());
+    if (targetEmails.length === 0) return [];
+
+    const existingUsers = await client.user.findMany({
+      where: {
+        email: {
+          in: targetEmails,
+        },
+      },
+      select: {
+        id: true,
+        email: true,
+      },
+    });
+    const existingUsersByEmail = new Map<
+      string,
+      { id: string; email: string }
+    >(
+      existingUsers.map((user: any) => [
+        String(user.email).toLowerCase(),
+        user,
+      ]),
+    );
+
+    const finalSnapshots = await Promise.all(
+      Array.from(requestsByEmail.entries()).map(async ([email, requests]) => {
+        const sortedRequests = [...requests].sort((left, right) => {
+          const leftTime = new Date(left.createdAt).getTime();
+          const rightTime = new Date(right.createdAt).getTime();
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return String(left.id).localeCompare(String(right.id));
+        });
+
+        let snapshot: PendingUserDataSnapshot | null = null;
+        const existingUser = existingUsersByEmail.get(email);
+        if (existingUser?.id) {
+          const current = await client.user.findUnique({
+            where: { id: existingUser.id },
+            select: {
+              id: true,
+            },
+          });
+          if (current?.id) {
+            const accessRows = await client.userAccess.findMany({
+              where: {
+                companyId,
+                userId: current.id,
+              },
+              include: {
+                role: true,
+                orgStructure: true,
+              },
+            });
+            const userRecord = await client.user.findUnique({
+              where: { id: current.id },
+              select: { name: true, email: true, phone: true },
+            });
+            const userMapping = await client.userMapping.findUnique({
+              where: {
+                userId_companyId: {
+                  userId: current.id,
+                  companyId,
+                },
+              },
+              select: {
+                designation: true,
+                employeeId: true,
+                status: true,
+              },
+            });
+            snapshot = {
+              basicDetails: {
+                name: userRecord?.name || '',
+                email: userRecord?.email || email,
+                phone: userRecord?.phone || '',
+                designation: userMapping?.designation ?? null,
+                employeeId: userMapping?.employeeId ?? null,
+                reportingManager: null,
+                status: userMapping?.status || 'ACTIVE',
+              },
+              permissions: accessRows.map((access: any) => ({
+                accessType: access.accessType || 'SECONDARY',
+                roleName: access.role?.roleName || '',
+                roleCategory: access.role?.category || '',
+                roleSubCategory: access.role?.subCategory || '',
+                nodeName: access.orgStructure?.nodeName || '',
+                nodePath: access.orgStructure?.nodePath || '',
+                accessCategory: access.accessCategory || null,
+              })),
+            };
+          }
+        }
+
+        for (const request of sortedRequests) {
+          if (!snapshot) {
+            snapshot = OrgStructureDbController.extractPendingUserSnapshot(
+              request.data,
+            );
+            continue;
+          }
+          snapshot = OrgStructureDbController.applyPendingUserRequestSnapshot(
+            snapshot,
+            request,
+          );
+        }
+
+        return snapshot;
+      }),
+    );
+
+    const impactingSnapshots = finalSnapshots.filter(
+      (snapshot): snapshot is PendingUserDataSnapshot =>
+        Boolean(snapshot?.basicDetails?.name) &&
+        Array.isArray(snapshot?.permissions) &&
+        snapshot.permissions.some((permission) =>
+          OrgStructureDbController.permissionImpactsNewNode(
+            permission,
+            newNodePath,
+          ),
+        ),
+    );
+
+    if (impactingSnapshots.length === 0) return [];
+
+    const roleNames = Array.from(
+      new Set(
+        impactingSnapshots.flatMap((snapshot) =>
+          snapshot.permissions
+            .map((permission) =>
+              typeof permission.roleName === 'string'
+                ? permission.roleName.trim()
+                : '',
+            )
+            .filter(Boolean),
+        ),
+      ),
+    );
+    const roles = roleNames.length
+      ? await client.roles.findMany({
+          where: {
+            roleName: {
+              in: roleNames,
+            },
+          },
+          select: {
+            roleName: true,
+            subCategory: true,
+            permissionLevel: true,
+            view: true,
+            modify: true,
+            approve: true,
+            initiate: true,
+          },
+        })
+      : [];
+    const rolesByName = new Map(
+      roles.map((role: any) => [role.roleName, role]),
+    );
+
+    const accessRows = impactingSnapshots.flatMap((snapshot) =>
+      snapshot.permissions
+        .filter((permission) =>
+          OrgStructureDbController.permissionImpactsNewNode(
+            permission,
+            newNodePath,
+          ),
+        )
+        .map((permission) => ({
+          user: {
+            name: snapshot.basicDetails.name,
+            email: snapshot.basicDetails.email || null,
+          },
+          role:
+            rolesByName.get(permission.roleName) || {
+              subCategory: permission.roleSubCategory || null,
+              permissionLevel: null,
+              view: false,
+              modify: false,
+              approve: false,
+              initiate: false,
+            },
+        })),
+    );
+
+    return OrgStructureDbController.buildImpactUsersFromAccessRows(accessRows);
   }
 
   private static async getAutoGeneratedWorkflowTemplateSummaries(
