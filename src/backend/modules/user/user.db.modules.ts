@@ -9075,6 +9075,20 @@ export class UserDbController {
           },
         });
 
+        // Always persist initiation before any NO_APPROVER auto-approval so
+        // audit history reflects the actual request lifecycle.
+        if (initiatorId && email) {
+          await tx.userHistory.create({
+            data: {
+              email,
+              event: 'INITIATE',
+              eventUserId: initiatorId,
+              companyId: resolvedCompanyId,
+              reqId: onb.id,
+            },
+          });
+        }
+
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         // Determine the node for approver resolution from the permissions data
         const permissions = onboardingData.data?.permissions || [];
@@ -9135,6 +9149,16 @@ export class UserDbController {
                 remarks: 'Auto-approved: selected workflow has NO_APPROVER',
               },
             });
+            const approvedOnboarding = await tx.userOnboarding.findUnique({
+              where: { id: onb.id },
+            });
+            if (!approvedOnboarding) {
+              throw new AppError(
+                'Auto-approved user onboarding request could not be loaded',
+                500,
+              );
+            }
+            return approvedOnboarding;
           } else {
             notificationRecipients = currentLevelApprovers;
 
@@ -9144,19 +9168,6 @@ export class UserDbController {
               data: { workflowId: resolvedWorkflowId },
             });
           }
-        }
-
-        // Log INITIATE event with reqId reference
-        if (initiatorId && email) {
-          await tx.userHistory.create({
-            data: {
-              email,
-              event: 'INITIATE',
-              eventUserId: initiatorId,
-              companyId: resolvedCompanyId,
-              reqId: onb.id,
-            },
-          });
         }
         return onb;
       });

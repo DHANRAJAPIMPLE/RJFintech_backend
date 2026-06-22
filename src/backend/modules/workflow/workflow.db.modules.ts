@@ -1446,20 +1446,6 @@ export class WorkflowDbController {
     return `1M_${totalApprovers}C_${totalLevels}`;
   }
 
-  private static isNoApproverLevel(level: any) {
-    return Boolean(level) && level.approver1 === 'NO_APPROVER' && !level.approver2;
-  }
-
-  private static isNoApproverWorkflow(levels: any) {
-    const configuredLevels = Object.values(levels || {}).filter(Boolean) as any[];
-    return (
-      configuredLevels.length > 0 &&
-      configuredLevels.every((level) =>
-        WorkflowDbController.isNoApproverLevel(level),
-      )
-    );
-  }
-
   private static doesAccessCoverNode(
     access: {
       isGlobalAccess?: boolean | null;
@@ -4122,8 +4108,6 @@ export class WorkflowDbController {
       const nodeId = node.id;
       const levelsHash = WorkflowDbController.buildLevelsHash(levels);
       const generatedAlias = WorkflowDbController.buildAlias(levels);
-      const autoApproveOnCreate =
-        WorkflowDbController.isNoApproverWorkflow(levels);
 
       // 2. Block if duplicate exists on the same unique workflow identity.
       // If an inactive record exists, callers must modify/reactivate it instead
@@ -4189,6 +4173,7 @@ export class WorkflowDbController {
         (id) => id !== initiatorId,
       );
       let notificationRecipients = filteredApprovers;
+      let autoApprovedBySelectedWorkflow = false;
 
       const result = await prisma.$transaction(async (tx) => {
         const request = await tx.workflowReq.create({
@@ -4218,32 +4203,13 @@ export class WorkflowDbController {
           },
         });
 
-        if (autoApproveOnCreate) {
-          notificationRecipients = [];
-          const { updated } = await WorkflowDbController.finalizeApprovedInitiation(
-            tx,
-            request,
-            initiatorId,
-            'Auto-approved: workflow configured with NO_APPROVER',
-          );
-          await tx.workflowReqHistory.create({
-            data: {
-              workflowReqId: request.id,
-              companyId: resolvedCompanyId,
-              event: 'APPROVED',
-              eventUserId: initiatorId,
-              remarks: 'Auto-approved: workflow configured with NO_APPROVER',
-            },
-          });
-          return {
-            ...updated,
-            company: request.company,
-          };
-        }
-
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         if (initiatorId) {
-          const { workflowId: resolvedWorkflowId, currentLevelApprovers } =
+          const {
+            workflowId: resolvedWorkflowId,
+            currentLevelApprovers,
+            autoApprove,
+          } =
             await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
               levelsHash: parentLevelsHash || null,
               module: 'SYSTEM_ACCESS',
@@ -4261,6 +4227,30 @@ export class WorkflowDbController {
             where: { id: request.id },
             data: { approvalWorkflowId: resolvedWorkflowId },
           });
+
+          if (autoApprove) {
+            autoApprovedBySelectedWorkflow = true;
+            notificationRecipients = [];
+            const autoApprovalRemark =
+              'Auto-approved: selected workflow has NO_APPROVER';
+            const { updated } =
+              await WorkflowDbController.finalizeApprovedInitiation(
+                tx,
+                request,
+                initiatorId,
+                autoApprovalRemark,
+              );
+            await tx.workflowReqHistory.create({
+              data: {
+                workflowReqId: request.id,
+                companyId: resolvedCompanyId,
+                event: 'APPROVED',
+                eventUserId: initiatorId,
+                remarks: autoApprovalRemark,
+              },
+            });
+            return { ...updated, company: request.company };
+          }
         }
 
         return request;
@@ -4272,7 +4262,7 @@ export class WorkflowDbController {
           initiatorId,
           'WORK_FLOW',
         );
-      const nodeAccessRecipientUserIds = autoApproveOnCreate
+      const nodeAccessRecipientUserIds = autoApprovedBySelectedWorkflow
         ? await WorkflowDbController.getNodeAccessNotificationRecipientIds(
             resolvedCompanyId,
             [nodePath],
@@ -4280,8 +4270,8 @@ export class WorkflowDbController {
         : [];
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
-        type: autoApproveOnCreate ? 'ONBOARDED' : 'INITIATE',
-        ...(autoApproveOnCreate
+        type: autoApprovedBySelectedWorkflow ? 'ONBOARDED' : 'INITIATE',
+        ...(autoApprovedBySelectedWorkflow
           ? {
               name: 'Workflow onboarded',
               message: `Workflow was onboarded for ${workflowData?.name || generatedAlias}`,
@@ -4298,7 +4288,7 @@ export class WorkflowDbController {
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
         includeCreatedBy: true,
-        isPending: autoApproveOnCreate ? false : undefined,
+        isPending: autoApprovedBySelectedWorkflow ? false : undefined,
       });
 
       res.status(201).json(result);
