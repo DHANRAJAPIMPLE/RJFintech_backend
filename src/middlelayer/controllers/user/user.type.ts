@@ -177,7 +177,25 @@ export type FetchCompanyNodesInternalResponse =
 export type FetchCompanyNodesResponse = {
   message: 'User nodes fetched successfully!' | 'User nodes not found';
   code: 200;
-  data: UserCompanyNode[];
+  data: Array<{
+    nodeName: string;
+    nodePath: string;
+    nodeType: string;
+    levelCount: number;
+    modules: Partial<
+      Record<
+        'USER' | 'ORG' | 'WORKFLOW',
+        {
+          workflows: Array<{
+            levelsHash: string;
+            name: string;
+            alias: string;
+            selected: boolean;
+          }>;
+        }
+      >
+    >;
+  }>;
 };
 
 export type FetchCompanyNodesControllerResponse =

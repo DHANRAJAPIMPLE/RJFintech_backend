@@ -35,8 +35,6 @@ import type {
   FetchCompanyNodesInternalResponse,
   FetchCompanyNodesControllerResponse,
   FetchCompanyNodesResponse,
-  UserCompanyNode,
-  UserCompanyNodeInternal,
   FetchAllUsersResponse,
   FetchAllUsersRequest,
   FetchAndProcessUsersResult,
@@ -1032,6 +1030,37 @@ export class UserController {
         throw new AppError('Unauthorized', 401);
       }
 
+      if (filter !== true) {
+        const { data, ok, status } = await internalPost<
+          FetchCompanyNodesResponse | UserApiErrorResponse
+        >(`${config.backendUrl}/internal/preferences/user-preference`, {
+          userId,
+          companyId,
+        });
+
+        if (!ok) {
+          const errorData = data as UserApiErrorResponse;
+          throw new AppError(
+            errorData?.message ||
+              errorData?.error ||
+              'Failed to fetch company nodes',
+            status,
+          );
+        }
+
+        const preferenceResponse = data as FetchCompanyNodesResponse;
+        const nodes = preferenceResponse.data || [];
+
+        return res.status(200).json({
+          message:
+            nodes.length > 0
+              ? 'User nodes fetched successfully!'
+              : 'User nodes not found',
+          code: 200,
+          data: nodes,
+        });
+      }
+
       const { data, ok, status } =
         await internalPost<FetchCompanyNodesInternalResponse>(
           `${config.backendUrl}/internal/user/fetch-company-nodes`,
@@ -1113,33 +1142,7 @@ export class UserController {
         return res.status(200).json(workflowResponse);
       }
 
-      const rawNodes: UserCompanyNodeInternal[] = Array.isArray(data)
-        ? data
-        : [];
-      const nodes: UserCompanyNode[] = rawNodes.map((node) => ({
-        nodeName: node.nodeName,
-        nodePath: node.nodePath,
-        nodeType: node.nodeType,
-        status: node.status,
-        workflows: node.workflows.map((workflow) => ({
-          levelsHash: workflow.levelsHash,
-          name: workflow.name,
-          alias: workflow.alias,
-          status: workflow.status,
-        })),
-        roleName: node.roleName || node.roleCode || '',
-      }));
-
-      const response: FetchCompanyNodesResponse = {
-        message:
-          nodes.length > 0
-            ? 'User nodes fetched successfully!'
-            : 'User nodes not found',
-        code: 200,
-        data: nodes,
-      };
-
-      res.status(200).json(response);
+      throw new AppError('Invalid company node response', 500);
     } catch (error) {
       next(error);
     }
