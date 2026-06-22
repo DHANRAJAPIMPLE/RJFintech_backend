@@ -421,12 +421,12 @@ class PreferenceService {
         const workflowMap = new Map<string, PreferenceWorkflowOption>();
 
         if (defaultWorkflow) {
-          workflowMap.set(defaultWorkflow.levelsHash, defaultWorkflow);
+          workflowMap.set(defaultWorkflow.id, defaultWorkflow);
         }
 
         nodeWorkflowOptions.forEach((workflow) => {
-          if (!workflowMap.has(workflow.levelsHash)) {
-            workflowMap.set(workflow.levelsHash, workflow);
+          if (!workflowMap.has(workflow.id)) {
+            workflowMap.set(workflow.id, workflow);
           }
         });
 
