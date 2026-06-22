@@ -77,6 +77,16 @@ type PendingWorkflowDeletionNotification = {
   targetNodePath: string;
 };
 
+type OrgUserAccessChangeNotification = {
+  userId: string;
+  userName?: string | null;
+  userEmail?: string | null;
+  roleName?: string | null;
+  roleCode: string;
+  nodeName: string;
+  nodePath: string;
+};
+
 type AutoUserAccessAuditEntry = {
   userId: string;
   userName: string | null;
@@ -1500,21 +1510,94 @@ export class OrgStructureDbController {
     );
   }
 
-  private static normalizeNodeType(value: unknown) {
-    return typeof value === 'string' ? value.trim().toUpperCase() : '';
+  private static normalizeLogicalNodeName(value: unknown) {
+    return typeof value === 'string'
+      ? value.trim().replace(/\d+$/, '').toUpperCase()
+      : '';
   }
 
-  private static async assertNoPendingApproverNodeTypeConflict(
+  private static normalizeLogicalNodePath(value: unknown) {
+    if (typeof value !== 'string' || !value.trim()) return '';
+
+    const trimmedPath = value.trim();
+    const lastPathSeparator = trimmedPath.lastIndexOf('.');
+    const parentPath =
+      lastPathSeparator >= 0
+        ? trimmedPath.slice(0, lastPathSeparator + 1)
+        : '';
+    const nodeSegment =
+      lastPathSeparator >= 0
+        ? trimmedPath.slice(lastPathSeparator + 1)
+        : trimmedPath;
+
+    return `${parentPath}${OrgStructureDbController.normalizeLogicalNodeName(
+      nodeSegment,
+    )}`.toUpperCase();
+  }
+
+  private static async assertNoActiveNodePathConflict(
+    client: any,
+    companyId: string,
+    nodePath: unknown,
+    nodeName: unknown,
+  ) {
+    const trimmedNodePath =
+      typeof nodePath === 'string' ? nodePath.trim() : '';
+    const trimmedNodeName =
+      typeof nodeName === 'string' ? nodeName.trim() : '';
+    if (!trimmedNodePath || !trimmedNodeName) return;
+
+    const normalizedNodePath =
+      OrgStructureDbController.normalizeLogicalNodePath(trimmedNodePath);
+    const normalizedNodeName =
+      OrgStructureDbController.normalizeLogicalNodeName(trimmedNodeName);
+
+    const activeCandidates = await client.orgStructure.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        nodePath: {
+          startsWith: normalizedNodePath,
+          mode: 'insensitive',
+        },
+      },
+      select: {
+        id: true,
+        nodeName: true,
+        nodePath: true,
+      },
+    });
+    const duplicateNode = activeCandidates.find((node: any) => {
+      return (
+        OrgStructureDbController.normalizeLogicalNodePath(node.nodePath) ===
+          normalizedNodePath &&
+        OrgStructureDbController.normalizeLogicalNodeName(node.nodeName) ===
+          normalizedNodeName
+      );
+    });
+
+    if (!duplicateNode) return;
+
+    throw new AppError(
+      `Cannot create organization '${trimmedNodeName}'. An active node with the same name and base path already exists at '${duplicateNode.nodePath}'. Please inactivate the existing node or choose a different name.`,
+      400,
+    );
+  }
+
+  private static async assertNoPendingNodeConflict(
     client: any,
     companyId: string,
     requestData: any,
   ) {
     const requestedNodePath =
       OrgStructureDbController.resolveRequestedNodePath(requestData);
-    const requestedNodeType = OrgStructureDbController.normalizeNodeType(
-      requestData?._nodeType || requestData?.nodeType,
-    );
-    if (!requestedNodePath || !requestedNodeType) return;
+    const requestedNodeName =
+      requestData?.newNodeName || requestData?.nodeName;
+    const normalizedRequestedPath =
+      OrgStructureDbController.normalizeLogicalNodePath(requestedNodePath);
+    const normalizedRequestedName =
+      OrgStructureDbController.normalizeLogicalNodeName(requestedNodeName);
+    if (!normalizedRequestedPath || !normalizedRequestedName) return;
 
     const pendingRequests = await client.orgStructureReq.findMany({
       where: {
@@ -1566,12 +1649,16 @@ export class OrgStructureDbController {
         pendingData,
         OrgStructureDbController.extractOrgTargetPath(pendingData),
       );
-      if (pendingNodePath !== requestedNodePath) continue;
-
-      const pendingNodeType = OrgStructureDbController.normalizeNodeType(
-        pendingData?._nodeType || pendingData?.nodeType,
-      );
-      if (pendingNodeType !== requestedNodeType) continue;
+      const pendingNodeName =
+        pendingData?.newNodeName || pendingData?.nodeName;
+      if (
+        OrgStructureDbController.normalizeLogicalNodePath(pendingNodePath) !==
+          normalizedRequestedPath ||
+        OrgStructureDbController.normalizeLogicalNodeName(pendingNodeName) !==
+          normalizedRequestedName
+      ) {
+        continue;
+      }
 
       const initiator = request.orgHistories?.[0]?.user;
       const initiatedAt =
@@ -1580,7 +1667,7 @@ export class OrgStructureDbController {
         pendingData?.newNodeName || pendingData?.nodeName || pendingNodePath;
 
       throw new AppError(
-        `Cannot initiate organization '${pendingTitle}'. A pending approver request already exists for node path '${requestedNodePath}' with node type '${requestedNodeType}', initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
+        `Cannot initiate organization '${pendingTitle}'. A pending approver request already exists for the same node name and base path at '${pendingNodePath}', initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
         400,
       );
     }
@@ -2322,22 +2409,21 @@ export class OrgStructureDbController {
   private static async notifyUserAccessImpact(params: {
     companyId: string;
     orgReqId: string;
-    nodeName: string;
-    nodePath: string;
     createdBy: string;
-    accessChanges: Array<{
-      userId: string;
-      userName?: string | null;
-      userEmail?: string | null;
-      roleName?: string | null;
-      roleCode: string;
-    }>;
+    accessChanges: OrgUserAccessChangeNotification[];
+    changeAction: 'ADDED' | 'REMOVED';
   }) {
     const { companyId, accessChanges } = params;
     if (accessChanges.length === 0) return;
 
     const impactedUserIds = accessChanges.map((change) => change.userId);
-    const [impactedMappings, corpAdminAccesses] = await Promise.all([
+    const [
+      impactedMappings,
+      corpAdminAccesses,
+      requestInitiatorId,
+      requestInitiatorReportingManagerIds,
+      requestApproverIds,
+    ] = await Promise.all([
       prisma.userMapping.findMany({
         where: {
           companyId,
@@ -2358,61 +2444,134 @@ export class OrgStructureDbController {
         },
         select: { userId: true },
       }),
+      NotificationService.getRequestInitiatorId(params.orgReqId, 'org_structure_req'),
+      NotificationService.getRequestInitiatorReportingManagerIds(
+        companyId,
+        params.orgReqId,
+        'org_structure_req',
+      ),
+      NotificationService.getRequestApproverIds(
+        params.orgReqId,
+        'org_structure_req',
+      ),
     ]);
 
-    const recipientUserIds = NotificationService.mergeRecipientUserIds(
-      impactedUserIds,
-      impactedMappings.map((mapping) => mapping.reportingManager),
+    const impactedManagerIds = impactedMappings.map(
+      (mapping) => mapping.reportingManager,
+    );
+    const stakeholderUserIds = NotificationService.mergeRecipientUserIds(
+      requestInitiatorId,
+      requestInitiatorReportingManagerIds,
+      impactedManagerIds,
+      requestApproverIds,
       corpAdminAccesses.map((access) => access.userId),
     );
-    const impactedNames = accessChanges
-      .map((change) => {
-        const user = change.userName || change.userEmail || change.userId;
-        const role = change.roleName || change.roleCode;
-        return `${user} (${role})`;
-      })
-      .join(', ');
+    const groupedUserChanges = accessChanges.reduce(
+      (
+        map: Map<
+          string,
+          {
+            userId: string;
+            userName: string;
+            userEmail: string | null;
+            nodeName: string;
+            nodePath: string;
+            roles: Set<string>;
+          }
+        >,
+        change,
+      ) => {
+        const key = `${change.userId}::${change.nodePath}`;
+        const current = map.get(key) || {
+          userId: change.userId,
+          userName:
+            (typeof change.userName === 'string' && change.userName.trim()) ||
+            (typeof change.userEmail === 'string' && change.userEmail.trim()) ||
+            change.userId,
+          userEmail:
+            typeof change.userEmail === 'string' && change.userEmail.trim()
+              ? change.userEmail.trim()
+              : null,
+          nodeName: change.nodeName || change.nodePath,
+          nodePath: change.nodePath,
+          roles: new Set<string>(),
+        };
 
-    await NotificationService.createRequestNotification({
-      companyId,
-      type: 'MODIFICATION',
-      name: 'Organization access updated',
-      message: `System added ${accessChanges.length} user role access(es) for new organization node ${params.nodeName} (${params.nodePath}). Impacted: ${impactedNames}.`,
-      referenceType: 'ORG',
-      referenceId: params.orgReqId,
-      referenceName: params.nodeName,
-      createdBy: params.createdBy,
-      recipientUserIds,
-      isPending: false,
-    });
-  }
-
-  private static async notifyOrgAccessRemoval(params: {
-    companyId: string;
-    orgReqId: string;
-    nodeName: string;
-    nodePath: string;
-    createdBy: string;
-    recipientUserIds: string[];
-  }) {
-    const recipientUserIds = NotificationService.mergeRecipientUserIds(
-      params.recipientUserIds,
+        current.roles.add(change.roleName || change.roleCode);
+        map.set(key, current);
+        return map;
+      },
+      new Map<
+        string,
+        {
+          userId: string;
+          userName: string;
+          userEmail: string | null;
+          nodeName: string;
+          nodePath: string;
+          roles: Set<string>;
+        }
+      >(),
     );
-    if (recipientUserIds.length === 0) return;
 
-    await NotificationService.createRequestNotification({
-      companyId: params.companyId,
-      type: 'INACTIVE',
-      name: 'Organization access removed',
-      message: `Your access to organization ${params.nodeName} (${params.nodePath}) was removed because the organization was inactivated.`,
-      referenceType: 'ORG',
-      referenceId: params.orgReqId,
-      referenceName: params.nodePath,
-      createdBy: params.createdBy,
-      recipientUserIds,
-      requiredRecipientUserIds: recipientUserIds,
-      isPending: false,
+    const groupedChanges = Array.from(groupedUserChanges.values());
+    const stakeholderRecipientUserIds = stakeholderUserIds.filter(
+      (userId) => !impactedUserIds.includes(userId),
+    );
+    const stakeholderLines = groupedChanges.map((change) => {
+      const emailPart = change.userEmail ? ` (${change.userEmail})` : '';
+      const roles = Array.from(change.roles).sort().join(', ');
+      return `${change.userName}${emailPart} Role ${roles}.`;
     });
+    const stakeholderReference =
+      groupedChanges[0]?.nodePath || accessChanges[0]?.nodePath || 'organization';
+
+    if (stakeholderRecipientUserIds.length > 0) {
+      await NotificationService.createRequestNotification({
+        companyId,
+        type: params.changeAction === 'REMOVED' ? 'INACTIVE' : 'MODIFICATION',
+        name:
+          params.changeAction === 'REMOVED'
+            ? 'Organization user access removed'
+            : 'Organization user access added',
+        message: `${params.changeAction === 'REMOVED' ? 'User access removed' : 'User access added'} for organization changes:\n${stakeholderLines.join('\n')}`,
+        referenceType: 'ORG',
+        referenceId: params.orgReqId,
+        referenceName: stakeholderReference,
+        createdBy: params.createdBy,
+        recipientUserIds: stakeholderRecipientUserIds,
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          requestInitiatorId,
+          requestApproverIds,
+        ).filter((userId) => !impactedUserIds.includes(userId)),
+        includeCreatedBy: true,
+        isPending: false,
+      });
+    }
+
+    for (const change of groupedChanges) {
+      const roleLabel = Array.from(change.roles).sort().join(', ');
+      await NotificationService.createRequestNotification({
+        companyId,
+        type: params.changeAction === 'REMOVED' ? 'INACTIVE' : 'MODIFICATION',
+        name:
+          params.changeAction === 'REMOVED'
+            ? 'Organization user access removed'
+            : 'Organization user access added',
+        message: `User access ${params.changeAction === 'REMOVED' ? 'removed' : 'added'} for ${change.userName}${change.userEmail ? ` (${change.userEmail})` : ''}. Role ${roleLabel} was ${params.changeAction === 'REMOVED' ? 'removed from' : 'added to'} organization ${change.nodeName} (${change.nodePath}).`,
+        referenceType: 'ORG',
+        referenceId: params.orgReqId,
+        referenceName: change.nodePath,
+        createdBy: params.createdBy,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.userId,
+        ),
+        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+          change.userId,
+        ),
+        isPending: false,
+      });
+    }
   }
 
   private static async notifyPendingUserAccessRemoved(params: {
@@ -2476,31 +2635,32 @@ export class OrgStructureDbController {
       params.companyId,
     );
 
-    for (const change of params.changes) {
-      const recipientUserIds = NotificationService.mergeRecipientUserIds(
-        change.initiatorId,
-        change.eligibleApprovers,
-        corpAdminUserIds,
-      );
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      params.changes.map((change) => change.initiatorId),
+      params.changes.flatMap((change) => change.eligibleApprovers),
+      corpAdminUserIds,
+    );
+    const workflowLines = params.changes.map(
+      (change) => `${change.workflowName} at ${change.targetNodePath}.`,
+    );
 
-      await NotificationService.createRequestNotification({
-        companyId: params.companyId,
-        type: 'AUTO_DELETE',
-        name: 'Pending workflow request deleted',
-        message: `Pending workflow request ${change.workflowName} was rejected because organization ${params.nodeName} (${params.nodePath}) was inactivated.`,
-        referenceType: 'WORKFLOW',
-        referenceId: change.requestId,
-        referenceName: change.workflowName,
-        createdBy: params.createdBy,
-        recipientUserIds,
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.initiatorId,
-          change.eligibleApprovers,
-        ),
-        includeCreatedBy: true,
-        isPending: false,
-      });
-    }
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'AUTO_DELETE',
+      name: 'Pending workflow request deleted',
+      message: `Pending workflow requests were removed because organization ${params.nodeName} (${params.nodePath}) was inactivated:\n${workflowLines.join('\n')}`,
+      referenceType: 'WORKFLOW',
+      referenceId: params.changes[0]?.requestId || params.nodePath,
+      referenceName: params.nodePath,
+      createdBy: params.createdBy,
+      recipientUserIds,
+      requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+        params.changes.map((change) => change.initiatorId),
+        params.changes.flatMap((change) => change.eligibleApprovers),
+      ),
+      includeCreatedBy: true,
+      isPending: false,
+    });
   }
 
   private static pathsOverlap(left: string, right: string) {
@@ -3277,6 +3437,7 @@ export class OrgStructureDbController {
       autoDeletedWorkflows?: OrgAutoDeletedWorkflowNotification[];
       pendingUserAccessRemovals?: PendingUserAccessRemovalNotification[];
       pendingWorkflowDeletions?: PendingWorkflowDeletionNotification[];
+      removedActiveAccessChanges?: OrgUserAccessChangeNotification[];
     },
     actorId?: string,
   ) {
@@ -3422,6 +3583,19 @@ export class OrgStructureDbController {
         },
       },
     });
+    if (notificationState) {
+      notificationState.removedActiveAccessChanges = removedUserAccessRows.map(
+        (access: any) => ({
+          userId: access.userId,
+          userName: access.user?.name || null,
+          userEmail: access.user?.email || null,
+          roleName: access.role?.roleName || access.roleCode,
+          roleCode: access.roleCode,
+          nodeName: access.orgStructure?.nodeName || targetNodePath,
+          nodePath: access.orgStructure?.nodePath || targetNodePath,
+        }),
+      );
+    }
     await OrgStructureDbController.createAutoApprovedUserAccessAuditRows(tx, {
       companyId: request.companyId,
       actorId,
@@ -3683,6 +3857,8 @@ export class OrgStructureDbController {
           userEmail: access.userEmail,
           roleName: access.roleName,
           roleCode: access.roleCode,
+          nodeName: access.nodeName || newNode.nodeName,
+          nodePath: access.nodePath || newNode.nodePath,
         })),
       };
     }
@@ -3834,11 +4010,13 @@ export class OrgStructureDbController {
         autoDeletedWorkflows: OrgAutoDeletedWorkflowNotification[];
         pendingUserAccessRemovals: PendingUserAccessRemovalNotification[];
         pendingWorkflowDeletions: PendingWorkflowDeletionNotification[];
+        removedActiveAccessChanges: OrgUserAccessChangeNotification[];
       } = {
         inactivation: null,
         autoDeletedWorkflows: [],
         pendingUserAccessRemovals: [],
         pendingWorkflowDeletions: [],
+        removedActiveAccessChanges: [],
       };
       let autoGeneratedWorkflowNotifications: Array<{
         workflowName: string;
@@ -4142,15 +4320,15 @@ export class OrgStructureDbController {
         if (
           isOrgInactivation &&
           approverId &&
-          inactivationNotification?.accessUserIds.length
+          orgLifecycleNotification.removedActiveAccessChanges &&
+          orgLifecycleNotification.removedActiveAccessChanges.length > 0
         ) {
-          await OrgStructureDbController.notifyOrgAccessRemoval({
+          await OrgStructureDbController.notifyUserAccessImpact({
             companyId: notificationCompanyId,
             orgReqId: id,
-            nodeName: inactivationNotification.nodeName || notificationSubject,
-            nodePath: inactivationNotification.nodePath || notificationSubject,
             createdBy: approverId,
-            recipientUserIds: inactivationNotification.accessUserIds,
+            accessChanges: orgLifecycleNotification.removedActiveAccessChanges,
+            changeAction: 'REMOVED',
           });
         }
       }
@@ -4164,10 +4342,9 @@ export class OrgStructureDbController {
         await OrgStructureDbController.notifyUserAccessImpact({
           companyId: notificationCompanyId,
           orgReqId: id,
-          nodeName: userAccessImpactNotification.nodeName,
-          nodePath: userAccessImpactNotification.nodePath,
           createdBy: approverId,
           accessChanges: userAccessImpactNotification.accessChanges,
+          changeAction: 'ADDED',
         });
       }
 
@@ -4358,7 +4535,15 @@ export class OrgStructureDbController {
 
       const request = await prisma.$transaction(async (tx) => {
         const reqData = rest.data || {};
-        await OrgStructureDbController.assertNoPendingApproverNodeTypeConflict(
+        const rawRequestedNodePath =
+          OrgStructureDbController.resolveRequestedNodePath(reqData);
+        await OrgStructureDbController.assertNoActiveNodePathConflict(
+          tx,
+          resolvedCompanyId,
+          rawRequestedNodePath,
+          reqData.newNodeName || reqData.nodeName,
+        );
+        await OrgStructureDbController.assertNoPendingNodeConflict(
           tx,
           resolvedCompanyId,
           reqData,
@@ -4520,10 +4705,9 @@ export class OrgStructureDbController {
         await OrgStructureDbController.notifyUserAccessImpact({
           companyId: resolvedCompanyId,
           orgReqId: request.id,
-          nodeName: userAccessImpactNotification.nodeName,
-          nodePath: userAccessImpactNotification.nodePath,
           createdBy: initiatorId,
           accessChanges: userAccessImpactNotification.accessChanges,
+          changeAction: 'ADDED',
         });
       }
       if (isAutoApproved && autoGeneratedWorkflowNotifications.length > 0) {
@@ -4596,7 +4780,13 @@ export class OrgStructureDbController {
           nodePath: req.body?.nodePath,
         });
       if (requestedNodePath) {
-        await OrgStructureDbController.assertNoPendingApproverNodeTypeConflict(
+        await OrgStructureDbController.assertNoActiveNodePathConflict(
+          prisma,
+          resolvedCompanyId,
+          requestedNodePath,
+          newNodeName,
+        );
+        await OrgStructureDbController.assertNoPendingNodeConflict(
           prisma,
           resolvedCompanyId,
           {
