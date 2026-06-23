@@ -61,6 +61,7 @@ type NormalizedWorkflowListAppliedFilters = {
   workflowType: string[];
   module: string[];
   subModule: string[];
+  currentStatus: string[];
   checkerCounts: number[];
   levels: NormalizedWorkflowLevelFilter[];
   workflowLevels: number[];
@@ -216,6 +217,66 @@ export class WorkflowDbController {
     return upper;
   }
 
+  private static normalizeWorkflowStatusFilterValue(
+    value: unknown,
+  ): string | null {
+    const compact = WorkflowDbController.compactFilterValue(value);
+    if (!compact) return null;
+
+    if (compact === 'active') return 'active';
+    if (compact === 'pending') return 'pending';
+    if (compact === 'inactive') return 'inactive';
+    if (compact === 'archive' || compact === 'archived') return 'archive';
+
+    return null;
+  }
+
+  private static normalizeWorkflowStatusFilterValues(values: unknown) {
+    const items =
+      typeof values === 'string'
+        ? values.includes(',')
+          ? values.split(',')
+          : [values]
+        : Array.isArray(values)
+          ? values
+          : values === undefined || values === null || values === ''
+            ? []
+            : [values];
+
+    return Array.from(
+      new Set(
+        items
+          .map((value) => {
+            if (value && typeof value === 'object') {
+              const objectValue = (value as Record<string, unknown>).value;
+              if (objectValue !== undefined) {
+                return WorkflowDbController.normalizeWorkflowStatusFilterValue(
+                  objectValue,
+                );
+              }
+            }
+
+            return WorkflowDbController.normalizeWorkflowStatusFilterValue(
+              value,
+            );
+          })
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+  }
+
+  private static getWorkflowAppliedStatusTypes(applied: unknown) {
+    const source =
+      applied && typeof applied === 'object'
+        ? (applied as Record<string, unknown>)
+        : null;
+    if (!source) return [];
+
+    return WorkflowDbController.normalizeWorkflowStatusFilterValues(
+      source.currentStatus ?? source.status ?? source.statusType,
+    );
+  }
+
   private static parseWorkflowFilterDateRange(applied: any) {
     const onboardingDate =
       applied && typeof applied === 'object' ? applied.onboardingDate : null;
@@ -345,6 +406,7 @@ export class WorkflowDbController {
       subModule: WorkflowDbController.normalizeAppliedFilterValues(
         source.subModule,
       ),
+      currentStatus: WorkflowDbController.getWorkflowAppliedStatusTypes(source),
       checkerCounts: WorkflowDbController.normalizeAppliedNumberValues(
         source.checker ?? source.checkerCount ?? source.checkers,
         { min: 1, max: 10 },
@@ -374,6 +436,7 @@ export class WorkflowDbController {
       normalized.workflowType.length > 0 ||
       normalized.module.length > 0 ||
       normalized.subModule.length > 0 ||
+      normalized.currentStatus.length > 0 ||
       normalized.checkerCounts.length > 0 ||
       normalized.levels.length > 0 ||
       normalized.workflowLevels.length > 0 ||
@@ -565,6 +628,14 @@ export class WorkflowDbController {
       return false;
     }
     if (
+      !WorkflowDbController.matchesNormalizedFilterValue(
+        row.status,
+        filters.currentStatus,
+      )
+    ) {
+      return false;
+    }
+    if (
       !WorkflowDbController.matchesCreatedAtRange(
         row.createdAt,
         filters.onboardingDate,
@@ -609,6 +680,7 @@ export class WorkflowDbController {
       target.subModule ||
       associatedWorkflow?.subModule ||
       row.subModule;
+    const status = row.status || 'PENDING';
 
     if (
       !WorkflowDbController.matchesNormalizedFilterValue(
@@ -643,6 +715,14 @@ export class WorkflowDbController {
       !WorkflowDbController.matchesNormalizedFilterValue(
         subModule,
         filters.subModule,
+      )
+    ) {
+      return false;
+    }
+    if (
+      !WorkflowDbController.matchesNormalizedFilterValue(
+        status,
+        filters.currentStatus,
       )
     ) {
       return false;
@@ -6784,6 +6864,10 @@ export class WorkflowDbController {
   static async fetchWorkflows(req: Request, res: Response, next: NextFunction) {
     try {
       const { companyCode, companyId, userId } = req.body;
+      const filterEnabled = req.body?.filter === true;
+      const appliedStatusTypes = filterEnabled
+        ? WorkflowDbController.getWorkflowAppliedStatusTypes(req.body?.applied)
+        : [];
       const requestedStatusType = String(
         req.body?.statusType ?? '',
       ).toLowerCase();
@@ -6795,12 +6879,13 @@ export class WorkflowDbController {
       ) {
         throw new AppError('Invalid statusType', 400);
       }
+      const selectedStatusType = requestedStatusType || appliedStatusTypes[0];
       const statusType =
-        requestedStatusType === 'pending'
+        selectedStatusType === 'pending'
           ? 'pending'
-          : requestedStatusType === 'inactive'
+          : selectedStatusType === 'inactive'
             ? 'inactive'
-            : requestedStatusType === 'archive'
+            : selectedStatusType === 'archive'
               ? 'archive'
               : 'active';
       const query =
@@ -6808,7 +6893,6 @@ export class WorkflowDbController {
           ? req.body.query.trim()
           : null;
       const pagination = resolveCursorPagination(req.body ?? {});
-      const filterEnabled = req.body?.filter === true;
       const appliedFilters = filterEnabled
         ? WorkflowDbController.normalizeWorkflowListAppliedFilters(
             req.body?.applied,
