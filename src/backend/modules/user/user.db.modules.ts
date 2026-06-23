@@ -817,6 +817,14 @@ export class UserDbController {
     ].join('|');
   }
 
+  private static permissionHistoryChangeKey(permission: any) {
+    return [
+      permission?.roleSubCategory || '',
+      permission?.roleName || '',
+      permission?.nodePath || '',
+    ].join('|');
+  }
+
   private static isPermissionRemoval(permission: any) {
     const operation =
       typeof permission?.operation === 'string'
@@ -871,14 +879,14 @@ export class UserDbController {
 
     const updatedKeys = new Set(
       updatedPermissions.map((permission: any) =>
-        UserDbController.permissionReplacementKey(
+        UserDbController.permissionHistoryChangeKey(
           UserDbController.normalizePermission(permission),
         ),
       ),
     );
     const removedKeys = new Set(
       removedPermissions.map((permission: any) =>
-        UserDbController.permissionReplacementKey(
+        UserDbController.permissionHistoryChangeKey(
           UserDbController.normalizePermission(permission),
         ),
       ),
@@ -897,10 +905,24 @@ export class UserDbController {
         continue;
       }
 
-      const key = UserDbController.permissionReplacementKey(
+      const key = UserDbController.permissionHistoryChangeKey(
         UserDbController.normalizePermission(mutation),
       );
-      if (updatedKeys.has(key) || removedKeys.has(key)) {
+      if (updatedKeys.has(key)) {
+        continue;
+      }
+      if (removedKeys.has(key)) {
+        counts.remove = Math.max(counts.remove - 1, 0);
+        counts.modify += 1;
+        removedKeys.delete(key);
+        continue;
+      }
+
+      const operation =
+        typeof mutation?.operation === 'string'
+          ? mutation.operation.trim().toUpperCase()
+          : '';
+      if (operation !== 'ADD') {
         continue;
       }
 
@@ -918,6 +940,10 @@ export class UserDbController {
     const stored = UserDbController.normalizeChangeCount(
       requestData?.changeCount ?? oldData?.changeCount,
     );
+
+    if (stored.added || stored.modify || stored.remove) {
+      return stored;
+    }
 
     const normalizedType = String(requestType || '').toUpperCase();
     const diffCount =
@@ -1116,8 +1142,8 @@ export class UserDbController {
       const newIndex = added.findIndex(
         (newData, index) =>
           !pairedAdded.has(index) &&
-          UserDbController.permissionReplacementKey(oldData) ===
-          UserDbController.permissionReplacementKey(newData),
+          UserDbController.permissionHistoryChangeKey(oldData) ===
+          UserDbController.permissionHistoryChangeKey(newData),
       );
 
       if (newIndex >= 0) {
@@ -1172,6 +1198,11 @@ export class UserDbController {
     return {
       oldData: Object.keys(oldData).length > 0 ? oldData : null,
       newData: Object.keys(newData).length > 0 ? newData : null,
+      changeCount: {
+        added: permissionDiff.added.length,
+        modify: permissionDiff.updated.length,
+        remove: permissionDiff.removed.length,
+      },
     };
   }
 
@@ -8301,6 +8332,7 @@ export class UserDbController {
       ...(permissionMutations.length > 0
         ? { permissions: expandedPermissionMutations }
         : {}),
+      changeCount: changeData.changeCount,
     };
     if (statusChanged) {
       requestData.basicDetails = {

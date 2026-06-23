@@ -54,12 +54,11 @@ export class HistoryUserUtil {
     };
   }
 
-  private static permissionReplacementKey(permission: unknown) {
+  private static permissionHistoryChangeKey(permission: unknown) {
     const normalized = HistoryUserUtil.normalizePermission(permission);
-    if (normalized.accessType === 'PRIMARY') return 'PRIMARY';
 
     return [
-      normalized.accessType,
+      normalized.roleSubCategory,
       normalized.roleName,
       normalized.nodePath,
     ].join('|');
@@ -115,9 +114,14 @@ export class HistoryUserUtil {
     const removed = removedFromOldPatch;
     const updatedOldByKey = new Map(
       updatedFromOldPatch.map((permission: unknown) => [
-        HistoryUserUtil.permissionReplacementKey(permission),
+        HistoryUserUtil.permissionHistoryChangeKey(permission),
         permission,
       ]),
+    );
+    const removedOldByKey = new Set(
+      removed.map((permission: unknown) =>
+        HistoryUserUtil.permissionHistoryChangeKey(permission),
+      ),
     );
 
     const added: unknown[] = [];
@@ -129,10 +133,13 @@ export class HistoryUserUtil {
 
       const normalizedPermission = HistoryUserUtil.normalizePermission(permission);
       const replacementKey =
-        HistoryUserUtil.permissionReplacementKey(normalizedPermission);
+        HistoryUserUtil.permissionHistoryChangeKey(normalizedPermission);
 
       if (updatedOldByKey.has(replacementKey)) {
         updated.push(HistoryUserUtil.cloneJson(normalizedPermission));
+      } else if (removedOldByKey.has(replacementKey)) {
+        updated.push(HistoryUserUtil.cloneJson(normalizedPermission));
+        removedOldByKey.delete(replacementKey);
       } else {
         added.push(HistoryUserUtil.cloneJson(normalizedPermission));
       }
@@ -264,10 +271,9 @@ export class HistoryUserUtil {
       : [];
     const permissionKey = (permission: unknown) => {
       if (!HistoryUserUtil.isPlainObject(permission)) return '';
-      if (permission.accessType === 'PRIMARY') return 'PRIMARY';
 
       return [
-        permission.accessType || 'SECONDARY',
+        permission.roleSubCategory || '',
         permission.roleName || '',
         permission.nodePath || '',
       ].join('|');
@@ -326,7 +332,11 @@ export class HistoryUserUtil {
         requestData,
         requestOldData,
       );
-    if (requestPermissionChanges) {
+    if (
+      requestPermissionChanges &&
+      !newData.permissions &&
+      (!resolvedOldData || !resolvedNewData)
+    ) {
       newData.permissions = requestPermissionChanges;
     }
 
