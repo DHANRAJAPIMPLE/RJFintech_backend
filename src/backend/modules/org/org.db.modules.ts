@@ -2835,29 +2835,39 @@ export class OrgStructureDbController {
       params.companyId,
     );
 
-    for (const change of params.changes) {
-      await NotificationService.createRequestNotification({
-        companyId: params.companyId,
-        type: 'AUTO_DELETE',
-        name: 'Pending workflow request deleted',
-        message: `Pending workflow request ${change.workflowName} at ${change.targetNodePath} was removed because organization ${params.nodeName} (${params.nodePath}) was inactivated.`,
-        referenceType: 'WORKFLOW',
-        referenceId: change.requestId,
-        referenceName: change.workflowName,
-        createdBy: params.createdBy,
-        recipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.initiatorId,
-          change.eligibleApprovers,
-          corpAdminUserIds,
-        ),
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.initiatorId,
-          change.eligibleApprovers,
-        ),
-        includeCreatedBy: true,
-        isPending: false,
-      });
-    }
+    const deletedSummary = params.changes
+      .slice(0, 5)
+      .map((change) => `${change.workflowName} at ${change.targetNodePath}`)
+      .join(', ');
+
+    const allInitiators = params.changes.map((c) => c.initiatorId);
+    const allApprovers = params.changes.flatMap((c) => c.eligibleApprovers);
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+      corpAdminUserIds,
+    );
+
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+    );
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'AUTO_DELETE',
+      name: 'Pending workflow request deleted',
+      message: `Pending workflow request(s) were removed because the organization ${params.nodeName} (${params.nodePath}) was inactivated: ${deletedSummary || 'workflow'}.`,
+      referenceType: 'WORKFLOW',
+      referenceId: params.changes[0]?.requestId,
+      referenceName: deletedSummary || 'workflow',
+      createdBy: params.createdBy,
+      recipientUserIds,
+      requiredRecipientUserIds,
+      includeCreatedBy: true,
+      isPending: false,
+    });
   }
 
   private static pathsOverlap(left: string, right: string) {
