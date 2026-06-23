@@ -324,6 +324,13 @@ export class UserDbController {
     approverUserIds: string[] = [],
     reportingManagerUserIds: string[] = [],
   ) {
+    let cleanMessage = message;
+    if (cleanMessage.includes('invocation in')) {
+      const lines = cleanMessage.split('\n');
+      const lastLine = lines[lines.length - 1]?.trim();
+      cleanMessage = lastLine ? `System Error: ${lastLine}` : 'A system validation error occurred while processing the request.';
+    }
+
     const corpAdminUserIds =
       await NotificationService.getCorpAdminUserIds(companyId);
     const recipients = NotificationService.mergeRecipientUserIds(
@@ -336,7 +343,7 @@ export class UserDbController {
       companyId,
       type: 'FAILED',
       name: 'User modification failed',
-      message: `${message}`,
+      message: cleanMessage,
       referenceType: 'USER',
       referenceName,
       createdBy: initiatorId,
@@ -8784,7 +8791,7 @@ export class UserDbController {
       for (const perm of permissions) {
         const { accessType, roleName, nodePath, accessCategory } = perm;
         if (!roleName || roleName === 'Corp Admin') continue;
-        const finalCategory = accessCategory;
+        const finalCategory = accessCategory || 'NODE';
 
         const role = await tx.roles.findUnique({
           where: { roleName },

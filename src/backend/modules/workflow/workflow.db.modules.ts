@@ -1181,6 +1181,13 @@ export class WorkflowDbController {
     referenceId?: string | null,
     approverUserIds: string[] = [],
   ) {
+    let cleanMessage = message;
+    if (cleanMessage.includes('invocation in')) {
+      const lines = cleanMessage.split('\n');
+      const lastLine = lines[lines.length - 1]?.trim();
+      cleanMessage = lastLine ? `System Error: ${lastLine}` : 'A system validation error occurred while processing the request.';
+    }
+
     const corpAdminUserIds =
       await NotificationService.getCorpAdminUserIds(companyId);
     const recipients = NotificationService.mergeRecipientUserIds(
@@ -1192,7 +1199,7 @@ export class WorkflowDbController {
       companyId,
       type: 'FAILED',
       name: 'Workflow request failed',
-      message: `Workflow request failed: ${message}`,
+      message: `Workflow request failed: ${cleanMessage}`,
       referenceType: 'WORKFLOW',
       referenceId: referenceId || null,
       referenceName,

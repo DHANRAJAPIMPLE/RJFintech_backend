@@ -1027,6 +1027,13 @@ export class OrgStructureDbController {
     referenceName: string,
     approverUserIds: string[] = [],
   ) {
+    let cleanMessage = message;
+    if (cleanMessage.includes('invocation in')) {
+      const lines = cleanMessage.split('\n');
+      const lastLine = lines[lines.length - 1]?.trim();
+      cleanMessage = lastLine ? `System Error: ${lastLine}` : 'A system validation error occurred while processing the request.';
+    }
+
     const corpAdminUserIds =
       await NotificationService.getCorpAdminUserIds(companyId);
     const recipients = NotificationService.mergeRecipientUserIds(
@@ -1038,7 +1045,7 @@ export class OrgStructureDbController {
       companyId,
       type: 'FAILED',
       name: 'Organization modification failed',
-      message: `Organization modification failed: ${message}`,
+      message: `Organization modification failed: ${cleanMessage}`,
       referenceType: 'ORG',
       referenceName,
       createdBy: initiatorId,
