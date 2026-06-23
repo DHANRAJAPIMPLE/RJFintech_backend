@@ -4496,7 +4496,7 @@ export class OrgStructureDbController {
         const orgNotificationContent = isOrgInactivation
           ? {
               name: 'Organization Removed',
-              message: `Organization ${inactivationNotification?.nodeName || notificationSubject} (${inactivationNotification?.nodePath || notificationSubject}) was inactivated. ${inactivationNotification?.workflowCount || 0} workflow(s) were deleted ${inactivationNotification?.workflowNames && inactivationNotification.workflowNames.length > 0 ? `: ${inactivationNotification.workflowNames.join(', ')}` : ''}. Access was removed for ${inactivationNotification?.accessUserIds.length || 0} user(s).`,
+              message: `Organization ${inactivationNotification?.nodeName || notificationSubject} (${inactivationNotification?.nodePath || notificationSubject}) was inactivated.`,
             }
           : isPartialApproval
             ? OrgStructureDbController.getOrgPendingApprovalNotificationContent(
