@@ -1435,11 +1435,11 @@ export class WorkflowDbController {
 
     for (const level of Object.values(levels || {})) {
       if (!level) continue;
-      totalLevels++;
       const current = level as any;
       if (current.approver1 === 'NO_APPROVER') {
         continue;
       }
+      totalLevels++;
       totalApprovers += current.approver2 && current.type === 'AND' ? 2 : 1;
     }
 

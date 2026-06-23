@@ -2727,38 +2727,42 @@ export class OrgStructureDbController {
       params.companyId,
     );
 
-    for (const change of params.changes) {
-      const permissionSummary = change.removedPermissions
-        .slice(0, 5)
-        .map(
-          (permission) =>
-            `${permission.roleName} at ${permission.nodeName} (${permission.nodePath})`,
-        )
-        .join(', ');
-      const recipientUserIds = NotificationService.mergeRecipientUserIds(
-        change.initiatorId,
-        change.eligibleApprovers,
-        corpAdminUserIds,
-      );
+    const lines = params.changes.map((change) => {
+      const roleNames = Array.from(
+        new Set(change.removedPermissions.map((permission) => permission.roleName)),
+      ).sort();
+      const emailPart = change.targetUserEmail ? ` (${change.targetUserEmail})` : '';
+      return `${change.targetUserName}${emailPart} Role ${roleNames.join(', ')}.`;
+    });
 
-      await NotificationService.createRequestNotification({
-        companyId: params.companyId,
-        type: 'MODIFICATION',
-        name: 'Pending user access removed',
-        message: `Secondary access was removed from pending user request for ${change.targetUserName} because organization ${params.nodeName} (${params.nodePath}) was inactivated. Removed: ${permissionSummary}.`,
-        referenceType: 'USER',
-        referenceId: change.requestId,
-        referenceName: change.targetUserEmail || change.targetUserName,
-        createdBy: params.createdBy,
-        recipientUserIds,
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.initiatorId,
-          change.eligibleApprovers,
-        ),
-        includeCreatedBy: true,
-        isPending: false,
-      });
-    }
+    const allInitiators = params.changes.map((c) => c.initiatorId);
+    const allApprovers = params.changes.flatMap((c) => c.eligibleApprovers);
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+      corpAdminUserIds,
+    );
+
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+    );
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'MODIFICATION',
+      name: 'Pending user access removed',
+      message: `Pending user access removed for organization changes:\n${lines.join('\n')}`,
+      referenceType: 'USER',
+      referenceId: params.changes[0]?.requestId,
+      referenceName: params.changes[0]?.targetUserEmail || params.changes[0]?.targetUserName,
+      createdBy: params.createdBy,
+      recipientUserIds,
+      requiredRecipientUserIds,
+      includeCreatedBy: true,
+      isPending: false,
+    });
   }
 
   private static async notifyPendingUserAccessAdded(params: {
@@ -2773,34 +2777,42 @@ export class OrgStructureDbController {
       params.companyId,
     );
 
-    for (const change of params.changes) {
+    const lines = params.changes.map((change) => {
       const roleNames = Array.from(
         new Set(change.addedPermissions.map((permission) => permission.roleName)),
       ).sort();
-      const node = change.addedPermissions[0];
+      const emailPart = change.targetUserEmail ? ` (${change.targetUserEmail})` : '';
+      return `${change.targetUserName}${emailPart} Role ${roleNames.join(', ')}.`;
+    });
 
-      await NotificationService.createRequestNotification({
-        companyId: params.companyId,
-        type: 'MODIFICATION',
-        name: 'Pending user access added',
-        message: `Inherited access was added to the pending user request for ${change.targetUserName}${change.targetUserEmail ? ` (${change.targetUserEmail})` : ''}. Role ${roleNames.join(', ')} was added to organization ${node?.nodeName || 'organization'} (${node?.nodePath || 'unknown'}).`,
-        referenceType: 'USER',
-        referenceId: change.requestId,
-        referenceName: change.targetUserEmail || change.targetUserName,
-        createdBy: params.createdBy,
-        recipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.initiatorId,
-          change.eligibleApprovers,
-          corpAdminUserIds,
-        ),
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.initiatorId,
-          change.eligibleApprovers,
-        ),
-        includeCreatedBy: true,
-        isPending: false,
-      });
-    }
+    const allInitiators = params.changes.map((c) => c.initiatorId);
+    const allApprovers = params.changes.flatMap((c) => c.eligibleApprovers);
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+      corpAdminUserIds,
+    );
+
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+    );
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'MODIFICATION',
+      name: 'Pending user access added',
+      message: `Pending user access added for organization changes:\n${lines.join('\n')}`,
+      referenceType: 'USER',
+      referenceId: params.changes[0]?.requestId,
+      referenceName: params.changes[0]?.targetUserEmail || params.changes[0]?.targetUserName,
+      createdBy: params.createdBy,
+      recipientUserIds,
+      requiredRecipientUserIds,
+      includeCreatedBy: true,
+      isPending: false,
+    });
   }
 
   private static async notifyPendingWorkflowDeleted(params: {
