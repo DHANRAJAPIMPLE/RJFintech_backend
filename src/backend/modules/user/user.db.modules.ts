@@ -622,31 +622,31 @@ export class UserDbController {
         UserDbController.permissionSummaryKey(permission),
       ),
     );
+    
+    // We should safely extract only original ones present in expanded, to ensure we get nodeNames if added,
+    // or just rely on originalPermissions.
     const generatedPermissions = expandedPermissions.filter(
       (permission) =>
         !originalKeys.has(UserDbController.permissionSummaryKey(permission)),
     );
 
+    const formatList = (perms: any[]) => {
+      return Array.from(new Set(perms.map((p) => {
+        const role = String(p?.roleName || 'Unknown Role').trim();
+        const node = String(p?.nodeName || p?.nodePath || 'Unknown Node').trim();
+        return `${role} on ${node}`;
+      }))).filter(Boolean).join(', ');
+    };
+
+    const originalList = formatList(originalPermissions);
+
     if (generatedPermissions.length === 0) {
-      return `${expandedPermissions.length} role assignment(s)`;
+      return `${expandedPermissions.length} role assignment(s): ${originalList}`;
     }
 
-    const generatedRoleNames = Array.from(
-      new Set(
-        generatedPermissions
-          .map((permission) =>
-            typeof permission?.roleName === 'string'
-              ? permission.roleName.trim()
-              : '',
-          )
-          .filter(Boolean),
-      ),
-    );
-    const preview = generatedRoleNames.slice(0, 3).join(', ');
-    const remaining = Math.max(generatedRoleNames.length - 3, 0);
-    const remainingText = remaining > 0 ? ` and ${remaining} more` : '';
+    const generatedList = formatList(generatedPermissions);
 
-    return `${expandedPermissions.length} role assignment(s), including ${generatedPermissions.length} auto-generated role assignment(s)${preview ? `: ${preview}${remainingText}` : ''}`;
+    return `${expandedPermissions.length} role assignment(s). Given: ${originalList}. Auto-generated: ${generatedList}`;
   }
 
   private static getGeneratedPermissionLabels(
@@ -705,10 +705,7 @@ export class UserDbController {
 
     if (labels.length === 0) return null;
 
-    const preview = labels.slice(0, 5).join(', ');
-    const remaining = labels.length - 5;
-
-    return `Auto-generated access: ${preview}${remaining > 0 ? ` and ${remaining} more` : ''}.`;
+    return `Auto-generated access: ${labels.join(', ')}.`;
   }
 
   private static getUserNotificationType(
