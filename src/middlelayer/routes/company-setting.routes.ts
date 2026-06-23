@@ -83,71 +83,27 @@ const authorizeWorkflowInitiate = (
 
 const authorizeEditLock = (
   req: AuthRequest,
-  _res: Response,
+  res: Response,
   next: NextFunction,
 ) => {
-  const type =
-    typeof req.body?.type === 'string' ? req.body.type.trim().toUpperCase() : '';
-  const moduleName =
-    type === 'USER'
-      ? 'USER_ACC'
-      : type === 'ORG'
-        ? 'ORG_STR'
-        : type === 'WORKFLOW'
-          ? 'WORK_FLOW'
-          : null;
+  let moduleName: 'USER_ACC' | 'ORG_STR' | 'WORK_FLOW' | null = null;
+  switch (req.body?.type) {
+    case 'USER':
+      moduleName = 'USER_ACC';
+      break;
+    case 'ORG':
+      moduleName = 'ORG_STR';
+      break;
+    case 'WORKFLOW':
+      moduleName = 'WORK_FLOW';
+      break;
+  }
 
   if (!moduleName) {
     return next(new AppError('Invalid edit lock type', 400));
   }
 
-  const targetNode =
-    typeof req.body?.target?.nodePath === 'string'
-      ? req.body.target.nodePath.trim() || undefined
-      : undefined;
-  const actions: Array<'modify' | 'approve' | 'initiate'> = [
-    'modify',
-    'approve',
-    'initiate',
-  ];
-
-  const checkAccess = async () => {
-    const userId = req.user?.id;
-    const companyId = req.user?.companyId;
-
-    if (!userId || !companyId) {
-      throw new AppError('Unauthorized: User information missing', 401);
-    }
-
-    for (const action of actions) {
-      const response = await internalPost<{ authorized: boolean }>(
-        `${config.backendAuthUrl}/get-user-access`,
-        {
-          userId,
-          companyId,
-          module: moduleName,
-          action,
-          targetNode,
-          body: action === 'initiate' ? req.body : undefined,
-        },
-      );
-
-      if (!response.ok || !response.data) {
-        throw new AppError('Failed to fetch user access permissions', 500);
-      }
-
-      if (response.data.authorized) {
-        return next();
-      }
-    }
-
-    throw new AppError(
-      `Access Denied: You do not have permission to edit lock module '${moduleName}'`,
-      403,
-    );
-  };
-
-  checkAccess().catch(next);
+  return authorize('modify', moduleName)(req, res, next);
 };
 
 const authorizeHistoryDetail = (

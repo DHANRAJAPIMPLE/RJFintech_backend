@@ -26,6 +26,10 @@ type LockOperations = {
 };
 
 export class EditLockDbController {
+  private static isRecord(value: unknown): value is Record<string, any> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
   private static requireString(value: unknown, fieldName: string): string {
     if (typeof value !== 'string' || !value.trim()) {
       throw new AppError(`${fieldName} is required`, 400);
@@ -56,6 +60,120 @@ export class EditLockDbController {
    */
   private static getLockMinutes(addMin?: number): number {
     return addMin && addMin > 0 ? addMin : DEFAULT_LOCK_MINUTES;
+  }
+
+  private static getString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  private static normalizeEmail(value: unknown): string | null {
+    return EditLockDbController.getString(value)?.toLowerCase() || null;
+  }
+
+  private static getPendingUserEmail(data: unknown): string | null {
+    const source = EditLockDbController.isRecord(data) ? data : {};
+    const nestedData = EditLockDbController.isRecord(source.data)
+      ? source.data
+      : {};
+    const basicDetails = EditLockDbController.isRecord(source.basicDetails)
+      ? source.basicDetails
+      : {};
+    const nestedBasicDetails = EditLockDbController.isRecord(
+      nestedData.basicDetails,
+    )
+      ? nestedData.basicDetails
+      : {};
+    const newData = EditLockDbController.isRecord(source.newData)
+      ? source.newData
+      : {};
+    const newBasicDetails = EditLockDbController.isRecord(newData.basicDetails)
+      ? newData.basicDetails
+      : {};
+
+    return (
+      EditLockDbController.normalizeEmail(source.targetUserEmail) ||
+      EditLockDbController.normalizeEmail(basicDetails.email) ||
+      EditLockDbController.normalizeEmail(nestedBasicDetails.email) ||
+      EditLockDbController.normalizeEmail(newBasicDetails.email)
+    );
+  }
+
+  private static getPendingOrgNodePath(data: unknown): string | null {
+    const source = EditLockDbController.isRecord(data) ? data : {};
+    const currentData = EditLockDbController.isRecord(source.currentData)
+      ? source.currentData
+      : {};
+
+    return (
+      EditLockDbController.getString(source.nodePath) ||
+      EditLockDbController.getString(source.targetNodePath) ||
+      EditLockDbController.getString(currentData.nodePath)
+    );
+  }
+
+  private static createLockOperations(
+    model: {
+      updateMany: (args: any) => Promise<{ count: number }>;
+      findUnique: (args: any) => Promise<{
+        editLockedBy: string | null;
+        editLockedAt: Date | null;
+        editLockExpiresAt: Date | null;
+      } | null>;
+    },
+    id: string,
+    userId: string,
+  ): LockOperations {
+    return {
+      release: (now) =>
+        model.updateMany({
+          where: {
+            id,
+            editLockedBy: userId,
+            editLockExpiresAt: { gt: now },
+          },
+          data: {
+            editLockedBy: null,
+            editLockedAt: null,
+            editLockExpiresAt: null,
+          },
+        }),
+      acquire: (now, expiresAt) =>
+        model.updateMany({
+          where: {
+            id,
+            OR: [
+              { editLockedBy: null },
+              { editLockExpiresAt: null },
+              { editLockExpiresAt: { lte: now } },
+            ],
+          },
+          data: {
+            editLockedBy: userId,
+            editLockedAt: now,
+            editLockExpiresAt: expiresAt,
+          },
+        }),
+      extend: (now, expiresAt) =>
+        model.updateMany({
+          where: {
+            id,
+            editLockedBy: userId,
+            editLockExpiresAt: { gt: now },
+          },
+          data: {
+            editLockExpiresAt: expiresAt,
+          },
+        }),
+      current: () =>
+        model.findUnique({
+          where: { id },
+          select: {
+            editLockedBy: true,
+            editLockedAt: true,
+            editLockExpiresAt: true,
+          },
+        }),
+    };
   }
 
   /**
@@ -198,7 +316,33 @@ export class EditLockDbController {
     });
 
     if (!user) {
-      throw new AppError('User target not found in this company', 404);
+      const pendingRequests = await prisma.userOnboarding.findMany({
+        where: {
+          companyId,
+          ...(subtype === 'release' ? {} : { status: 'PENDING' }),
+          type: 'INITIATE',
+        },
+        select: { id: true, data: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const pendingRequest = pendingRequests.find(
+        (request) =>
+          EditLockDbController.getPendingUserEmail(request.data) === email,
+      );
+
+      if (!pendingRequest) {
+        throw new AppError('User target not found in this company', 404);
+      }
+
+      const operations = EditLockDbController.createLockOperations(
+        prisma.userOnboarding as any,
+        pendingRequest.id,
+        userId,
+      );
+
+      return subtype === 'release'
+        ? EditLockDbController.handleRelease('USER', operations, userId)
+        : EditLockDbController.handleLock('USER', operations, userId, addMin);
     }
 
     const operations: LockOperations = {
@@ -275,7 +419,33 @@ export class EditLockDbController {
     });
 
     if (!node) {
-      throw new AppError('Organization target not found in this company', 404);
+      const pendingRequests = await prisma.orgStructureReq.findMany({
+        where: {
+          companyId,
+          ...(subtype === 'release' ? {} : { status: 'PENDING' }),
+          type: 'INITIATE',
+        },
+        select: { id: true, data: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      const pendingRequest = pendingRequests.find(
+        (request) =>
+          EditLockDbController.getPendingOrgNodePath(request.data) === nodePath,
+      );
+
+      if (!pendingRequest) {
+        throw new AppError('Organization target not found in this company', 404);
+      }
+
+      const operations = EditLockDbController.createLockOperations(
+        prisma.orgStructureReq as any,
+        pendingRequest.id,
+        userId,
+      );
+
+      return subtype === 'release'
+        ? EditLockDbController.handleRelease('ORG', operations, userId)
+        : EditLockDbController.handleLock('ORG', operations, userId, addMin);
     }
 
     const operations: LockOperations = {
@@ -376,7 +546,38 @@ export class EditLockDbController {
     });
 
     if (!workflow) {
-      throw new AppError('Workflow target not found in this company', 404);
+      const pendingRequest = await prisma.workflowReq.findFirst({
+        where: {
+          companyId,
+          nodeId: node.id,
+          module,
+          subModule,
+          levelsHash,
+          ...(subtype === 'release' ? {} : { status: 'PENDING' }),
+          type: 'INITIATE',
+        },
+        select: { id: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+
+      if (!pendingRequest) {
+        throw new AppError('Workflow target not found in this company', 404);
+      }
+
+      const operations = EditLockDbController.createLockOperations(
+        prisma.workflowReq as any,
+        pendingRequest.id,
+        userId,
+      );
+
+      return subtype === 'release'
+        ? EditLockDbController.handleRelease('WORKFLOW', operations, userId)
+        : EditLockDbController.handleLock(
+            'WORKFLOW',
+            operations,
+            userId,
+            addMin,
+          );
     }
 
     const operations: LockOperations = {
