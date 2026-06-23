@@ -41,6 +41,7 @@ import type {
   WorkflowHistoryItem,
   WorkflowNodeLookupInternalResponse,
   WorkflowPendingInternalItem,
+  WorkflowPendingDetailItem,
   WorkflowPendingItem,
   WorkflowRequestInternal,
   WorkflowLinkedOrgStructureItem,
@@ -110,9 +111,46 @@ export class WorkflowController {
 
   private static formatPendingWorkflow(
     workflow: WorkflowPendingInternalItem,
+    options: { detail: true },
+  ): WorkflowPendingDetailItem;
+
+  private static formatPendingWorkflow(
+    workflow: WorkflowPendingInternalItem,
+    options?: { detail?: false },
+  ): WorkflowPendingItem;
+
+  private static formatPendingWorkflow(
+    workflow: WorkflowPendingInternalItem,
     options: { detail?: boolean } = {},
-  ): WorkflowPendingItem {
+  ): WorkflowPendingItem | WorkflowPendingDetailItem {
     const detail = options.detail === true;
+    if (detail) {
+      return {
+        id: workflow.id,
+        workflowId: workflow.workflowId ?? null,
+        associateAlias: workflow.associateAlias ?? {
+          workflowName: workflow.workflowName ?? null,
+          workflowAlias: workflow.alias ?? null,
+        },
+        oldData: workflow.oldData ?? workflow.data?.oldData ?? null,
+        newData:
+          workflow.type === 'INITIATE'
+            ? null
+            : (workflow.newData ?? workflow.data ?? null),
+        approvalRemark: workflow.approvalRemark,
+        levelsHash: workflow.levelsHash,
+        createdAt: workflow.createdAt,
+        initiator: {
+          name: workflow.initiator?.name ?? '',
+          email: workflow.initiator?.email ?? '',
+        },
+        initiatorTimestamp: workflow.initiatorTimestamp,
+        linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map((child) =>
+          WorkflowController.formatLinkedOrgStructure(child),
+        ),
+      };
+    }
+
     const nextData = workflow.newData as
       | { module?: string | null; subModule?: string | null }
       | null
@@ -142,38 +180,6 @@ export class WorkflowController {
         workflowName: workflow.workflowName ?? null,
         workflowAlias: workflow.alias ?? null,
       },
-      ...(detail
-        ? {
-            data: {
-              name: workflow.data?.name,
-              workflowType:
-                workflow.data?.workflowType ?? workflow.workflowType ?? 'NODE',
-              levels: workflow.data?.levels,
-              module: workflow.data?.module,
-              nodePath: workflow.data?.nodePath,
-              subModule: workflow.data?.subModule,
-              levelsHash:
-                workflow.data?.levelsHash ?? workflow.levelsHash ?? null,
-              status: workflow.data?.status ?? null,
-            },
-            oldData: workflow.oldData ?? workflow.data?.oldData ?? null,
-            newData:
-              workflow.type === 'INITIATE'
-                ? null
-                : (workflow.newData ?? workflow.data ?? null),
-            approvalRemark: workflow.approvalRemark,
-            levelsHash: workflow.levelsHash,
-            createdAt: workflow.createdAt,
-            initiator: {
-              name: workflow.initiator?.name ?? '',
-              email: workflow.initiator?.email ?? '',
-            },
-            initiatorTimestamp: workflow.initiatorTimestamp,
-            linkedOrgStructure: (workflow.linkedOrgStructure ?? []).map(
-              (child) => WorkflowController.formatLinkedOrgStructure(child),
-            ),
-          }
-        : {}),
     };
   }
 
@@ -567,8 +573,12 @@ export class WorkflowController {
         );
       }
 
+      const isPendingDetail =
+        'oldData' in data.data &&
+        'newData' in data.data &&
+        'initiatorTimestamp' in data.data;
       const detail =
-        'workflowName' in data.data
+        isPendingDetail || 'workflowName' in data.data
           ? WorkflowController.formatPendingWorkflow(data.data, {
               detail: true,
             })

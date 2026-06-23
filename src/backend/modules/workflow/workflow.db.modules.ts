@@ -6504,7 +6504,7 @@ export class WorkflowDbController {
         return res.status(200).json({
           message: 'Workflow details fetched successfully!',
           code: 200,
-          data: detail,
+          data: WorkflowDbController.formatPendingWorkflowDetail(detail),
         });
       }
 
@@ -6630,6 +6630,28 @@ export class WorkflowDbController {
     } catch (error) {
       next(error);
     }
+  }
+
+  private static formatPendingWorkflowDetail(detail: any) {
+    return {
+      id: detail.id,
+      workflowId: detail.workflowId ?? null,
+      associateAlias: detail.associateAlias ?? {
+        workflowName: detail.workflowName ?? null,
+        workflowAlias: detail.alias ?? null,
+      },
+      oldData: detail.oldData ?? null,
+      newData: detail.newData ?? null,
+      approvalRemark: detail.approvalRemark ?? null,
+      levelsHash: detail.levelsHash ?? null,
+      createdAt: detail.createdAt,
+      initiator: {
+        name: detail.initiator?.name ?? '',
+        email: detail.initiator?.email ?? '',
+      },
+      initiatorTimestamp: detail.initiatorTimestamp,
+      linkedOrgStructure: detail.linkedOrgStructure ?? [],
+    };
   }
 
   private static async formatWorkflowRequests(

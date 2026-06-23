@@ -138,6 +138,20 @@ export type WorkflowPendingItem = {
   linkedOrgStructure?: WorkflowLinkedOrgStructureItem[];
 };
 
+export type WorkflowPendingDetailItem = {
+  id: string;
+  workflowId?: string | null;
+  associateAlias?: WorkflowAssociateAlias;
+  oldData?: unknown | null;
+  newData?: unknown | null;
+  approvalRemark?: string | null;
+  levelsHash?: string | null;
+  createdAt?: string;
+  initiator?: WorkflowInitiator;
+  initiatorTimestamp?: string;
+  linkedOrgStructure?: WorkflowLinkedOrgStructureItem[];
+};
+
 export type WorkflowPendingRequestSnapshot = {
   id: string;
   type?: 'INITIATE' | 'UPDATE' | 'INACTIVE' | 'ACTIVE' | 'ARCHIVE';
