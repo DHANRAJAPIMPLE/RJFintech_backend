@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import { sanitizeMonitoringPayload } from '../../../shared/utils/monitoring/sanitizeMonitoringPayload';
+import { shouldSkipMonitoringPath } from '../../../shared/utils/monitoring/shouldSkipMonitoring';
 import { prisma } from '../../lib/prisma';
 import {
   appendCursorWhere,
@@ -1093,6 +1094,10 @@ const formatDetailChildSpan = (row: SpanRow) => ({
 
 export class MonitoringService {
   static async createApiSpan(payload: CreateApiSpanInput) {
+    if (shouldSkipMonitoringPath(payload.url, payload.method)) {
+      return null;
+    }
+
     return createApiSpanSafely({
       trackingId: payload.trackingId,
       subCount: payload.subCount ?? null,
@@ -1269,6 +1274,10 @@ export class MonitoringController {
       }
 
       const apiSpan = await MonitoringService.createApiSpan(parsed.data);
+      if (!apiSpan) {
+        return res.status(204).send();
+      }
+
       return res.status(201).json(apiSpan);
     } catch (error) {
       return next(error);
