@@ -4521,15 +4521,18 @@ export class UserDbController {
     );
 
     const pendingOnboardingRows = (pendingUsers.pendingOnboardings || []) as any[];
-    const filteredPendingCount = appliedFilters
-      ? (
-        await UserDbController.formatPendingUsers(
-          pendingOnboardingRows,
-          companyId,
-          { detail: true, viewerUserId: userId },
-        )
-      ).filter(
-        (pendingUser, index) =>
+    const formattedPendingUsers = await UserDbController.formatPendingUsers(
+      pendingOnboardingRows,
+      companyId,
+      { detail: true, viewerUserId: userId },
+    );
+    const pendingEntries = formattedPendingUsers.map((pendingUser, index) => ({
+      pendingUser,
+      onboarding: pendingOnboardingRows[index],
+    }));
+    const filteredPendingEntries = appliedFilters
+      ? pendingEntries.filter(
+        ({ pendingUser, onboarding }) =>
           pendingUser &&
           UserDbController.matchesAppliedUserFilters(
             pendingUser,
@@ -4537,10 +4540,16 @@ export class UserDbController {
             {
               defaultStatus: 'PENDING',
               isPendingRecord: true,
-              pendingRequestType: pendingOnboardingRows[index]?.type ?? null,
+              pendingRequestType: onboarding?.type ?? null,
             },
           ),
-      ).length
+      )
+      : pendingEntries;
+    const filteredPendingUsers = filteredPendingEntries.map(
+      (entry) => entry.pendingUser,
+    );
+    const filteredPendingCount = appliedFilters
+      ? filteredPendingUsers.length
       : pendingUsers.pendingCount;
 
     for (const user of filteredUsers) {
@@ -4655,6 +4664,37 @@ export class UserDbController {
         }
       }
     }
+
+    filteredPendingEntries.forEach(({ pendingUser, onboarding }: any) => {
+      const basicDetails = pendingUser?.basicDetails || {};
+      const onboardingBasicDetails = onboarding?.data?.basicDetails || {};
+      const designation = UserDbController.normalizeFilterText(
+        basicDetails.designation ?? onboardingBasicDetails.designation,
+      );
+      if (designation) {
+        const key = designation.toLowerCase();
+        const current = designationCounts.get(key);
+        designationCounts.set(key, {
+          value: designation,
+          count: (current?.count || 0) + 1,
+        });
+      }
+
+      const managerName =
+        UserDbController.normalizeFilterText(
+          basicDetails.reportingManagerName,
+        ) ||
+        UserDbController.normalizeFilterText(
+          basicDetails.reportingManagerEmail,
+        ) ||
+        UserDbController.normalizeFilterText(basicDetails.reportingManager) ||
+        UserDbController.normalizeFilterText(
+          onboardingBasicDetails.reportingManager,
+        );
+      if (managerName) {
+        reportingManagerMap.set(managerName.toLowerCase(), managerName);
+      }
+    });
 
     const nodeType = Array.from(nodeTypeCounts.values()).sort((a, b) =>
       a.value.localeCompare(b.value),
