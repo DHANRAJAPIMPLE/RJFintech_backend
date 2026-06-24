@@ -820,7 +820,7 @@ export class NotificationService {
       case 'USER:ONBOARDED':
         return {
           name: 'User onboarded',
-          message: `${userName} was onboarded`,
+          message: `${userName} was onboarded. Check the user access details for assigned roles.`,
         };
       case 'USER:Pending Approval - MODIFICATION':
         return {

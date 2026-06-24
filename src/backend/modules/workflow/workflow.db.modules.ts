@@ -62,6 +62,7 @@ type NormalizedWorkflowListAppliedFilters = {
   module: string[];
   subModule: string[];
   currentStatus: string[];
+  workflowRequestType: Array<'INITIATE' | 'UPDATE'>;
   checkerCounts: number[];
   levels: NormalizedWorkflowLevelFilter[];
   workflowLevels: number[];
@@ -231,6 +232,26 @@ export class WorkflowDbController {
     return null;
   }
 
+  private static normalizeWorkflowRequestTypeFilterValue(
+    value: unknown,
+  ): 'INITIATE' | 'UPDATE' | null {
+    const compact = WorkflowDbController.compactFilterValue(value);
+    if (!compact) return null;
+
+    if (compact === 'initiate' || compact === 'initiated') {
+      return 'INITIATE';
+    }
+    if (
+      compact === 'modify' ||
+      compact === 'modified' ||
+      compact === 'update'
+    ) {
+      return 'UPDATE';
+    }
+
+    return null;
+  }
+
   private static normalizeWorkflowStatusFilterValues(values: unknown) {
     const items =
       typeof values === 'string'
@@ -261,6 +282,40 @@ export class WorkflowDbController {
             );
           })
           .filter((value): value is string => Boolean(value)),
+      ),
+    );
+  }
+
+  private static normalizeWorkflowRequestTypeFilterValues(values: unknown) {
+    const items =
+      typeof values === 'string'
+        ? values.includes(',')
+          ? values.split(',')
+          : [values]
+        : Array.isArray(values)
+          ? values
+          : values === undefined || values === null || values === ''
+            ? []
+            : [values];
+
+    return Array.from(
+      new Set(
+        items
+          .map((value) => {
+            if (value && typeof value === 'object') {
+              const objectValue = (value as Record<string, unknown>).value;
+              if (objectValue !== undefined) {
+                return WorkflowDbController.normalizeWorkflowRequestTypeFilterValue(
+                  objectValue,
+                );
+              }
+            }
+
+            return WorkflowDbController.normalizeWorkflowRequestTypeFilterValue(
+              value,
+            );
+          })
+          .filter((value): value is 'INITIATE' | 'UPDATE' => Boolean(value)),
       ),
     );
   }
@@ -407,6 +462,10 @@ export class WorkflowDbController {
         source.subModule,
       ),
       currentStatus: WorkflowDbController.getWorkflowAppliedStatusTypes(source),
+      workflowRequestType:
+        WorkflowDbController.normalizeWorkflowRequestTypeFilterValues(
+          source.currentStatus ?? source.requestType ?? source.type,
+        ),
       checkerCounts: WorkflowDbController.normalizeAppliedNumberValues(
         source.checker ?? source.checkerCount ?? source.checkers,
         { min: 1, max: 10 },
@@ -437,6 +496,7 @@ export class WorkflowDbController {
       normalized.module.length > 0 ||
       normalized.subModule.length > 0 ||
       normalized.currentStatus.length > 0 ||
+      normalized.workflowRequestType.length > 0 ||
       normalized.checkerCounts.length > 0 ||
       normalized.levels.length > 0 ||
       normalized.workflowLevels.length > 0 ||
@@ -587,6 +647,10 @@ export class WorkflowDbController {
   ) {
     const levels = WorkflowDbController.workflowLevelsFromPayload(row.levels);
 
+    if (filters.workflowRequestType.length > 0) {
+      return false;
+    }
+
     if (
       !WorkflowDbController.matchesNormalizedFilterValue(
         row.orgStructure?.nodeName,
@@ -681,6 +745,7 @@ export class WorkflowDbController {
       associatedWorkflow?.subModule ||
       row.subModule;
     const status = row.status || 'PENDING';
+    const requestType = String(row.type || 'INITIATE').toUpperCase();
 
     if (
       !WorkflowDbController.matchesNormalizedFilterValue(
@@ -723,6 +788,14 @@ export class WorkflowDbController {
       !WorkflowDbController.matchesNormalizedFilterValue(
         status,
         filters.currentStatus,
+      )
+    ) {
+      return false;
+    }
+    if (
+      filters.workflowRequestType.length > 0 &&
+      !filters.workflowRequestType.includes(
+        requestType as 'INITIATE' | 'UPDATE',
       )
     ) {
       return false;
@@ -6890,6 +6963,13 @@ export class WorkflowDbController {
       const appliedStatusTypes = filterEnabled
         ? WorkflowDbController.getWorkflowAppliedStatusTypes(req.body?.applied)
         : [];
+      const appliedWorkflowRequestTypes =
+        WorkflowDbController.normalizeWorkflowRequestTypeFilterValues(
+          req.body?.currentStatus ??
+            (req.body?.applied && typeof req.body.applied === 'object'
+              ? (req.body.applied as Record<string, unknown>).currentStatus
+              : undefined),
+        );
       const requestedStatusType = String(
         req.body?.statusType ?? '',
       ).toLowerCase();
@@ -6901,7 +6981,10 @@ export class WorkflowDbController {
       ) {
         throw new AppError('Invalid statusType', 400);
       }
-      const selectedStatusType = requestedStatusType || appliedStatusTypes[0];
+      const selectedStatusType =
+        requestedStatusType ||
+        appliedStatusTypes[0] ||
+        (appliedWorkflowRequestTypes.length > 0 ? 'pending' : '');
       const statusType =
         selectedStatusType === 'pending'
           ? 'pending'
@@ -6915,11 +6998,21 @@ export class WorkflowDbController {
           ? req.body.query.trim()
           : null;
       const pagination = resolveCursorPagination(req.body ?? {});
-      const appliedFilters = filterEnabled
-        ? WorkflowDbController.normalizeWorkflowListAppliedFilters(
-            req.body?.applied,
-          )
-        : null;
+      const appliedSource =
+        req.body?.currentStatus === undefined
+          ? req.body?.applied
+          : {
+              ...((req.body?.applied && typeof req.body.applied === 'object'
+                ? req.body.applied
+                : {}) as Record<string, unknown>),
+              currentStatus: req.body.currentStatus,
+            };
+      const appliedFilters =
+        filterEnabled || req.body?.currentStatus !== undefined
+          ? WorkflowDbController.normalizeWorkflowListAppliedFilters(
+              appliedSource,
+            )
+          : null;
 
       let resolvedCompanyId = companyId;
 
@@ -7045,6 +7138,9 @@ export class WorkflowDbController {
       const pendingListWhere: any = {
         ...pendingWhere,
         id: { in: visiblePendingRequestIds },
+        ...(appliedFilters?.workflowRequestType.length
+          ? { type: { in: appliedFilters.workflowRequestType } }
+          : {}),
       };
       const listWhere =
         statusType === 'pending'

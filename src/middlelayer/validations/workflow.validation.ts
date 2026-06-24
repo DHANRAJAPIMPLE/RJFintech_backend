@@ -120,6 +120,13 @@ const optionalStringArraySchema = z.preprocess((value) => {
   return value;
 }, z.array(z.string().trim().min(1)).nullable().optional());
 
+const workflowCurrentStatusSchema = z
+  .preprocess(
+    (value) => (typeof value === 'string' ? value.trim().toLowerCase() : value),
+    z.enum(['initiate', 'modify']).nullable().optional(),
+  )
+  .optional();
+
 const optionalIntegerArraySchema = (
   options: { min: number; max: number; field: string },
 ) =>
@@ -240,6 +247,7 @@ const workflowAppliedFilterSchema = z
     workflowType: optionalStringArraySchema,
     module: optionalStringArraySchema,
     subModule: optionalStringArraySchema,
+    currentStatus: optionalStringArraySchema,
     checker: optionalIntegerArraySchema({
       min: 1,
       max: 10,
@@ -438,6 +446,7 @@ export const workflowListSchema = z
     statusType: requiredWorkflowListTypeSchema.optional(),
     ...cursorPaginationFields,
     filter: z.boolean().optional(),
+    currentStatus: workflowCurrentStatusSchema,
     pagination: workflowListPaginationSchema.optional(),
     applied: workflowAppliedFilterSchema.nullable().optional(),
   })

@@ -631,13 +631,8 @@ export class UserDbController {
         !originalKeys.has(UserDbController.permissionSummaryKey(permission)),
     );
 
-    const formatList = (perms: any[]) => {
-      return Array.from(new Set(perms.map((p) => {
-        const role = String(p?.roleName || 'Unknown Role').trim();
-        const node = String(p?.nodeName || p?.nodePath || 'Unknown Node').trim();
-        return `${role} on ${node}`;
-      }))).filter(Boolean).join(', ');
-    };
+    const formatList = (perms: any[]) =>
+      UserDbController.formatPermissionAccessList(perms);
 
     const originalList = formatList(originalPermissions);
 
@@ -648,6 +643,74 @@ export class UserDbController {
     const generatedList = formatList(generatedPermissions);
 
     return `${expandedPermissions.length} role assignment(s). Given: ${originalList}. Auto-generated: ${generatedList}`;
+  }
+
+  private static formatPermissionAccessList(permissions: any[]) {
+    return Array.from(
+      new Set(
+        (Array.isArray(permissions) ? permissions : [])
+          .map((permission) => {
+            const role = String(permission?.roleName || 'Unknown Role').trim();
+            const node = String(
+              permission?.nodeName || permission?.nodePath || 'Unknown Node',
+            ).trim();
+            const accessType = String(permission?.accessType || '')
+              .trim()
+              .toUpperCase();
+            const accessLabel =
+              accessType === 'PRIMARY'
+                ? 'Primary access'
+                : accessType === 'SECONDARY'
+                  ? 'Secondary access'
+                  : 'Access';
+            const accessCategory = String(permission?.accessCategory || '')
+              .trim()
+              .toUpperCase()
+              .replace(/_/g, ' ')
+              .toLowerCase();
+            const categoryLabel = accessCategory ? `, ${accessCategory}` : '';
+
+            return `${accessLabel}: ${role} on ${node}${categoryLabel}`;
+          })
+          .filter(Boolean),
+      ),
+    ).join(', ');
+  }
+
+  private static formatUserOnboardedNotificationMessage(
+    referenceName: string,
+    originalPermissions: any[],
+    expandedPermissions: any[],
+  ) {
+    const originalKeys = new Set(
+      (Array.isArray(originalPermissions) ? originalPermissions : []).map(
+        (originalPermission) =>
+          UserDbController.permissionSummaryKey(originalPermission),
+      ),
+    );
+    const directAccess = UserDbController.formatPermissionAccessList(
+      originalPermissions,
+    );
+    const generatedAccess = UserDbController.formatPermissionAccessList(
+      Array.isArray(expandedPermissions)
+        ? expandedPermissions.filter(
+            (permission) =>
+              !originalKeys.has(
+                UserDbController.permissionSummaryKey(permission),
+              ),
+          )
+        : [],
+    );
+    const accessParts = [
+      directAccess ? `Assigned access: ${directAccess}` : null,
+      generatedAccess ? `Auto-generated access: ${generatedAccess}` : null,
+    ].filter(Boolean);
+
+    if (accessParts.length === 0) {
+      return `${referenceName} was onboarded.`;
+    }
+
+    return `${referenceName} was onboarded. ${accessParts.join('. ')}.`;
   }
 
   private static getGeneratedPermissionLabels(
@@ -9389,21 +9452,27 @@ export class UserDbController {
         includeCreatedBy: true,
         isPending: isAutoApproved ? false : undefined,
         message: (() => {
+          if (isAutoApproved) {
+            return UserDbController.formatUserOnboardedNotificationMessage(
+              userReferenceName,
+              originalPermissions,
+              expandedInitiatePermissions,
+            );
+          }
           const summary = UserDbController.formatInitiatePermissionSummary(
             originalPermissions,
             expandedInitiatePermissions,
           );
-          const phase = isAutoApproved ? 'approved' : 'initiated';
           return summary
             ? `${UserDbController.getUserNotificationContent(
               'INITIATE',
-              phase,
+              'initiated',
               userReferenceName,
             ).message
             } with ${summary}`
             : UserDbController.getUserNotificationContent(
               'INITIATE',
-              phase,
+              'initiated',
               userReferenceName,
             ).message;
         })(),
