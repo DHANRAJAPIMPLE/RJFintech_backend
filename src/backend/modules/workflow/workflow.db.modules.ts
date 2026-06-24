@@ -55,6 +55,12 @@ type NormalizedWorkflowLevelFilter = {
   approverType: string;
 };
 
+type WorkflowRequestTypeFilter =
+  | 'INITIATE'
+  | 'UPDATE'
+  | 'INACTIVE'
+  | 'ARCHIVE';
+
 type NormalizedWorkflowListAppliedFilters = {
   nodeValues: string[];
   nodeType: string[];
@@ -62,7 +68,7 @@ type NormalizedWorkflowListAppliedFilters = {
   module: string[];
   subModule: string[];
   currentStatus: string[];
-  workflowRequestType: Array<'INITIATE' | 'UPDATE'>;
+  workflowRequestType: WorkflowRequestTypeFilter[];
   checkerCounts: number[];
   approverCounts: number[];
   levels: NormalizedWorkflowLevelFilter[];
@@ -235,22 +241,31 @@ export class WorkflowDbController {
 
   private static normalizeWorkflowRequestTypeFilterValue(
     value: unknown,
-  ): 'INITIATE' | 'UPDATE' | null {
+  ): WorkflowRequestTypeFilter[] {
     const compact = WorkflowDbController.compactFilterValue(value);
-    if (!compact) return null;
+    if (!compact) return [];
 
     if (compact === 'initiate' || compact === 'initiated') {
-      return 'INITIATE';
+      return ['INITIATE'];
     }
     if (
       compact === 'modify' ||
       compact === 'modified' ||
       compact === 'update'
     ) {
-      return 'UPDATE';
+      return ['UPDATE', 'INACTIVE', 'ARCHIVE'];
+    }
+    if (compact === 'active' || compact === 'activate') {
+      return ['UPDATE'];
+    }
+    if (compact === 'inactive' || compact === 'inactivate') {
+      return ['INACTIVE'];
+    }
+    if (compact === 'archive' || compact === 'archived') {
+      return ['ARCHIVE'];
     }
 
-    return null;
+    return [];
   }
 
   private static normalizeWorkflowStatusFilterValues(values: unknown) {
@@ -302,7 +317,7 @@ export class WorkflowDbController {
     return Array.from(
       new Set(
         items
-          .map((value) => {
+          .flatMap((value) => {
             if (value && typeof value === 'object') {
               const objectValue = (value as Record<string, unknown>).value;
               if (objectValue !== undefined) {
@@ -316,7 +331,9 @@ export class WorkflowDbController {
               value,
             );
           })
-          .filter((value): value is 'INITIATE' | 'UPDATE' => Boolean(value)),
+          .filter((value): value is WorkflowRequestTypeFilter =>
+            Boolean(value),
+          ),
       ),
     );
   }
@@ -727,10 +744,14 @@ export class WorkflowDbController {
       nodeName: string;
       nodeType: string;
     }> = [],
+    requestTypeWorkflowIds: Set<string> | null = null,
   ) {
     const levels = WorkflowDbController.workflowLevelsFromPayload(row.levels);
 
-    if (filters.workflowRequestType.length > 0) {
+    if (
+      filters.workflowRequestType.length > 0 &&
+      !requestTypeWorkflowIds?.has(row.id)
+    ) {
       return false;
     }
 
@@ -882,7 +903,7 @@ export class WorkflowDbController {
     if (
       filters.workflowRequestType.length > 0 &&
       !filters.workflowRequestType.includes(
-        requestType as 'INITIATE' | 'UPDATE',
+        requestType as WorkflowRequestTypeFilter,
       )
     ) {
       return false;
@@ -1305,6 +1326,101 @@ export class WorkflowDbController {
       ...Array.from(storedRequestIds),
       ...exactLinkedRequestIds,
     ]);
+  }
+
+  private static async getPendingRequestTypeWorkflowIds(
+    client: any,
+    companyId: string,
+    requestTypes: WorkflowRequestTypeFilter[],
+    visibleWorkflowRows: any[],
+  ) {
+    if (requestTypes.length === 0 || visibleWorkflowRows.length === 0) {
+      return new Set<string>();
+    }
+
+    const visibleWorkflowIds = new Set(
+      visibleWorkflowRows.map((row) => row.id).filter(Boolean),
+    );
+    const visibleWorkflowByIdentity = new Map<string, string>();
+    visibleWorkflowRows.forEach((row) => {
+      const nodePath = row.orgStructure?.nodePath || null;
+      if (!nodePath) return;
+      visibleWorkflowByIdentity.set(
+        [row.module, row.subModule, nodePath, row.levelsHash].join('|'),
+        row.id,
+      );
+    });
+
+    const pendingRequests = await client.workflowReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: requestTypes },
+      },
+      select: {
+        id: true,
+        workflowId: true,
+        module: true,
+        subModule: true,
+        levelsHash: true,
+        data: true,
+      },
+    });
+    const effectivePendingRequestIds =
+      await WorkflowDbController.filterEffectivelyPendingRequestIds(
+        'workflow_req',
+        pendingRequests.map((request: any) => request.id),
+      );
+
+    return new Set<string>(
+      pendingRequests
+        .filter((request: any) => effectivePendingRequestIds.has(request.id))
+        .flatMap((request: any) => {
+          const explicitRequestTarget =
+            WorkflowDbController.extractWorkflowTarget(request.data);
+          const requestTarget = explicitRequestTarget || {
+            module: request.module,
+            subModule: request.subModule,
+            nodePath:
+              (request.data as any)?.nodePath ||
+              (request.data as any)?.target?.nodePath ||
+              null,
+            levelsHash: request.levelsHash,
+          };
+          if (
+            !requestTarget?.module ||
+            !requestTarget?.subModule ||
+            !requestTarget?.nodePath ||
+            !requestTarget?.levelsHash
+          ) {
+            return [];
+          }
+
+          const requestIdentity = [
+            requestTarget.module,
+            requestTarget.subModule,
+            requestTarget.nodePath,
+            requestTarget.levelsHash,
+          ].join('|');
+          const workflowId = visibleWorkflowByIdentity.get(requestIdentity);
+          if (workflowId) {
+            return [workflowId];
+          }
+
+          if (explicitRequestTarget) {
+            return [];
+          }
+
+          if (request.workflowId && visibleWorkflowIds.has(request.workflowId)) {
+            return [request.workflowId];
+          }
+
+          return [];
+        })
+        .filter((workflowId: unknown): workflowId is string =>
+          Boolean(workflowId),
+        ),
+    );
   }
 
   private static async filterEffectivelyPendingRequestIds(
@@ -7313,6 +7429,32 @@ export class WorkflowDbController {
               },
             })
           : [];
+      const requestTypeFilterWorkflowIds = appliedFilters?.workflowRequestType
+        .length
+        ? await (async () => {
+            const visibleWorkflowRowsForRequestType = [
+              ...(await prisma.workflow.findMany({
+                where: activeWhere,
+                select: activeSelect,
+              })),
+              ...(await prisma.workflow.findMany({
+                where: inactiveWhere,
+                select: activeSelect,
+              })),
+              ...(await prisma.workflow.findMany({
+                where: archiveWhere,
+                select: activeSelect,
+              })),
+            ];
+
+            return WorkflowDbController.getPendingRequestTypeWorkflowIds(
+              prisma,
+              resolvedCompanyId,
+              appliedFilters.workflowRequestType,
+              visibleWorkflowRowsForRequestType,
+            );
+          })()
+        : null;
       const filteredActiveRows = appliedFilters
         ? (
             await prisma.workflow.findMany({
@@ -7326,6 +7468,7 @@ export class WorkflowDbController {
               appliedFilters,
               autoGeneratedParentByWorkflowId,
               activeFilterOrgNodes,
+              requestTypeFilterWorkflowIds,
             ),
           )
         : null;
@@ -7342,6 +7485,7 @@ export class WorkflowDbController {
               appliedFilters,
               autoGeneratedParentByWorkflowId,
               activeFilterOrgNodes,
+              requestTypeFilterWorkflowIds,
             ),
           )
         : null;
@@ -7358,6 +7502,7 @@ export class WorkflowDbController {
               appliedFilters,
               autoGeneratedParentByWorkflowId,
               activeFilterOrgNodes,
+              requestTypeFilterWorkflowIds,
             ),
           )
         : null;
