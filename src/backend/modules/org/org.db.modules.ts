@@ -2249,6 +2249,7 @@ export class OrgStructureDbController {
             : access.accessCategory,
         companyId: access.companyId,
         isGlobalAccess: false,
+        source: 'AUTO_GENERATED',
       });
     }
 
@@ -4027,7 +4028,10 @@ export class OrgStructureDbController {
             nodeName,
             nodePath,
             ...access
-          }: any) => access,
+          }: any) => ({
+            ...access,
+            source: 'AUTO_GENERATED',
+          }),
         ),
         skipDuplicates: true,
       });

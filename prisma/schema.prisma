@@ -176,9 +176,6 @@ model UserOnboarding {
   initiatorId       String?          @map("initiator_id")
   remarks           String?
   status            OnboardingStatus @default(PENDING)
-  editLockedBy      String?          @map("edit_locked_by")
-  editLockedAt      DateTime?        @map("edit_locked_at")
-  editLockExpiresAt DateTime?        @map("edit_lock_expires_at")
   createdAt         DateTime         @default(now()) @map("created_at")
   updatedAt         DateTime         @updatedAt @map("updated_at")
   approvalRemark    String?          @map("approval_remark")
@@ -350,9 +347,6 @@ model OrgStructureReq {
   status            OnboardingStatus @default(PENDING)
   createdAt         DateTime         @default(now()) @map("created_at")
   remarks           String?
-  editLockedBy      String?          @map("edit_locked_by")
-  editLockedAt      DateTime?        @map("edit_locked_at")
-  editLockExpiresAt DateTime?        @map("edit_lock_expires_at")
   updatedAt         DateTime         @updatedAt @map("updated_at")
   eligibleApprovers String[]         @default([]) @map("eligible_approvers")
   orgHistories      OrgHistory[]     @relation("OrgRequestHistory")
@@ -430,6 +424,7 @@ model UserAccess {
   nodeId         String       @map("node_id")
   accessType     AccessType?  @map("access_type")
   accessCategory UserCategory @default(NODE) @map("user_category")
+  source         AccessSource @default(USER)
   companyId      String       @map("company_id")
   isGlobalAccess Boolean      @default(false) @map("is_global_access")
   createdAt      DateTime     @default(now()) @map("created_at")
@@ -523,9 +518,6 @@ model WorkflowReq {
   oldData            Json?                @map("old_data")
   initiatorId        String?              @map("initiator_id")
   status             OnboardingStatus     @default(PENDING)
-  editLockedBy       String?              @map("edit_locked_by")
-  editLockedAt       DateTime?            @map("edit_locked_at")
-  editLockExpiresAt  DateTime?            @map("edit_lock_expires_at")
   approvalRemark     String?              @map("approval_remark")
   eligibleApprovers  String[]             @default([]) @map("eligible_approvers")
   createdAt          DateTime             @default(now()) @map("created_at")
@@ -665,6 +657,11 @@ enum UserCategory {
   ALL_CHILD
   IMMEDIATE_CHILD
   NODE
+}
+
+enum AccessSource {
+  USER
+  AUTO_GENERATED
 }
 
 enum NotificationModule {

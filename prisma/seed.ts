@@ -416,6 +416,7 @@ for (const role of roles) {
           companyId: company.id,
           isGlobalAccess,
           accessCategory,
+          source: 'USER',
         },
       });
     }

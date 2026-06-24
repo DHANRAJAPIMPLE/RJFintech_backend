@@ -1483,6 +1483,7 @@ export class CompanyDbController {
               companyId: newCompany.id,
               isGlobalAccess: true,
               accessCategory: 'ALL_CHILD',
+              source: 'USER',
             },
           });
 
