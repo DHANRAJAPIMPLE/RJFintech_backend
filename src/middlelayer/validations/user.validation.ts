@@ -272,38 +272,38 @@ const workflowCompanyNodeAppliedSchema = z
     subCategory: optionalStringArraySchema,
     subModule: optionalStringArraySchema,
     checker: optionalIntegerArraySchema({
-      min: 1,
+      min: 0,
       max: 10,
       field: 'Checker count',
     }),
     checkerCount: optionalIntegerArraySchema({
-      min: 1,
+      min: 0,
       max: 10,
       field: 'Checker count',
     }),
     checkers: optionalIntegerArraySchema({
-      min: 1,
+      min: 0,
       max: 10,
       field: 'Checker count',
     }),
     workflowLevels: z
       .union([
         optionalIntegerArraySchema({
-          min: 1,
+          min: 0,
           max: 10,
           field: 'Workflow level count',
         }),
         z.coerce
           .number()
           .int('Workflow level count must be an integer')
-          .min(1, 'Workflow level count must be between 1 and 10')
-          .max(10, 'Workflow level count must be between 1 and 10')
+          .min(0, 'Workflow level count must be between 0 and 10')
+          .max(10, 'Workflow level count must be between 0 and 10')
           .nullable()
           .optional(),
       ])
       .optional(),
     workflowLevel: optionalIntegerArraySchema({
-      min: 1,
+      min: 0,
       max: 10,
       field: 'Workflow level count',
     }),

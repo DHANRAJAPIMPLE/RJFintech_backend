@@ -2351,11 +2351,13 @@ export class UserDbController {
     levels: Array<{ approver1?: unknown; approver2?: unknown }>,
   ) {
     const levelDerivedCount = levels.reduce((count, level) => {
-      const approvers = [level.approver1, level.approver2].filter(Boolean);
+      const approvers = [level.approver1, level.approver2].filter(
+        (approver) => Boolean(approver) && approver !== 'NO_APPROVER',
+      );
       return count + approvers.length;
     }, 0);
 
-    if (levelDerivedCount > 0) {
+    if (levels.length > 0) {
       return levelDerivedCount;
     }
 
@@ -2426,11 +2428,11 @@ export class UserDbController {
       ),
       checkerCounts: UserDbController.normalizeAppliedNumberValues(
         source.checker ?? source.checkerCount ?? source.checkers,
-        { min: 1, max: 10 },
+        { min: 0, max: 10 },
       ),
       workflowLevels: UserDbController.normalizeAppliedNumberValues(
         source.workflowLevel ?? source.workflowLevels,
-        { min: 1, max: 10 },
+        { min: 0, max: 10 },
       ),
       levels: Array.from(new Set(normalizedLevels)),
       currentStatus: UserDbController.normalizeAppliedFilterValues(
@@ -4825,10 +4827,7 @@ export class UserDbController {
           workflow.alias,
           workflow.levels,
         );
-        const levelCount = UserDbController.resolveWorkflowLevelCount(
-          workflow.alias,
-          levelNumbers,
-        );
+        const levelCount = new Set(levelNumbers).size;
 
         return {
           nodeId: workflow.orgStructure?.id || '',
