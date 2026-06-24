@@ -140,13 +140,17 @@ const optionalIntegerArraySchema = (
         }
         return item;
       };
+      const hasIntegerFilterValue = (item: unknown) => item !== null;
 
-      if (Array.isArray(value)) return value.map(normalize).filter(Boolean);
+      if (Array.isArray(value)) {
+        return value.map(normalize).filter(hasIntegerFilterValue);
+      }
       if (typeof value === 'string' && value.includes(',')) {
         return value
           .split(',')
           .map((item) => item.trim())
-          .filter(Boolean);
+          .map(normalize)
+          .filter(hasIntegerFilterValue);
       }
 
       const normalized = normalize(value);
