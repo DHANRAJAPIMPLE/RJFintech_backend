@@ -5014,6 +5014,10 @@ export class UserDbController {
     const nodeNameMap = new Map<string, CompanyNodeFilterNodeOption>();
     const nodeTypeCounts = new Map<string, CompanyNodeFilterNodeTypeOption>();
     const moduleCounts = new Map<string, { value: string; count: number }>();
+    const subCategoryCounts = new Map<
+      string,
+      { value: string; count: number }
+    >();
     const checkerCounts = new Map<number, { value: number; count: number }>();
     const workflowLevelCounts = new Map<number, { value: number; count: number }>();
     const statusCounts = new Map<string, { value: string; count: number }>();
@@ -5041,6 +5045,13 @@ export class UserDbController {
       moduleCounts.set(moduleKey, {
         value: workflow.moduleLabel,
         count: (existingModule?.count || 0) + 1,
+      });
+
+      const subCategoryKey = workflow.subModuleLabel.toLowerCase();
+      const existingSubCategory = subCategoryCounts.get(subCategoryKey);
+      subCategoryCounts.set(subCategoryKey, {
+        value: workflow.subModuleLabel,
+        count: (existingSubCategory?.count || 0) + 1,
       });
 
       const existingChecker = checkerCounts.get(workflow.checkerCount);
@@ -5146,14 +5157,6 @@ export class UserDbController {
         ),
       }))
       .sort((left, right) => left.nodePath.localeCompare(right.nodePath));
-    const subCategory = Array.from(
-      new Set(
-        filteredWorkflows
-          .map((workflow) => workflow.subModuleLabel)
-          .filter((value): value is string => Boolean(value)),
-      ),
-    ).sort((a, b) => a.localeCompare(b));
-
     return {
       filter: true,
       workflowSubCategory: 'WORK_FLOW',
@@ -5163,7 +5166,9 @@ export class UserDbController {
       nodeType: Array.from(nodeTypeCounts.values()).sort((a, b) =>
         a.value.localeCompare(b.value),
       ),
-      subCategory,
+      subCategory: Array.from(subCategoryCounts.values()).sort((a, b) =>
+        a.value.localeCompare(b.value),
+      ),
       module: Array.from(moduleCounts.values()).sort((a, b) =>
         a.value.localeCompare(b.value),
       ),

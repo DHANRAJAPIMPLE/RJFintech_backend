@@ -107,7 +107,10 @@ export type FetchCompanyWorkflowFilterResponse = {
   workflowSubCategory?: 'WORK_FLOW';
   nodeName: UserCompanyNodeFilterNodeOption[];
   nodeType: UserCompanyNodeFilterNodeTypeOption[];
-  subCategory: string[];
+  subCategory: Array<{
+    value: string;
+    count: number;
+  }>;
   module?: Array<{
     value: string;
     count: number;
