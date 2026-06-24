@@ -6779,6 +6779,7 @@ export class UserDbController {
                   some: {
                     companyId: resolvedCompanyId,
                     nodeId: { in: allVisibleNodeIds },
+                    accessType: 'PRIMARY' as const,
                   },
                 },
               },
