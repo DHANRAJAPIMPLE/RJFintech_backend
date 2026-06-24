@@ -469,16 +469,16 @@ export class WorkflowDbController {
         ),
       checkerCounts: WorkflowDbController.normalizeAppliedNumberValues(
         source.checker ?? source.checkerCount ?? source.checkers,
-        { min: 1, max: 10 },
+        { min: 0, max: 10 },
       ),
       approverCounts: WorkflowDbController.normalizeAppliedNumberValues(
         source.approverCount ?? source.approverCounts,
-        { min: 1, max: 10 },
+        { min: 0, max: 10 },
       ),
       levels,
       workflowLevels: WorkflowDbController.normalizeAppliedNumberValues(
         source.workflowLevel ?? source.workflowLevels,
-        { min: 1, max: 10 },
+        { min: 0, max: 10 },
       ),
       approverType,
       hasLinkedOrg:
@@ -579,8 +579,21 @@ export class WorkflowDbController {
 
   private static countWorkflowCheckersFromLevels(levels: unknown) {
     return WorkflowDbController.workflowLevelsFromPayload(levels).reduce(
-      (total, level) =>
-        total + (level.approver2 && level.approverType === 'AND' ? 2 : 1),
+      (total, level) => {
+        if (!level.approver1 || level.approver1 === 'NO_APPROVER') {
+          return total;
+        }
+
+        return (
+          total +
+          1 +
+          (level.approver2 &&
+          level.approver2 !== 'NO_APPROVER' &&
+          level.approverType === 'AND'
+            ? 1
+            : 0)
+        );
+      },
       0,
     );
   }
@@ -596,6 +609,17 @@ export class WorkflowDbController {
   }
 
   private static resolveWorkflowCheckerCount(alias: unknown, levels?: unknown) {
+    if (levels !== undefined) {
+      const normalizedLevels = WorkflowDbController.workflowLevelsFromPayload(
+        levels,
+      );
+      if (normalizedLevels.length > 0) {
+        return WorkflowDbController.countWorkflowCheckersFromLevels(
+          normalizedLevels,
+        );
+      }
+    }
+
     const aliasCount = WorkflowDbController.extractCheckerCountFromAlias(alias);
     if (aliasCount !== null) return aliasCount;
     if (levels === undefined) return null;

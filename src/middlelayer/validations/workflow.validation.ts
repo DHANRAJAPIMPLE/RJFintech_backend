@@ -250,12 +250,12 @@ const workflowAppliedFilterSchema = z
     status: optionalStringArraySchema,
     currentStatus: optionalStringArraySchema,
     checker: optionalIntegerArraySchema({
-      min: 1,
+      min: 0,
       max: 10,
       field: 'Checker count',
     }),
     approverCount: optionalIntegerArraySchema({
-      min: 1,
+      min: 0,
       max: 10,
       field: 'Approver count',
     }),
@@ -263,21 +263,21 @@ const workflowAppliedFilterSchema = z
     workflowLevels: z
       .union([
         optionalIntegerArraySchema({
-          min: 1,
+          min: 0,
           max: 10,
           field: 'Workflow levels',
         }),
         z.coerce
           .number()
           .int('Workflow levels must be an integer')
-          .min(1, 'Workflow levels must be between 1 and 10')
-          .max(10, 'Workflow levels must be between 1 and 10')
+          .min(0, 'Workflow levels must be between 0 and 10')
+          .max(10, 'Workflow levels must be between 0 and 10')
           .nullable()
           .optional(),
       ])
       .optional(),
     workflowLevel: optionalIntegerArraySchema({
-      min: 1,
+      min: 0,
       max: 10,
       field: 'Workflow level',
     }),
