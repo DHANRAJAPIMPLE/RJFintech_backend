@@ -317,8 +317,8 @@ const workflowCompanyNodeAppliedSchema = z
                 count: z.coerce
                   .number()
                   .int('Level count must be an integer')
-                  .min(1, 'Level count must be between 1 and 5')
-                  .max(5, 'Level count must be between 1 and 5'),
+                  .min(0, 'Level count must be between 0 and 5')
+                  .max(5, 'Level count must be between 0 and 5'),
                 approverType: z.string().trim().min(1).optional(),
               })
               .strict(),

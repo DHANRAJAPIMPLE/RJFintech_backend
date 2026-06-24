@@ -430,7 +430,7 @@ export class WorkflowDbController {
               WorkflowDbController.normalizeApproverFilterValue(
                 level?.approverType,
               );
-            if (!Number.isInteger(count) || count < 1 || count > 5) {
+            if (!Number.isInteger(count) || count < 0 || count > 5) {
               return null;
             }
             if (!approverType) return null;
@@ -608,6 +608,28 @@ export class WorkflowDbController {
     );
   }
 
+  private static matchesWorkflowLevelFilter(
+    levels: any[],
+    filterLevel: NormalizedWorkflowLevelFilter,
+  ) {
+    if (
+      filterLevel.count === 0 &&
+      filterLevel.approverType === 'NO_APPROVER'
+    ) {
+      return (
+        levels.length === 0 ||
+        WorkflowDbController.countWorkflowApproversFromLevels(levels) === 0
+      );
+    }
+
+    return levels.some(
+      (level) =>
+        Number(level.level) === filterLevel.count &&
+        (level.approver1 === filterLevel.approverType ||
+          level.approver2 === filterLevel.approverType),
+    );
+  }
+
   private static resolveWorkflowCheckerCount(alias: unknown, levels?: unknown) {
     if (levels !== undefined) {
       const normalizedLevels = WorkflowDbController.workflowLevelsFromPayload(
@@ -672,12 +694,7 @@ export class WorkflowDbController {
     }
 
     return filters.levels.every((filterLevel) =>
-      levels.some(
-        (level) =>
-          Number(level.level) === filterLevel.count &&
-          (level.approver1 === filterLevel.approverType ||
-            level.approver2 === filterLevel.approverType),
-      ),
+      WorkflowDbController.matchesWorkflowLevelFilter(levels, filterLevel),
     );
   }
 
