@@ -64,6 +64,7 @@ type NormalizedWorkflowListAppliedFilters = {
   currentStatus: string[];
   workflowRequestType: Array<'INITIATE' | 'UPDATE'>;
   checkerCounts: number[];
+  approverCounts: number[];
   levels: NormalizedWorkflowLevelFilter[];
   workflowLevels: number[];
   approverType: string[];
@@ -470,6 +471,10 @@ export class WorkflowDbController {
         source.checker ?? source.checkerCount ?? source.checkers,
         { min: 1, max: 10 },
       ),
+      approverCounts: WorkflowDbController.normalizeAppliedNumberValues(
+        source.approverCount ?? source.approverCounts,
+        { min: 1, max: 10 },
+      ),
       levels,
       workflowLevels: WorkflowDbController.normalizeAppliedNumberValues(
         source.workflowLevel ?? source.workflowLevels,
@@ -498,6 +503,7 @@ export class WorkflowDbController {
       normalized.currentStatus.length > 0 ||
       normalized.workflowRequestType.length > 0 ||
       normalized.checkerCounts.length > 0 ||
+      normalized.approverCounts.length > 0 ||
       normalized.levels.length > 0 ||
       normalized.workflowLevels.length > 0 ||
       normalized.approverType.length > 0 ||
@@ -579,6 +585,16 @@ export class WorkflowDbController {
     );
   }
 
+  private static countWorkflowApproversFromLevels(levels: unknown) {
+    return WorkflowDbController.workflowLevelsFromPayload(levels).reduce(
+      (total, level) =>
+        total +
+        (level.approver1 && level.approver1 !== 'NO_APPROVER' ? 1 : 0) +
+        (level.approver2 && level.approver2 !== 'NO_APPROVER' ? 1 : 0),
+      0,
+    );
+  }
+
   private static resolveWorkflowCheckerCount(alias: unknown, levels?: unknown) {
     const aliasCount = WorkflowDbController.extractCheckerCountFromAlias(alias);
     if (aliasCount !== null) return aliasCount;
@@ -601,6 +617,14 @@ export class WorkflowDbController {
         checkerCount === null ||
         !filters.checkerCounts.includes(checkerCount)
       ) {
+        return false;
+      }
+    }
+
+    if (filters.approverCounts.length > 0) {
+      const approverCount =
+        WorkflowDbController.countWorkflowApproversFromLevels(levels);
+      if (!filters.approverCounts.includes(approverCount)) {
         return false;
       }
     }

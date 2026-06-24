@@ -254,6 +254,11 @@ const workflowAppliedFilterSchema = z
       max: 10,
       field: 'Checker count',
     }),
+    approverCount: optionalIntegerArraySchema({
+      min: 1,
+      max: 10,
+      field: 'Approver count',
+    }),
     levels: z.array(workflowLevelFilterSchema).nullable().optional(),
     workflowLevels: z
       .union([
