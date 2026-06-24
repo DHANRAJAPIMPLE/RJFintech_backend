@@ -247,6 +247,7 @@ const workflowAppliedFilterSchema = z
     workflowType: optionalStringArraySchema,
     module: optionalStringArraySchema,
     subModule: optionalStringArraySchema,
+    status: optionalStringArraySchema,
     currentStatus: optionalStringArraySchema,
     checker: optionalIntegerArraySchema({
       min: 1,

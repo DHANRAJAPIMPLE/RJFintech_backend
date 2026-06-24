@@ -328,7 +328,7 @@ export class WorkflowDbController {
     if (!source) return [];
 
     return WorkflowDbController.normalizeWorkflowStatusFilterValues(
-      source.currentStatus ?? source.status ?? source.statusType,
+      source.status ?? source.statusType ?? source.currentStatus,
     );
   }
 
