@@ -108,7 +108,7 @@ const optionalIntegerArraySchema = ({
           return item;
         });
       }
-      return value;
+      return [value];
     },
     z
       .array(
@@ -286,6 +286,16 @@ const workflowCompanyNodeAppliedSchema = z
       max: 10,
       field: 'Checker count',
     }),
+    approverCount: optionalIntegerArraySchema({
+      min: 0,
+      max: 10,
+      field: 'Approver count',
+    }),
+    approverCounts: optionalIntegerArraySchema({
+      min: 0,
+      max: 10,
+      field: 'Approver count',
+    }),
     workflowLevels: z
       .union([
         optionalIntegerArraySchema({
@@ -310,6 +320,13 @@ const workflowCompanyNodeAppliedSchema = z
     levels: z
       .union([
         optionalStringArraySchema,
+        z.coerce
+          .number()
+          .int('Level count must be an integer')
+          .min(0, 'Level count must be between 0 and 5')
+          .max(5, 'Level count must be between 0 and 5')
+          .nullable()
+          .optional(),
         z
           .array(
             z

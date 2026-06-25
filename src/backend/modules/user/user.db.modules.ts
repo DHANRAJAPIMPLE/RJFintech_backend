@@ -2397,11 +2397,19 @@ export class UserDbController {
         : null;
     const nodeValues =
       typeof source.nodeName === 'string' ? [source.nodeName] : nodeName?.values;
-    const rawLevels = Array.isArray(source.levels) ? source.levels : [];
+    const rawLevels = Array.isArray(source.levels)
+      ? source.levels
+      : source.levels === undefined || source.levels === null || source.levels === ''
+        ? []
+        : [source.levels];
     const normalizedLevels = rawLevels
       .flatMap((level) => {
         if (typeof level === 'string') {
           return [level];
+        }
+
+        if (Number.isInteger(Number(level))) {
+          return [`LEVEL${Number(level)}`];
         }
 
         if (
@@ -2427,7 +2435,11 @@ export class UserDbController {
         source.subCategory ?? source.subModule,
       ),
       checkerCounts: UserDbController.normalizeAppliedNumberValues(
-        source.checker ?? source.checkerCount ?? source.checkers,
+        source.checker ??
+          source.checkerCount ??
+          source.checkers ??
+          source.approverCount ??
+          source.approverCounts,
         { min: 0, max: 10 },
       ),
       workflowLevels: UserDbController.normalizeAppliedNumberValues(
