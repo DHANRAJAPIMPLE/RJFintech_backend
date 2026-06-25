@@ -4644,6 +4644,7 @@ export class UserDbController {
 
       const userCategoryKeys = new Set<string>();
       const userSubCategoryKeys = new Set<string>();
+      const userNodeTypeKeys = new Set<string>();
 
       for (const access of visibleAccesses) {
         const nodePath = UserDbController.normalizeFilterText(
@@ -4695,15 +4696,24 @@ export class UserDbController {
         const nodeTypeLabel = UserDbController.humanizeFilterLabel(nodeType);
         if (nodeTypeLabel) {
           const key = nodeTypeLabel.toLowerCase();
-          const current = nodeTypeCounts.get(key);
-          nodeTypeCounts.set(key, {
-            value: nodeTypeLabel,
-            count: (current?.count || 0) + 1,
-          });
+          userNodeTypeKeys.add(key);
+          if (!nodeTypeCounts.has(key)) {
+            nodeTypeCounts.set(key, {
+              value: nodeTypeLabel,
+              count: 0,
+            });
+          }
         }
 
         addNodeDropdownOption(nodePath, nodeName, nodeType);
       }
+
+      userNodeTypeKeys.forEach((nodeTypeKey) => {
+        const current = nodeTypeCounts.get(nodeTypeKey);
+        if (current) {
+          current.count += 1;
+        }
+      });
 
       userCategoryKeys.forEach((categoryKey) => {
         const current = categoryMap.get(categoryKey);
@@ -4769,6 +4779,7 @@ export class UserDbController {
       >();
       const pendingCategoryKeys = new Set<string>();
       const pendingSubCategoryKeys = new Set<string>();
+      const pendingNodeTypeKeys = new Set<string>();
 
       pendingAccesses.forEach((access: any) => {
         const categoryLabel = UserDbController.humanizeFilterLabel(
@@ -4810,11 +4821,13 @@ export class UserDbController {
 
         if (nodeTypeLabel) {
           const key = nodeTypeLabel.toLowerCase();
-          const current = nodeTypeCounts.get(key);
-          nodeTypeCounts.set(key, {
-            value: nodeTypeLabel,
-            count: (current?.count || 0) + 1,
-          });
+          pendingNodeTypeKeys.add(key);
+          if (!nodeTypeCounts.has(key)) {
+            nodeTypeCounts.set(key, {
+              value: nodeTypeLabel,
+              count: 0,
+            });
+          }
         }
 
         addNodeDropdownOption(
@@ -4850,6 +4863,13 @@ export class UserDbController {
 
       pendingPermissionBuckets.forEach((bucket) => {
         permissionSummarySets[bucket].add(pendingUser.id);
+      });
+
+      pendingNodeTypeKeys.forEach((nodeTypeKey) => {
+        const current = nodeTypeCounts.get(nodeTypeKey);
+        if (current) {
+          current.count += 1;
+        }
       });
 
       pendingCategoryKeys.forEach((categoryKey) => {
