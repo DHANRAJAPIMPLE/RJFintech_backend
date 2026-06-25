@@ -6424,6 +6424,11 @@ export class UserDbController {
                     roleName: true,
                     category: true,
                     subCategory: true,
+                    permissionLevel: true,
+                    view: true,
+                    modify: true,
+                    approve: true,
+                    initiate: true,
                   },
                 },
                 orgStructure: {
@@ -6487,6 +6492,40 @@ export class UserDbController {
     const hasActivePermissionNode = (permission: any) =>
       typeof permission?.nodePath !== 'string' ||
       activeIncomingNodePaths.has(permission.nodePath);
+    const incomingRoleNames = Array.from(
+      new Set(
+        pendingOnboardings
+          .flatMap((onb: any) => {
+            const permissions = (onb.data as any)?.permissions;
+            return Array.isArray(permissions)
+              ? permissions.map((permission: any) => permission?.roleName)
+              : [];
+          })
+          .filter(
+            (roleName: any): roleName is string =>
+              typeof roleName === 'string' && roleName.trim().length > 0,
+          ),
+      ),
+    );
+    const incomingRoles =
+      incomingRoleNames.length > 0
+        ? await prisma.roles.findMany({
+          where: { roleName: { in: incomingRoleNames } },
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+            permissionLevel: true,
+            view: true,
+            modify: true,
+            approve: true,
+            initiate: true,
+          },
+        })
+        : [];
+    const incomingRoleMap = new Map(
+      incomingRoles.map((role) => [role.roleName.toLowerCase(), role]),
+    );
     const pendingEmailFilters = pendingEmails.flatMap((email: string) => [
       {
         data: {
@@ -6568,6 +6607,10 @@ export class UserDbController {
             roleSubCategory: access.role?.subCategory || '',
             roleName: access.role?.roleName || access.roleCode,
             permissionLevel: access.role?.permissionLevel || '',
+            canView: access.role?.view || false,
+            canModify: access.role?.modify || false,
+            canApprove: access.role?.approve || false,
+            canInitiate: access.role?.initiate || false,
             nodeName: access.orgStructure?.nodeName || '',
             nodePath: access.orgStructure?.nodePath || '',
             nodeType: access.orgStructure?.nodeType || null,
@@ -6651,9 +6694,31 @@ export class UserDbController {
             const nodeFromDb = nodePathKey
               ? activeIncomingNodeMap.get(nodePathKey)
               : null;
+            const roleName =
+              typeof permission?.roleName === 'string'
+                ? permission.roleName.trim()
+                : '';
+            const roleFromDb = roleName
+              ? incomingRoleMap.get(roleName.toLowerCase())
+              : null;
 
             return {
               ...permission,
+              roleCategory:
+                permission?.roleCategory || roleFromDb?.category || '',
+              roleSubCategory:
+                permission?.roleSubCategory || roleFromDb?.subCategory || '',
+              roleName: permission?.roleName || roleFromDb?.roleName || '',
+              permissionLevel:
+                permission?.permissionLevel ||
+                roleFromDb?.permissionLevel ||
+                '',
+              canView: permission?.canView ?? roleFromDb?.view ?? false,
+              canModify: permission?.canModify ?? roleFromDb?.modify ?? false,
+              canApprove:
+                permission?.canApprove ?? roleFromDb?.approve ?? false,
+              canInitiate:
+                permission?.canInitiate ?? roleFromDb?.initiate ?? false,
               nodeName: nodeFromDb?.nodeName || permission?.nodeName || '',
               nodePath: nodeFromDb?.nodePath || permission?.nodePath || '',
               nodeType: nodeFromDb?.nodeType || permission?.nodeType || null,
@@ -6682,6 +6747,10 @@ export class UserDbController {
             roleSubCategory: p.roleSubCategory,
             roleName: p.roleName,
             permissionLevel: p.permissionLevel,
+            canView: p.canView,
+            canModify: p.canModify,
+            canApprove: p.canApprove,
+            canInitiate: p.canInitiate,
             nodeName: p.nodeName,
             nodePath: p.nodePath,
             ...(detail ? { nodeType: p.nodeType } : {}),
