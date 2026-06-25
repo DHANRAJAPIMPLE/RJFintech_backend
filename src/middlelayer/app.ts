@@ -13,7 +13,7 @@ import notificationRoutes from './routes/notification.routes';
 import preferenceRoutes from './routes/preference.routes';
 import { createErrorMiddleware } from '../shared/middlewares/error.middleware';
 import { traceMonitoringMiddleware } from './middlewares/traceMonitoring.middleware';
-const allowedOrigins = ['http://localhost:8080', 'http://192.168.1.6:8080'];
+const allowedOrigins = ['http://localhost:8080', 'http://192.168.1.6:8080','http://192.168.1.50:8080'];
 const app = express();
 
 app.use(

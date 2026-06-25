@@ -4417,8 +4417,11 @@ export class UserDbController {
     >();
     const nodeTypeCounts = new Map<string, CompanyNodeFilterNodeTypeOption>();
     const nodeNameMap = new Map<string, CompanyNodeFilterNodeOption>();
-    const categoryMap = new Map<string, string>();
-    const subCategoryMap = new Map<string, Set<string>>();
+    const categoryMap = new Map<string, { value: string; count: number }>();
+    const subCategoryMap = new Map<
+      string,
+      Map<string, { value: string; count: number }>
+    >();
     const reportingManagerMap = new Map<string, string>();
     const permissionSummarySets = {
       checker: new Set<string>(),
@@ -4652,14 +4655,27 @@ export class UserDbController {
         );
 
         if (categoryLabel) {
-          categoryMap.set(categoryLabel.toLowerCase(), categoryLabel);
+          const categoryKey = categoryLabel.toLowerCase();
+          const current = categoryMap.get(categoryKey);
+          categoryMap.set(categoryKey, {
+            value: categoryLabel,
+            count: (current?.count || 0) + 1,
+          });
         }
 
         if (categoryLabel && subCategoryLabel) {
           const categoryKey = categoryLabel.toLowerCase();
-          const current = subCategoryMap.get(categoryKey) || new Set<string>();
-          current.add(subCategoryLabel);
-          subCategoryMap.set(categoryKey, current);
+          const subCategoryKey = subCategoryLabel.toLowerCase();
+          const currentCategorySubCategories =
+            subCategoryMap.get(categoryKey) ||
+            new Map<string, { value: string; count: number }>();
+          const currentSubCategory =
+            currentCategorySubCategories.get(subCategoryKey);
+          currentCategorySubCategories.set(subCategoryKey, {
+            value: subCategoryLabel,
+            count: (currentSubCategory?.count || 0) + 1,
+          });
+          subCategoryMap.set(categoryKey, currentCategorySubCategories);
         }
 
         const nodeTypeLabel = UserDbController.humanizeFilterLabel(nodeType);
@@ -4729,14 +4745,27 @@ export class UserDbController {
         );
 
         if (categoryLabel) {
-          categoryMap.set(categoryLabel.toLowerCase(), categoryLabel);
+          const categoryKey = categoryLabel.toLowerCase();
+          const current = categoryMap.get(categoryKey);
+          categoryMap.set(categoryKey, {
+            value: categoryLabel,
+            count: (current?.count || 0) + 1,
+          });
         }
 
         if (categoryLabel && subCategoryLabel) {
           const categoryKey = categoryLabel.toLowerCase();
-          const current = subCategoryMap.get(categoryKey) || new Set<string>();
-          current.add(subCategoryLabel);
-          subCategoryMap.set(categoryKey, current);
+          const subCategoryKey = subCategoryLabel.toLowerCase();
+          const currentCategorySubCategories =
+            subCategoryMap.get(categoryKey) ||
+            new Map<string, { value: string; count: number }>();
+          const currentSubCategory =
+            currentCategorySubCategories.get(subCategoryKey);
+          currentCategorySubCategories.set(subCategoryKey, {
+            value: subCategoryLabel,
+            count: (currentSubCategory?.count || 0) + 1,
+          });
+          subCategoryMap.set(categoryKey, currentCategorySubCategories);
         }
 
         if (nodeTypeLabel) {
@@ -4802,17 +4831,23 @@ export class UserDbController {
     }));
 
     const category = Array.from(categoryMap.values()).sort((a, b) =>
-      a.localeCompare(b),
+      a.value.localeCompare(b.value),
     );
     const reportingManager = Array.from(reportingManagerMap.values()).sort(
       (a, b) => a.localeCompare(b),
     );
-    const subCategoryEntries: Array<[string, string[]]> = Array.from(
+    const subCategoryEntries: Array<
+      [string, Array<{ value: string; count: number }>]
+    > = Array.from(
       subCategoryMap.entries(),
-    ).map(([categoryKey, values]) => [
-      categoryMap.get(categoryKey) || categoryKey,
-      Array.from(values).sort((a, b) => a.localeCompare(b)),
-    ]);
+    ).map(([categoryKey, values]) => {
+      const categoryLabel = categoryMap.get(categoryKey)?.value || categoryKey;
+      const subCategories = Array.from(values.values()).sort((a, b) =>
+        a.value.localeCompare(b.value),
+      );
+
+      return [categoryLabel, subCategories];
+    });
     subCategoryEntries.sort((left, right) => left[0].localeCompare(right[0]));
     const subCategory = Object.fromEntries(subCategoryEntries);
     const userStatusSummary: CompanyNodeFilterUserStatusSummary = {
