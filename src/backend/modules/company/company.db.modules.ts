@@ -377,6 +377,9 @@ export class CompanyDbController {
         NotificationService.createRequestNotification({
           companyId,
           type: 'ONBOARDED',
+          referenceType: 'USER',
+          referenceId: user.userId,
+          referenceName: user.email || user.name || user.userId,
           createdBy: approverId,
           recipientUserIds,
           requiredRecipientUserIds: [approverId],

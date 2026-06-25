@@ -131,7 +131,7 @@ export const notificationSettingsUpdateSchema = z
             z
               .object({
                 nodePath: z.string().trim().min(1, 'Node path is required'),
-                module: z.enum(['USER', 'WORKFLOW', 'ORG']),
+                module: z.enum(['USER', 'WORKFLOW', 'ORG', 'COMPANY']),
                 isEnabled: z.boolean(),
                 remarks: z.string().trim().min(1).nullable().optional(),
               })

@@ -33,7 +33,7 @@ type LegacyNotificationType =
   | 'INACTIVE'
   | 'ARCHIVE';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
-type NotificationModule = 'USER' | 'WORKFLOW' | 'ORG';
+type NotificationModule = 'USER' | 'WORKFLOW' | 'ORG' | 'COMPANY';
 type NotificationVisibilityStatus = 'UNREAD' | 'READ' | 'ARCHIVED' | 'HIDDEN';
 type NotificationFetchDateRange =
   | 'ALL'
@@ -127,9 +127,14 @@ const PENDING_NOTIFICATION_TYPES: NotificationType[] = [
   'Pending Approval - INACTIVE',
   'Pending Approval - ARCHIVED',
 ];
-const NOTIFICATION_MODULES: NotificationModule[] = ['USER', 'WORKFLOW', 'ORG'];
+const NOTIFICATION_MODULES: NotificationModule[] = [
+  'USER',
+  'WORKFLOW',
+  'ORG',
+  'COMPANY',
+];
 const NOTIFICATION_MODULE_TO_SUBCATEGORY: Record<
-  NotificationModule,
+  Exclude<NotificationModule, 'COMPANY'>,
   'USER_ACC' | 'WORK_FLOW' | 'ORG_STR'
 > = {
   USER: 'USER_ACC',
@@ -457,12 +462,19 @@ export class NotificationService {
       });
 
       const data = onboarding?.data as any;
-      return (
+      const onboardingTarget =
         (typeof data?.targetUserEmail === 'string' && data.targetUserEmail.trim()) ||
         (typeof data?.basicDetails?.email === 'string' &&
           data.basicDetails.email.trim()) ||
-        null
-      );
+        null;
+      if (onboardingTarget) return onboardingTarget;
+
+      const user = await prisma.user.findUnique({
+        where: { id: referenceId },
+        select: { email: true },
+      });
+
+      return user?.email?.trim() || null;
     }
 
     if (referenceType === 'ORG') {
@@ -539,6 +551,24 @@ export class NotificationService {
           workflow.subModule,
         ]);
       }
+    }
+
+    if (referenceType === 'COMPANY') {
+      const onboarding = await prisma.companyOnboarding.findUnique({
+        where: { id: referenceId },
+        select: {
+          companyCode: true,
+          data: true,
+        },
+      });
+
+      const data = onboarding?.data as any;
+      return (
+        (typeof data?.company?.name === 'string' &&
+          data.company.name.trim()) ||
+        onboarding?.companyCode?.trim() ||
+        null
+      );
     }
 
     return null;
@@ -1189,6 +1219,7 @@ export class NotificationService {
     if (normalized === 'USER') return 'USER';
     if (normalized === 'WORKFLOW') return 'WORKFLOW';
     if (normalized === 'ORG') return 'ORG';
+    if (normalized === 'COMPANY') return 'COMPANY';
     return null;
   }
 
@@ -1651,6 +1682,22 @@ export class NotificationService {
       typeof input.referenceId === 'string' ? input.referenceId.trim() : '';
     if (!referenceId) {
       return { module, nodeIds: [] as string[] };
+    }
+
+    if (module === 'COMPANY') {
+      const nodes = await tx.orgStructure.findMany({
+        where: {
+          companyId: input.companyId,
+          status: 'ACTIVE',
+          OR: [{ nodeType: 'ROOT' }, { nodePath: { not: { contains: '.' } } }],
+        },
+        select: { id: true },
+      });
+
+      return {
+        module,
+        nodeIds: NotificationService.unique(nodes.map((node: any) => node.id)),
+      };
     }
 
     if (module === 'WORKFLOW') {

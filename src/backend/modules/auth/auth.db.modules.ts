@@ -47,6 +47,12 @@ export class AuthDbController {
               },
             },
           },
+          userAccesses: {
+            select: {
+              roleCode: true,
+              isGlobalAccess: true,
+            },
+          },
         },
       });
 

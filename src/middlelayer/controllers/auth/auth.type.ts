@@ -15,6 +15,7 @@ export type AuthUserProfile = {
   name: string;
   email: string;
   phone: string;
+  isGlobal: boolean;
   groups: AuthUserGroup[];
 };
 
@@ -126,6 +127,11 @@ export type AuthBackendManagedUser = {
   companyId: string;
 };
 
+export type AuthBackendUserAccess = {
+  roleCode: string | null;
+  isGlobalAccess: boolean;
+};
+
 export type AuthBackendUser = {
   id: string;
   name: string;
@@ -134,6 +140,7 @@ export type AuthBackendUser = {
   password?: string;
   managedUsers?: AuthBackendManagedUser[];
   userMappings: AuthBackendUserMapping[];
+  userAccesses?: AuthBackendUserAccess[];
 };
 
 export type AuthBackendLoginUser = AuthBackendUser & {

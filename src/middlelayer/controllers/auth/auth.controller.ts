@@ -41,6 +41,17 @@ import type {
 } from './auth.type';
 
 export class AuthController {
+  private static isGlobalUser(user: Pick<AuthBackendUser, 'userAccesses'>) {
+    return (
+      user.userAccesses?.some(
+        (access) =>
+          access.isGlobalAccess ||
+          access.roleCode === 'SAAS_ADMIN' ||
+          access.roleCode === 'CORP_ADMIN',
+      ) ?? false
+    );
+  }
+
   private static getReporteeCountByCompanyId(
     managedUsers: Array<{ companyId: string }> = [],
   ) {
@@ -238,6 +249,7 @@ export class AuthController {
           name: user.name,
           email: user.email,
           phone: user.phone,
+          isGlobal: AuthController.isGlobalUser(user),
           groups,
         },
       };
@@ -397,6 +409,7 @@ export class AuthController {
           name: user.name,
           email: user.email,
           phone: user.phone,
+          isGlobal: AuthController.isGlobalUser(user),
           groups,
         },
       };

@@ -120,7 +120,11 @@ export type NotificationSseEventPayloadMap = {
 
 export type NotificationSseEventName = keyof NotificationSseEventPayloadMap;
 
-export type NotificationSettingsModule = 'USER' | 'WORKFLOW' | 'ORG';
+export type NotificationSettingsModule =
+  | 'USER'
+  | 'WORKFLOW'
+  | 'ORG'
+  | 'COMPANY';
 
 export type FetchNotificationSettingsResponse = {
   success: true;
