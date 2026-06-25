@@ -5007,7 +5007,7 @@ export class UserDbController {
     const workflows = await prisma.workflow.findMany({
       where: {
         companyId,
-        status: { in: ['ACTIVE', 'INACTIVE', 'ARCHIVE'] },
+        status: { in: ['ACTIVE', 'INACTIVE'] },
         nodeId: { in: visibility.visibleNodeIds },
         orgStructure: {
           status: 'ACTIVE',
