@@ -2343,7 +2343,7 @@ export class UserDbController {
     if (!match) return null;
 
     const count = Number(match[1]);
-    return Number.isInteger(count) && count > 0 ? count : null;
+    return Number.isInteger(count) && count >= 0 ? count : null;
   }
 
   private static resolveWorkflowCheckerCount(
@@ -4930,14 +4930,23 @@ export class UserDbController {
         const hierarchyLevel = Math.max(nodeSegments.length, 1);
         const hierarchyLabel =
           hierarchyLevel <= 1 ? 'ROOT' : `LEVEL${hierarchyLevel - 1}`;
-        const levelNumbers = workflow.levels
-          .map((level) => Number(level.level))
-          .filter((level) => Number.isInteger(level) && level > 0);
         const checkerCount = UserDbController.resolveWorkflowCheckerCount(
           workflow.alias,
           workflow.levels,
         );
-        const levelCount = new Set(levelNumbers).size;
+        const hasApproverLevels = workflow.levels.some(
+          (level) =>
+            Boolean(level.approver1) && level.approver1 !== 'NO_APPROVER',
+        );
+        const levelNumbers = hasApproverLevels
+          ? workflow.levels
+              .map((level) => Number(level.level))
+              .filter((level) => Number.isInteger(level) && level > 0)
+          : [];
+        const levelCount = UserDbController.resolveWorkflowLevelCount(
+          workflow.alias,
+          levelNumbers,
+        );
 
         return {
           nodeId: workflow.orgStructure?.id || '',
@@ -4986,9 +4995,10 @@ export class UserDbController {
           UserDbController.extractWorkflowCheckerCountFromAlias(
             workflow.alias,
           ) || 0;
-        const levelCount =
-          UserDbController.extractWorkflowLevelCountFromAlias(workflow.alias) ||
-          0;
+        const levelCount = UserDbController.resolveWorkflowLevelCount(
+          workflow.alias,
+          [],
+        );
         const levelNumbers =
           levelCount > 0
             ? Array.from({ length: levelCount }, (_, index) => index + 1)
@@ -5194,6 +5204,24 @@ export class UserDbController {
         count: (existingStatus?.count || 0) + 1,
       });
     });
+
+    const zeroCheckerCount = checkerCounts.get(0)?.count || 0;
+    const oneChecker = checkerCounts.get(1);
+    if (zeroCheckerCount > 0 && oneChecker) {
+      checkerCounts.set(1, {
+        value: 1,
+        count: Math.max(oneChecker.count - zeroCheckerCount, 0),
+      });
+    }
+
+    const zeroWorkflowLevelCount = workflowLevelCounts.get(0)?.count || 0;
+    const oneWorkflowLevel = workflowLevelCounts.get(1);
+    if (zeroWorkflowLevelCount > 0 && oneWorkflowLevel) {
+      workflowLevelCounts.set(1, {
+        value: 1,
+        count: Math.max(oneWorkflowLevel.count - zeroWorkflowLevelCount, 0),
+      });
+    }
 
     const nodes = Array.from(
       filteredWorkflows.reduce(

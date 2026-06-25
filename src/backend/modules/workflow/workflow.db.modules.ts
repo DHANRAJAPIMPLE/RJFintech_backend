@@ -594,6 +594,39 @@ export class WorkflowDbController {
     return Number.isInteger(count) && count >= 0 ? count : null;
   }
 
+  private static extractWorkflowLevelCountFromAlias(alias: unknown) {
+    const normalized = WorkflowDbController.normalizeFilterText(alias);
+    if (!normalized) return null;
+
+    const match = normalized.match(/_(\d+)$/);
+    if (!match) return null;
+
+    const count = Number(match[1]);
+    return Number.isInteger(count) && count >= 0 ? count : null;
+  }
+
+  private static resolveWorkflowLevelCount(alias: unknown, levels: unknown) {
+    const normalizedLevels = WorkflowDbController.workflowLevelsFromPayload(
+      levels,
+    );
+    if (normalizedLevels.length > 0) {
+      const approverLevels = normalizedLevels
+        .filter(
+          (level) =>
+            Boolean(level.approver1) && level.approver1 !== 'NO_APPROVER',
+        )
+        .map((level) => Number(level.level))
+        .filter((level) => Number.isInteger(level) && level > 0);
+
+      return new Set(approverLevels).size;
+    }
+
+    const aliasCount = WorkflowDbController.extractWorkflowLevelCountFromAlias(
+      alias,
+    );
+    return aliasCount ?? 0;
+  }
+
   private static countWorkflowCheckersFromLevels(levels: unknown) {
     return WorkflowDbController.workflowLevelsFromPayload(levels).reduce(
       (total, level) => {
@@ -694,7 +727,9 @@ export class WorkflowDbController {
 
     if (
       filters.workflowLevels.length > 0 &&
-      !filters.workflowLevels.includes(levels.length)
+      !filters.workflowLevels.includes(
+        WorkflowDbController.resolveWorkflowLevelCount(alias, levels),
+      )
     ) {
       return false;
     }
