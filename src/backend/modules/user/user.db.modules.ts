@@ -4422,7 +4422,10 @@ export class UserDbController {
       string,
       Map<string, { value: string; count: number }>
     >();
-    const reportingManagerMap = new Map<string, string>();
+    const reportingManagerMap = new Map<
+      string,
+      { value: string; count: number }
+    >();
     const permissionSummarySets = {
       checker: new Set<string>(),
       maker: new Set<string>(),
@@ -4597,7 +4600,12 @@ export class UserDbController {
         UserDbController.normalizeFilterText(mapping?.manager?.name) ||
         UserDbController.normalizeFilterText(mapping?.manager?.email);
       if (managerName) {
-        reportingManagerMap.set(managerName.toLowerCase(), managerName);
+        const managerKey = managerName.toLowerCase();
+        const current = reportingManagerMap.get(managerKey);
+        reportingManagerMap.set(managerKey, {
+          value: managerName,
+          count: (current?.count || 0) + 1,
+        });
       }
 
       const visibleAccesses = visibility.isGlobal
@@ -4634,6 +4642,9 @@ export class UserDbController {
         permissionSummarySets[bucket].add(user.id);
       });
 
+      const userCategoryKeys = new Set<string>();
+      const userSubCategoryKeys = new Set<string>();
+
       for (const access of visibleAccesses) {
         const nodePath = UserDbController.normalizeFilterText(
           access.orgStructure?.nodePath,
@@ -4656,11 +4667,13 @@ export class UserDbController {
 
         if (categoryLabel) {
           const categoryKey = categoryLabel.toLowerCase();
-          const current = categoryMap.get(categoryKey);
-          categoryMap.set(categoryKey, {
-            value: categoryLabel,
-            count: (current?.count || 0) + 1,
-          });
+          userCategoryKeys.add(categoryKey);
+          if (!categoryMap.has(categoryKey)) {
+            categoryMap.set(categoryKey, {
+              value: categoryLabel,
+              count: 0,
+            });
+          }
         }
 
         if (categoryLabel && subCategoryLabel) {
@@ -4669,12 +4682,13 @@ export class UserDbController {
           const currentCategorySubCategories =
             subCategoryMap.get(categoryKey) ||
             new Map<string, { value: string; count: number }>();
-          const currentSubCategory =
-            currentCategorySubCategories.get(subCategoryKey);
-          currentCategorySubCategories.set(subCategoryKey, {
-            value: subCategoryLabel,
-            count: (currentSubCategory?.count || 0) + 1,
-          });
+          userSubCategoryKeys.add(`${categoryKey}|${subCategoryKey}`);
+          if (!currentCategorySubCategories.has(subCategoryKey)) {
+            currentCategorySubCategories.set(subCategoryKey, {
+              value: subCategoryLabel,
+              count: 0,
+            });
+          }
           subCategoryMap.set(categoryKey, currentCategorySubCategories);
         }
 
@@ -4690,6 +4704,22 @@ export class UserDbController {
 
         addNodeDropdownOption(nodePath, nodeName, nodeType);
       }
+
+      userCategoryKeys.forEach((categoryKey) => {
+        const current = categoryMap.get(categoryKey);
+        if (current) {
+          current.count += 1;
+        }
+      });
+
+      userSubCategoryKeys.forEach((combinedKey) => {
+        const [categoryKey, subCategoryKey] = combinedKey.split('|');
+        if (!categoryKey || !subCategoryKey) return;
+        const current = subCategoryMap.get(categoryKey)?.get(subCategoryKey);
+        if (current) {
+          current.count += 1;
+        }
+      });
     }
 
     filteredPendingEntries.forEach(({ pendingUser, onboarding }: any) => {
@@ -4719,7 +4749,12 @@ export class UserDbController {
           onboardingBasicDetails.reportingManager,
         );
       if (managerName) {
-        reportingManagerMap.set(managerName.toLowerCase(), managerName);
+        const managerKey = managerName.toLowerCase();
+        const current = reportingManagerMap.get(managerKey);
+        reportingManagerMap.set(managerKey, {
+          value: managerName,
+          count: (current?.count || 0) + 1,
+        });
       }
 
       const primary = Array.isArray(pendingUser?.primary)
@@ -4732,6 +4767,8 @@ export class UserDbController {
       const pendingPermissionBuckets = new Set<
         'checker' | 'maker' | 'viewer'
       >();
+      const pendingCategoryKeys = new Set<string>();
+      const pendingSubCategoryKeys = new Set<string>();
 
       pendingAccesses.forEach((access: any) => {
         const categoryLabel = UserDbController.humanizeFilterLabel(
@@ -4746,11 +4783,13 @@ export class UserDbController {
 
         if (categoryLabel) {
           const categoryKey = categoryLabel.toLowerCase();
-          const current = categoryMap.get(categoryKey);
-          categoryMap.set(categoryKey, {
-            value: categoryLabel,
-            count: (current?.count || 0) + 1,
-          });
+          pendingCategoryKeys.add(categoryKey);
+          if (!categoryMap.has(categoryKey)) {
+            categoryMap.set(categoryKey, {
+              value: categoryLabel,
+              count: 0,
+            });
+          }
         }
 
         if (categoryLabel && subCategoryLabel) {
@@ -4759,12 +4798,13 @@ export class UserDbController {
           const currentCategorySubCategories =
             subCategoryMap.get(categoryKey) ||
             new Map<string, { value: string; count: number }>();
-          const currentSubCategory =
-            currentCategorySubCategories.get(subCategoryKey);
-          currentCategorySubCategories.set(subCategoryKey, {
-            value: subCategoryLabel,
-            count: (currentSubCategory?.count || 0) + 1,
-          });
+          pendingSubCategoryKeys.add(`${categoryKey}|${subCategoryKey}`);
+          if (!currentCategorySubCategories.has(subCategoryKey)) {
+            currentCategorySubCategories.set(subCategoryKey, {
+              value: subCategoryLabel,
+              count: 0,
+            });
+          }
           subCategoryMap.set(categoryKey, currentCategorySubCategories);
         }
 
@@ -4811,6 +4851,22 @@ export class UserDbController {
       pendingPermissionBuckets.forEach((bucket) => {
         permissionSummarySets[bucket].add(pendingUser.id);
       });
+
+      pendingCategoryKeys.forEach((categoryKey) => {
+        const current = categoryMap.get(categoryKey);
+        if (current) {
+          current.count += 1;
+        }
+      });
+
+      pendingSubCategoryKeys.forEach((combinedKey) => {
+        const [categoryKey, subCategoryKey] = combinedKey.split('|');
+        if (!categoryKey || !subCategoryKey) return;
+        const current = subCategoryMap.get(categoryKey)?.get(subCategoryKey);
+        if (current) {
+          current.count += 1;
+        }
+      });
     });
 
     const nodeType = Array.from(nodeTypeCounts.values()).sort((a, b) =>
@@ -4834,7 +4890,7 @@ export class UserDbController {
       a.value.localeCompare(b.value),
     );
     const reportingManager = Array.from(reportingManagerMap.values()).sort(
-      (a, b) => a.localeCompare(b),
+      (a, b) => a.value.localeCompare(b.value),
     );
     const subCategoryEntries: Array<
       [string, Array<{ value: string; count: number }>]
