@@ -668,4 +668,5 @@ enum NotificationModule {
   USER
   WORKFLOW
   ORG
+  COMPANY
 }

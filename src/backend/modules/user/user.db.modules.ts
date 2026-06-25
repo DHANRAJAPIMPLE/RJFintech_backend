@@ -4426,6 +4426,30 @@ export class UserDbController {
       viewer: new Set<string>(),
       corpAdmin: new Set<string>(),
     };
+    const addNodeDropdownOption = (
+      nodePathValue: unknown,
+      nodeNameValue: unknown,
+      nodeTypeValue: unknown,
+    ) => {
+      const nodePath = UserDbController.normalizeFilterText(nodePathValue);
+      if (!nodePath) return;
+
+      const nodeName = UserDbController.normalizeFilterText(nodeNameValue);
+      const nodeType = UserDbController.normalizeFilterText(nodeTypeValue);
+      const level = Math.max(nodePath.split('.').filter(Boolean).length, 1);
+      const levelCount = level <= 1 ? 'root' : `level${level - 1}`;
+      const existingNode = nodeNameMap.get(nodePath.toLowerCase());
+
+      nodeNameMap.set(nodePath.toLowerCase(), {
+        value: nodeName || nodePath,
+        path: nodePath,
+        nodeType,
+        level,
+        levelCount,
+        count: (existingNode?.count || 0) + 1,
+        permissionCount: (existingNode?.permissionCount || 0) + 1,
+      });
+    };
     const allUserEntries = [
       ...activeUsers.map((user) => ({ user, defaultStatus: 'ACTIVE' as const })),
       ...inactiveUsers.map((user) => ({
@@ -4648,20 +4672,7 @@ export class UserDbController {
           });
         }
 
-        if (nodePath) {
-          const level = Math.max(nodePath.split('.').filter(Boolean).length, 1);
-          const levelCount = level <= 1 ? 'root' : `level${level - 1}`;
-          const existingNode = nodeNameMap.get(nodePath.toLowerCase());
-          nodeNameMap.set(nodePath.toLowerCase(), {
-            value: nodeName || nodePath,
-            path: nodePath,
-            nodeType,
-            level,
-            levelCount,
-            count: (existingNode?.count || 0) + 1,
-            permissionCount: (existingNode?.permissionCount || 0) + 1,
-          });
-        }
+        addNodeDropdownOption(nodePath, nodeName, nodeType);
       }
     }
 
@@ -4694,6 +4705,83 @@ export class UserDbController {
       if (managerName) {
         reportingManagerMap.set(managerName.toLowerCase(), managerName);
       }
+
+      const primary = Array.isArray(pendingUser?.primary)
+        ? pendingUser.primary
+        : [];
+      const secondary = Array.isArray(pendingUser?.secondary)
+        ? pendingUser.secondary
+        : [];
+      const pendingAccesses = [...primary, ...secondary];
+      const pendingPermissionBuckets = new Set<
+        'checker' | 'maker' | 'viewer'
+      >();
+
+      pendingAccesses.forEach((access: any) => {
+        const categoryLabel = UserDbController.humanizeFilterLabel(
+          access?.roleCategory,
+        );
+        const subCategoryLabel = UserDbController.humanizeFilterLabel(
+          access?.roleSubCategory,
+        );
+        const nodeTypeLabel = UserDbController.humanizeFilterLabel(
+          access?.nodeType,
+        );
+
+        if (categoryLabel) {
+          categoryMap.set(categoryLabel.toLowerCase(), categoryLabel);
+        }
+
+        if (categoryLabel && subCategoryLabel) {
+          const categoryKey = categoryLabel.toLowerCase();
+          const current = subCategoryMap.get(categoryKey) || new Set<string>();
+          current.add(subCategoryLabel);
+          subCategoryMap.set(categoryKey, current);
+        }
+
+        if (nodeTypeLabel) {
+          const key = nodeTypeLabel.toLowerCase();
+          const current = nodeTypeCounts.get(key);
+          nodeTypeCounts.set(key, {
+            value: nodeTypeLabel,
+            count: (current?.count || 0) + 1,
+          });
+        }
+
+        addNodeDropdownOption(
+          access?.nodePath,
+          access?.nodeName,
+          access?.nodeType,
+        );
+
+        const accessBucket = UserDbController.resolveAccessRoleBucket({
+          permissionLevel: access?.permissionLevel,
+          canView: access?.canView,
+          canModify: access?.canModify,
+          canApprove: access?.canApprove,
+          canInitiate: access?.canInitiate,
+        });
+
+        if (accessBucket === 'checker') {
+          pendingPermissionBuckets.add('checker');
+        } else if (accessBucket === 'maker') {
+          pendingPermissionBuckets.add('maker');
+        } else if (accessBucket === 'user') {
+          pendingPermissionBuckets.add('viewer');
+        }
+
+        if (
+          canViewCorpAdminUsers &&
+          UserDbController.normalizeFilterText(access?.roleName) ===
+          'Corp Admin'
+        ) {
+          permissionSummarySets.corpAdmin.add(pendingUser.id);
+        }
+      });
+
+      pendingPermissionBuckets.forEach((bucket) => {
+        permissionSummarySets[bucket].add(pendingUser.id);
+      });
     });
 
     const nodeType = Array.from(nodeTypeCounts.values()).sort((a, b) =>
