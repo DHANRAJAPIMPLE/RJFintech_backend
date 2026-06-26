@@ -8654,56 +8654,8 @@ export class UserDbController {
               row.approversList.includes(target.id),
           )
           .map((row) => row.reqId);
-        const userReqs = await prisma.userOnboarding.findMany({
-          where: { id: { in: blockingReqIds } },
-          select: {
-            id: true,
-            type: true,
-            data: true,
-            initiatorId: true,
-          },
-          take: 11,
-        });
-        const initiatorIds = Array.from(
-          new Set(
-            userReqs
-              .map((req) => req.initiatorId)
-              .filter((id): id is string => typeof id === 'string'),
-          ),
-        );
-        const initiators =
-          initiatorIds.length > 0
-            ? await prisma.user.findMany({
-              where: { id: { in: initiatorIds } },
-              select: { id: true, email: true },
-            })
-            : [];
-        const initiatorMap = new Map(
-          initiators.map((initiator) => [initiator.id, initiator.email]),
-        );
-        const lines = userReqs
-          .slice(0, 10)
-          .map((req) => {
-            const data = req.data as any;
-            const targetName =
-              data?.targetUserEmail ||
-              data?.target?.nodePath ||
-              data?.targetNodePath ||
-              data?.basicDetails?.email ||
-              'N/A';
-            const initiatorEmail = req.initiatorId
-              ? initiatorMap.get(req.initiatorId) || 'unknown'
-              : 'unknown';
-            return `- Request ID: #${req.id} | Type: ${req.type || 'N/A'} | Target: ${targetName} | Initiator: ${initiatorEmail}`;
-          })
-          .join('\n');
-        const remaining = Math.max(blockingReqIds.length - 10, 0);
-        const remainingLine =
-          remaining > 0
-            ? `\nand ${remaining} other pending workflow(s)...`
-            : '';
         throw new AppError(
-          `Cannot inactivate user '${current.user.email}' because they are currently assigned as an active/eligible approver for ${blockingReqIds.length} pending approval request(s). Please reassign the approval tasks or wait for them to finish before disabling this user:\n${lines}${remainingLine}`,
+          `Cannot inactivate user '${current.user.email}' because they are currently assigned as an active/eligible approver for ${blockingReqIds.length} pending approval request(s). Please reassign the approval tasks or wait for them to finish before disabling this user.`,
           400,
         );
       }

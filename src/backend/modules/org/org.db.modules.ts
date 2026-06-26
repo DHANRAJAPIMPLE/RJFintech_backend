@@ -709,17 +709,8 @@ export class OrgStructureDbController {
     }
 
     if (conflicts.length > 0) {
-      const top = conflicts
-        .slice(0, 10)
-        .map((conflict) => `- ${conflict}`)
-        .join('\n');
-      const remaining = Math.max(conflicts.length - 10, 0);
-      const remainingLine =
-        remaining > 0
-          ? `\nand ${remaining} other pending user request(s)...`
-          : '';
       throw new AppError(
-        `Cannot inactivate node '${params.nodeName || params.nodePath}' because it has ${conflicts.length} pending primary user assignment(s). Please approve, reject, or change these pending users before deactivating:\n${top}${remainingLine}`,
+        `Cannot inactivate node '${params.nodeName || params.nodePath}' because it has ${conflicts.length} pending primary user assignment(s). Please approve, reject, or change these pending users before deactivating.`,
         400,
       );
     }
@@ -3357,20 +3348,8 @@ export class OrgStructureDbController {
     });
 
     if (primaryAccesses.length > 0) {
-      const emails = primaryAccesses
-        .map((row: any) => row.user?.email)
-        .filter((email: string | null | undefined): email is string =>
-          Boolean(email),
-        );
-      const top = emails
-        .slice(0, 10)
-        .map((email: string) => `- ${email}`)
-        .join('\n');
-      const remaining = Math.max(emails.length - 10, 0);
-      const remainingLine =
-        remaining > 0 ? `\nand ${remaining} other user(s)...` : '';
       throw new AppError(
-        `Cannot inactivate node '${nodeName || nodePath}' because it (or its sub-departments) currently has ${primaryAccesses.length} active primary users. Please reassign the following users to a different primary node before deactivating:\n${top}${remainingLine}`,
+        `Cannot inactivate node '${nodeName || nodePath}' because it (or its sub-departments) currently has ${primaryAccesses.length} active primary user(s). Please reassign them to a different primary node before deactivating.`,
         400,
       );
     }
@@ -3399,12 +3378,8 @@ export class OrgStructureDbController {
           nodePath: { startsWith: `${nodePath}.` },
         },
       });
-      const names = children
-        .slice(0, 5)
-        .map((child: any) => child.nodeName)
-        .join(', ');
       throw new AppError(
-        `Cannot inactivate node '${nodeName || nodePath}' because it contains ${childCount} active sub-departments. You must first inactivate the following child nodes: ${names}.`,
+        `Cannot inactivate node '${nodeName || nodePath}' because it contains ${childCount} active sub-department(s). You must first inactivate the child nodes.`,
         400,
       );
     }

@@ -3522,47 +3522,14 @@ export class WorkflowDbController {
       }),
     ]);
 
-    const initiatorIds = Array.from(
-      new Set(
-        [...workflowRequests, ...userRequests, ...orgRequests]
-          .map((request: any) => request.initiatorId)
-          .filter((id: any): id is string => typeof id === 'string'),
-      ),
-    );
-    const workflowInitiators =
-      initiatorIds.length > 0
-        ? await client.user.findMany({
-            where: { id: { in: initiatorIds } },
-            select: { id: true, email: true },
-          })
-        : [];
-    const workflowInitiatorMap = new Map(
-      workflowInitiators.map((user: any) => [user.id, user.email]),
-    );
-    const normalizeWithInitiator = (request: any) => ({
-      ...request,
-      initiator: {
-        email: workflowInitiatorMap.get(request.initiatorId) || 'unknown',
-      },
-    });
     const combined = [
-      ...userRequests.map(normalizeWithInitiator),
-      ...orgRequests.map(normalizeWithInitiator),
-      ...workflowRequests.map(normalizeWithInitiator),
+      ...userRequests,
+      ...orgRequests,
+      ...workflowRequests,
     ];
     if (combined.length > 0) {
-      const lines = combined
-        .slice(0, 10)
-        .map(
-          (request: any) =>
-            `- Request ID: #${request.id} | Type: ${request.type || 'N/A'} | Initiator: ${request.initiator?.email || 'unknown'}`,
-        )
-        .join('\n');
-      const remaining = Math.max(combined.length - 10, 0);
-      const remainingLine =
-        remaining > 0 ? `\nand ${remaining} other request(s)...` : '';
       throw new AppError(
-        `Cannot inactivate or archive workflow '${workflowName || workflowId}' (Levels: ${alias || 'N/A'}) because it is currently protecting ${combined.length} pending approval request(s). Please process these pending requests or route them to a different workflow before changing its status:\n${lines}${remainingLine}`,
+        `Cannot inactivate or archive workflow '${workflowName || workflowId}' (Levels: ${alias || 'N/A'}) because it is currently protecting ${combined.length} pending approval request(s). Please process these pending requests or route them to a different workflow before changing its status.`,
         409,
       );
     }

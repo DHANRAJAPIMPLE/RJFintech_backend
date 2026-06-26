@@ -15,7 +15,6 @@ export type AuthUserProfile = {
   name: string;
   email: string;
   phone: string;
-  isGlobal: boolean;
   groups: AuthUserGroup[];
 };
 
