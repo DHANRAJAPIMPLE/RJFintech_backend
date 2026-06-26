@@ -18,9 +18,32 @@ const normalizedReferenceTypeSchema = z.preprocess(
       return undefined;
     }
 
-    return typeof value === 'string' ? value.trim().toUpperCase() : value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toUpperCase();
+      return normalized === 'ALL' ? undefined : normalized;
+    }
+
+    return value;
   },
   z.enum(['USER', 'ORG', 'WORKFLOW', 'COMPANY']).optional(),
+);
+
+const normalizedNotificationTypeFilterSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const normalizeItem = (item: unknown) =>
+      typeof item === 'string' ? item.trim().toUpperCase() : item;
+
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeItem(item)).filter(Boolean);
+    }
+
+    return normalizeItem(value);
+  },
+  z.union([z.string().min(1), z.array(z.string().min(1))]).optional(),
 );
 
 const normalizedDateRangeSchema = z.preprocess(
@@ -68,6 +91,17 @@ export const notificationFetchSchema = z
   .object({
     status: normalizedFetchStatusSchema,
     refType: normalizedReferenceTypeSchema,
+    module: normalizedReferenceTypeSchema,
+    type: normalizedNotificationTypeFilterSchema,
+    filters: z
+      .object({
+        status: normalizedFetchStatusSchema,
+        refType: normalizedReferenceTypeSchema,
+        module: normalizedReferenceTypeSchema,
+        type: normalizedNotificationTypeFilterSchema,
+      })
+      .strict()
+      .optional(),
     dateRange: normalizedDateRangeSchema,
     fromDate: normalizedDateStringSchema,
     toDate: normalizedDateStringSchema,

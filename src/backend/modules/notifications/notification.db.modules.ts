@@ -42,6 +42,12 @@ type NotificationFetchDateRange =
   | '1_MONTH'
   | 'CUSTOM';
 
+type NotificationFilterOption = {
+  label: string;
+  value: string;
+  count: number;
+};
+
 type CreateNotificationInput = {
   companyId: string;
   name?: string;
@@ -192,6 +198,41 @@ const normalizeDateValue = (value: unknown) => {
   if (typeof value !== 'string' && !(value instanceof Date)) return null;
   const parsed = value instanceof Date ? value : new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const normalizeNotificationFetchTypes = (value: unknown): NotificationType[] => {
+  const values =
+    typeof value === 'string'
+      ? value.includes(',')
+        ? value.split(',')
+        : [value]
+      : Array.isArray(value)
+        ? value
+        : [];
+
+  return Array.from(
+    new Set(
+      values
+        .flatMap((item) => {
+          const normalized =
+            typeof item === 'string' ? item.trim().toUpperCase() : '';
+          if (!normalized || normalized === 'ALL') return [];
+
+          if (normalized === 'INITIATE') return ['Pending Approval - INITIATE'];
+          if (normalized === 'MODIFICATION' || normalized === 'UPDATE') {
+            return ['Pending Approval - MODIFICATION'];
+          }
+          if (normalized === 'ACTIVE') return ['Pending Approval - ACTIVE'];
+          if (normalized === 'INACTIVE') return ['Pending Approval - INACTIVE'];
+          if (normalized === 'ARCHIVE') return ['Pending Approval - ARCHIVED'];
+
+          return [normalizeNotificationTypeValue(normalized, false)];
+        })
+        .filter((type): type is NotificationType =>
+          SUPPORTED_NOTIFICATION_TYPES.includes(type as NotificationType),
+        ),
+    ),
+  );
 };
 
 const normalizeCursorId = (value: unknown) => {
@@ -2326,11 +2367,101 @@ export class NotificationService {
     }
   }
 
+  private static formatFilterLabel(value: string) {
+    return value
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  private static addFilterOptionCount(
+    counts: Map<string, number>,
+    value?: string | null,
+  ) {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized) return;
+    counts.set(normalized, (counts.get(normalized) || 0) + 1);
+  }
+
+  private static toFilterOptions(counts: Map<string, number>) {
+    return Array.from(counts.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([value, count]) => ({
+        label: NotificationService.formatFilterLabel(value),
+        value,
+        count,
+      }));
+  }
+
+  private static async buildFetchFilters(params: {
+    userId: string;
+    companyId: string;
+    includeAllCompanies: boolean;
+    notificationWhere: any;
+  }): Promise<{
+    status: NotificationFilterOption[];
+    module: NotificationFilterOption[];
+    type: NotificationFilterOption[];
+  }> {
+    const rows = await prisma.notificationUser.findMany({
+      where: {
+        userId: params.userId,
+        ...(params.includeAllCompanies ? {} : { companyId: params.companyId }),
+        ...(Object.keys(params.notificationWhere).length
+          ? { notification: params.notificationWhere }
+          : {}),
+      },
+      select: {
+        status: true,
+        userId: true,
+        notification: {
+          select: {
+            companyId: true,
+            type: true,
+            referenceType: true,
+            referenceId: true,
+            isPending: true,
+          },
+        },
+      },
+    });
+
+    const statusCounts = new Map<string, number>();
+    const moduleCounts = new Map<string, number>();
+    const typeCounts = new Map<string, number>();
+
+    for (const row of rows) {
+      NotificationService.addFilterOptionCount(statusCounts, row.status);
+      NotificationService.addFilterOptionCount(
+        moduleCounts,
+        row.notification.referenceType,
+      );
+
+      const isPendingForViewer =
+        await NotificationService.resolveNotificationPendingState(
+          row.notification,
+          row.userId,
+        );
+      const viewerType = getViewerNotificationTypeValue(
+        row.notification.type,
+        isPendingForViewer,
+      );
+      NotificationService.addFilterOptionCount(typeCounts, viewerType);
+    }
+
+    return {
+      status: NotificationService.toFilterOptions(statusCounts),
+      module: NotificationService.toFilterOptions(moduleCounts),
+      type: NotificationService.toFilterOptions(typeCounts),
+    };
+  }
+
   static async fetchForUser(params: {
     userId: string;
     companyId: string;
     status?: string;
     refType?: string | null;
+    type?: string | string[] | null;
     dateRange?: string;
     fromDate?: string | Date;
     toDate?: string | Date;
@@ -2341,6 +2472,7 @@ export class NotificationService {
   }) {
     const status = normalizeFetchStatus(params.status);
     const referenceType = normalizeReferenceType(params.refType);
+    const notificationTypes = normalizeNotificationFetchTypes(params.type);
     const dateRange = normalizeDateRange(params.dateRange);
     const fromDate = normalizeDateValue(params.fromDate);
     const toDate = normalizeDateValue(params.toDate);
@@ -2354,6 +2486,10 @@ export class NotificationService {
 
     if (referenceType) {
       notificationWhere.referenceType = referenceType;
+    }
+
+    if (notificationTypes.length > 0) {
+      notificationWhere.type = { in: notificationTypes };
     }
 
     if (dateRange !== 'ALL') {
@@ -2415,6 +2551,13 @@ export class NotificationService {
       status: 'UNREAD',
     };
 
+    const filters = await NotificationService.buildFetchFilters({
+      userId: params.userId,
+      companyId: params.companyId,
+      includeAllCompanies,
+      notificationWhere,
+    });
+
     const [unreadCount, allCount, hiddenCount, currentStatusCount, cursorRow] =
       await Promise.all([
         prisma.notificationUser.count({ where: unreadWhere }),
@@ -2442,6 +2585,7 @@ export class NotificationService {
         cursorId,
         nextCursorId: null,
         hasNextPage: false,
+        filters,
       };
     }
 
@@ -2493,6 +2637,7 @@ export class NotificationService {
       cursorId,
       nextCursorId,
       hasNextPage,
+      filters,
     };
   }
 
@@ -2837,6 +2982,9 @@ export class NotificationDbController {
         companyId,
         status,
         refType,
+        module,
+        type,
+        filters,
         dateRange,
         fromDate,
         toDate,
@@ -2851,8 +2999,9 @@ export class NotificationDbController {
       const result = await NotificationService.fetchForUser({
         userId,
         companyId,
-        status,
-        refType,
+        status: filters?.status || status,
+        refType: filters?.module || filters?.refType || module || refType,
+        type: filters?.type || type,
         dateRange,
         fromDate,
         toDate,

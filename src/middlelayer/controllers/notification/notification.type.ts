@@ -40,6 +40,14 @@ export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'HIDDEN' | 'ALL';
 export type NotificationFetchRequest = {
   status?: NotificationFetchStatus;
   refType?: NotificationReferenceTypeFilter;
+  module?: NotificationReferenceTypeFilter;
+  type?: string | string[];
+  filters?: {
+    status?: NotificationFetchStatus;
+    refType?: NotificationReferenceTypeFilter;
+    module?: NotificationReferenceTypeFilter;
+    type?: string | string[];
+  };
   dateRange?: NotificationFetchDateRange;
   fromDate?: string;
   toDate?: string;
@@ -64,6 +72,12 @@ export type NotificationFetchItem = {
   createat_timestamp: string;
 };
 
+export type NotificationFilterOption = {
+  label: string;
+  value: string;
+  count: number;
+};
+
 export type FetchNotificationsResponse = {
   data: NotificationFetchItem[];
   count: number;
@@ -76,6 +90,11 @@ export type FetchNotificationsResponse = {
   cursorId: string | null;
   nextCursorId: string | null;
   hasNextPage: boolean;
+  filters: {
+    status: NotificationFilterOption[];
+    module: NotificationFilterOption[];
+    type: NotificationFilterOption[];
+  };
 };
 
 export type NotificationApiErrorResponse = {

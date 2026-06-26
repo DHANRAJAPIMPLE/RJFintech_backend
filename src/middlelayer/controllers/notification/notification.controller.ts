@@ -108,6 +108,9 @@ export class NotificationController {
       const {
         status: notificationStatus,
         refType,
+        module,
+        type,
+        filters,
         dateRange,
         fromDate,
         toDate,
@@ -121,8 +124,9 @@ export class NotificationController {
         await internalPost<FetchNotificationsInternalResponse>(
           `${config.backendUrl}/internal/notifications/fetch`,
           {
-            status: notificationStatus,
-            refType,
+            status: filters?.status || notificationStatus,
+            refType: filters?.module || filters?.refType || module || refType,
+            type: filters?.type || type,
             dateRange,
             fromDate,
             toDate,
