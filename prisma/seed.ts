@@ -312,7 +312,7 @@ for (const role of roles) {
   console.log('Roles seeded.');
  
   // ─── Shared password for ALL seeded users ───────────────────────────────────
-  const sharedPassword = await argon2.hash('Admin@123');
+  const sharedPassword = await argon2.hash('Welcome@123');
  
   // ─── 2. Seed Group & Company ─────────────────────────────────────────────────
   const group = await prisma.groupCompany.upsert({
