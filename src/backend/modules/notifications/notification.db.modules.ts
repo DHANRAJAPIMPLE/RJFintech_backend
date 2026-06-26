@@ -87,6 +87,7 @@ type NotificationAccessNode = {
   id: string;
   nodeName: string;
   nodePath: string;
+  nodeType: string;
   levelCount: number;
 };
 
@@ -1336,6 +1337,7 @@ export class NotificationService {
           id: true,
           nodeName: true,
           nodePath: true,
+          nodeType: true,
         },
         orderBy: { nodePath: 'asc' },
       });
@@ -1369,6 +1371,7 @@ export class NotificationService {
             id: true,
             nodeName: true,
             nodePath: true,
+            nodeType: true,
           },
         },
       },
@@ -1392,6 +1395,7 @@ export class NotificationService {
           id: true,
           nodeName: true,
           nodePath: true,
+          nodeType: true,
         },
         orderBy: { nodePath: 'asc' },
       });
@@ -1431,6 +1435,7 @@ export class NotificationService {
         id: node.id,
         nodeName: node.nodeName,
         nodePath: node.nodePath,
+        nodeType: String(node.nodeType),
         levelCount: getNodeLevelCount(node.nodePath),
         modules: new Set([module]),
       });
@@ -1446,6 +1451,7 @@ export class NotificationService {
           id: true,
           nodeName: true,
           nodePath: true,
+          nodeType: true,
         },
         orderBy: { nodePath: 'asc' },
       });
@@ -1461,6 +1467,7 @@ export class NotificationService {
           id: node.id,
           nodeName: node.nodeName,
           nodePath: node.nodePath,
+          nodeType: String(node.nodeType),
           levelCount: getNodeLevelCount(node.nodePath),
           modules: new Set(globalModules),
         });
@@ -1472,6 +1479,7 @@ export class NotificationService {
         id: node.id,
         nodeName: node.nodeName,
         nodePath: node.nodePath,
+        nodeType: node.nodeType,
         levelCount: node.levelCount,
         modules: Array.from(node.modules).sort((left, right) =>
           left.localeCompare(right),
@@ -2607,6 +2615,7 @@ export class NotificationService {
         nodes: visibleNodes.map((node) => ({
           nodePath: node.nodePath,
           nodeName: node.nodeName,
+          nodeType: node.nodeType,
           levelCount: node.levelCount,
           settings: node.modules.map((module) => {
             const row = settingsByKey.get(

@@ -134,6 +134,7 @@ export type FetchNotificationSettingsResponse = {
     nodes: Array<{
       nodePath: string;
       nodeName: string;
+      nodeType: string;
       levelCount: number;
       settings: Array<{
         module: NotificationSettingsModule;
