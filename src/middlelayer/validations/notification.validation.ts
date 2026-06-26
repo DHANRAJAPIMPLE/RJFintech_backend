@@ -7,15 +7,38 @@ const normalizedFetchStatusSchema = z.preprocess(
       return undefined;
     }
 
-    return typeof value === 'string' ? value.trim().toUpperCase() : value;
+    const normalizeItem = (item: unknown) =>
+      typeof item === 'string' ? item.trim().toUpperCase() : item;
+
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeItem(item)).filter(Boolean);
+    }
+
+    return normalizeItem(value);
   },
-  z.enum(['READ', 'UNREAD', 'HIDDEN', 'ALL']).optional().default('ALL'),
+  z
+    .union([
+      z.enum(['READ', 'UNREAD', 'HIDDEN', 'ALL']),
+      z.array(z.enum(['READ', 'UNREAD', 'HIDDEN', 'ALL'])),
+    ])
+    .optional()
+    .default('ALL'),
 );
 
 const normalizedReferenceTypeSchema = z.preprocess(
   (value) => {
     if (value === undefined || value === null || value === '') {
       return undefined;
+    }
+
+    const normalizeItem = (item: unknown) => {
+      if (typeof item !== 'string') return item;
+      const normalized = item.trim().toUpperCase();
+      return normalized === 'ALL' ? undefined : normalized;
+    };
+
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeItem(item)).filter(Boolean);
     }
 
     if (typeof value === 'string') {
@@ -25,7 +48,12 @@ const normalizedReferenceTypeSchema = z.preprocess(
 
     return value;
   },
-  z.enum(['USER', 'ORG', 'WORKFLOW', 'COMPANY']).optional(),
+  z
+    .union([
+      z.enum(['USER', 'ORG', 'WORKFLOW', 'COMPANY']),
+      z.array(z.enum(['USER', 'ORG', 'WORKFLOW', 'COMPANY'])),
+    ])
+    .optional(),
 );
 
 const normalizedNotificationTypeFilterSchema = z.preprocess(

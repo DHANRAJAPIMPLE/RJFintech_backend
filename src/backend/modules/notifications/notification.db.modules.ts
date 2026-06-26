@@ -161,6 +161,27 @@ const normalizeFetchStatus = (value: unknown) => {
   return ['READ', 'UNREAD', 'HIDDEN', 'ALL'].includes(status) ? status : 'ALL';
 };
 
+const normalizeFetchStatusValues = (value: unknown) => {
+  const values =
+    typeof value === 'string'
+      ? value.includes(',')
+        ? value.split(',')
+        : [value]
+      : Array.isArray(value)
+        ? value
+        : [];
+
+  const statuses = Array.from(
+    new Set(
+      values
+        .map((item) => (typeof item === 'string' ? item.trim().toUpperCase() : ''))
+        .filter((item) => ['READ', 'UNREAD', 'HIDDEN'].includes(item)),
+    ),
+  );
+
+  return statuses.length > 0 ? statuses : null;
+};
+
 const getNodeLevelCount = (nodePath: unknown) => {
   if (typeof nodePath !== 'string') return 1;
   const segments = nodePath
@@ -177,6 +198,25 @@ const normalizeReferenceType = (value: unknown) => {
   return SUPPORTED_REFERENCE_TYPES.includes(normalizedReferenceType)
     ? normalizedReferenceType
     : null;
+};
+
+const normalizeReferenceTypes = (value: unknown): NotificationReferenceType[] => {
+  const values =
+    typeof value === 'string'
+      ? value.includes(',')
+        ? value.split(',')
+        : [value]
+      : Array.isArray(value)
+        ? value
+        : [];
+
+  return Array.from(
+    new Set(
+      values
+        .map((item) => normalizeReferenceType(item))
+        .filter((item): item is NotificationReferenceType => Boolean(item)),
+    ),
+  );
 };
 
 const normalizeDateRange = (value: unknown): NotificationFetchDateRange => {
@@ -2459,8 +2499,8 @@ export class NotificationService {
   static async fetchForUser(params: {
     userId: string;
     companyId: string;
-    status?: string;
-    refType?: string | null;
+    status?: string | string[];
+    refType?: string | string[] | null;
     type?: string | string[] | null;
     dateRange?: string;
     fromDate?: string | Date;
@@ -2471,7 +2511,8 @@ export class NotificationService {
     includeAllCompanies?: boolean;
   }) {
     const status = normalizeFetchStatus(params.status);
-    const referenceType = normalizeReferenceType(params.refType);
+    const statusValues = normalizeFetchStatusValues(params.status);
+    const referenceTypes = normalizeReferenceTypes(params.refType);
     const notificationTypes = normalizeNotificationFetchTypes(params.type);
     const dateRange = normalizeDateRange(params.dateRange);
     const fromDate = normalizeDateValue(params.fromDate);
@@ -2484,8 +2525,8 @@ export class NotificationService {
       );
     const notificationWhere: any = {};
 
-    if (referenceType) {
-      notificationWhere.referenceType = referenceType;
+    if (referenceTypes.length > 0) {
+      notificationWhere.referenceType = { in: referenceTypes };
     }
 
     if (notificationTypes.length > 0) {
@@ -2540,11 +2581,13 @@ export class NotificationService {
     };
     const where: any = {
       ...scopedWhere,
-      ...(status === 'HIDDEN'
-        ? { status: 'HIDDEN' }
-        : status === 'ALL'
-          ? { status: { not: 'HIDDEN' } }
-          : { status }),
+      ...(statusValues
+        ? { status: { in: statusValues } }
+        : status === 'HIDDEN'
+          ? { status: 'HIDDEN' }
+          : status === 'ALL'
+            ? { status: { not: 'HIDDEN' } }
+            : { status }),
     };
     const unreadWhere: any = {
       ...visibleBaseWhere,

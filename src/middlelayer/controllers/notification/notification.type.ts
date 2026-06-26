@@ -24,7 +24,10 @@ export type NotificationActionType =
   | 'AUTO_DELETE';
 
 export type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
-export type NotificationReferenceTypeFilter = NotificationReferenceType | null;
+export type NotificationReferenceTypeFilter =
+  | NotificationReferenceType
+  | NotificationReferenceType[]
+  | null;
 
 export type NotificationFetchDateRange =
   | 'ALL'
@@ -35,15 +38,22 @@ export type NotificationFetchDateRange =
 
 export type NotificationUserStatus = 'READ' | 'UNREAD' | 'ARCHIVED' | 'HIDDEN';
 
-export type NotificationFetchStatus = 'READ' | 'UNREAD' | 'HIDDEN' | 'ALL';
+export type NotificationFetchStatus =
+  | 'READ'
+  | 'UNREAD'
+  | 'HIDDEN'
+  | 'ALL';
+export type NotificationFetchStatusFilter =
+  | NotificationFetchStatus
+  | NotificationFetchStatus[];
 
 export type NotificationFetchRequest = {
-  status?: NotificationFetchStatus;
+  status?: NotificationFetchStatusFilter;
   refType?: NotificationReferenceTypeFilter;
   module?: NotificationReferenceTypeFilter;
   type?: string | string[];
   filters?: {
-    status?: NotificationFetchStatus;
+    status?: NotificationFetchStatusFilter;
     refType?: NotificationReferenceTypeFilter;
     module?: NotificationReferenceTypeFilter;
     type?: string | string[];
