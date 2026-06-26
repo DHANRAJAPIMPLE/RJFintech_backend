@@ -2434,23 +2434,14 @@ export class NotificationService {
   }
 
   private static async buildFetchFilters(params: {
-    userId: string;
-    companyId: string;
-    includeAllCompanies: boolean;
-    notificationWhere: any;
+    where: any;
   }): Promise<{
     status: NotificationFilterOption[];
     module: NotificationFilterOption[];
     type: NotificationFilterOption[];
   }> {
     const rows = await prisma.notificationUser.findMany({
-      where: {
-        userId: params.userId,
-        ...(params.includeAllCompanies ? {} : { companyId: params.companyId }),
-        ...(Object.keys(params.notificationWhere).length
-          ? { notification: params.notificationWhere }
-          : {}),
-      },
+      where: params.where,
       select: {
         status: true,
         userId: true,
@@ -2594,11 +2585,10 @@ export class NotificationService {
       status: 'UNREAD',
     };
 
+    const filterWhere =
+      status === 'ALL' && !statusValues ? scopedWhere : where;
     const filters = await NotificationService.buildFetchFilters({
-      userId: params.userId,
-      companyId: params.companyId,
-      includeAllCompanies,
-      notificationWhere,
+      where: filterWhere,
     });
 
     const [unreadCount, allCount, hiddenCount, currentStatusCount, cursorRow] =
