@@ -99,6 +99,9 @@ model UserHistory {
   user        User      @relation("UserHistoryRel", fields: [eventUserId], references: [id])
 
   @@index([companyId])
+  @@index([companyId, email, createdAt])
+  @@index([reqId])
+  @@index([eventUserId])
   @@map("user_history")
 }
 
@@ -129,6 +132,8 @@ model UserMapping {
   user             User     @relation("UserMappings", fields: [userId], references: [id])
 
   @@unique([userId, companyId])
+  @@index([companyId, status])
+  @@index([reportingManager])
   @@map("user_mapping")
 }
 
@@ -185,6 +190,10 @@ model UserOnboarding {
 
   @@index([companyId])
   @@index([companyId, status])
+  @@index([companyId, status, createdAt, id])
+  @@index([companyId, createdAt, id])
+  @@index([workflowId])
+  @@index([initiatorId])
   @@map("user_onboarding")
 }
 
@@ -220,6 +229,8 @@ model Notification {
   notificationUsers NotificationUser[]
 
   @@index([companyId])
+  @@index([companyId, referenceType, referenceId, isPending])
+  @@index([companyId, type, referenceType, referenceId, createdBy, createdAt])
   @@map("notifications")
 }
 
@@ -242,6 +253,8 @@ model NotificationUser {
   @@index([notificationId])
   @@index([companyId, userId])
   @@index([companyId, userId, status])
+  @@index([userId, status, createdAt, id])
+  @@index([userId, companyId, status, createdAt, id])
   @@map("notification_users")
 }
 
@@ -396,6 +409,7 @@ model OrgStructure {
 
   @@index([companyId])
   @@index([companyId, parentId])
+  @@index([companyId, status, nodePath])
   @@map("org_structure")
 }
 
@@ -438,6 +452,9 @@ model UserAccess {
   @@index([companyId])
   @@index([userId])
   @@index([companyId, userId])
+  @@index([companyId, userId, isGlobalAccess])
+  @@index([companyId, roleCode])
+  @@index([companyId, nodeId])
   @@map("user_access")
 }
 
@@ -485,6 +502,8 @@ model WorkflowApprover {
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
   @@index([workflowId])
+  @@index([reqId, level])
+  @@index([reqTable, reqId, status])
   @@map("workflow_approver")
 }
 
@@ -527,6 +546,9 @@ model WorkflowReq {
 
   @@index([levelsHash, companyId])
   @@index([approvalWorkflowId])
+  @@index([companyId, status, createdAt, id])
+  @@index([companyId, nodeId, module, subModule, status])
+  @@index([companyId, levelsHash])
   @@map("workflow_req")
 }
 
