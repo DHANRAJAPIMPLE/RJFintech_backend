@@ -1021,31 +1021,21 @@ export class WorkflowDbController {
     const normalizedType = String(type || 'INITIATE').toUpperCase();
 
     if (normalizedStatus === 'REJECTED') {
-      if (normalizedType === 'UPDATE') return 'REJECTED-MODIFICATION' as const;
-      if (normalizedType === 'ACTIVE') return 'REJECTED-ACTIVE' as const;
-      if (normalizedType === 'INACTIVE') return 'REJECTED-INACTIVE' as const;
-      if (normalizedType === 'ARCHIVE') return 'REJECTED-ARCHIVED' as const;
-      return 'REJECTED-INITIATE' as const;
+      return 'REJECTED' as const;
     }
     if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVED' as const;
     if (normalizedStatus === 'APPROVED') {
-      if (normalizedType === 'UPDATE') return 'MODIFIED' as const;
+      if (normalizedType === 'UPDATE') return 'Modified' as const;
       if (normalizedType === 'ACTIVE') return 'ACTIVATED' as const;
-      if (normalizedType === 'INACTIVE') return 'INACTIVATED' as const;
+      if (normalizedType === 'INACTIVE') return 'INACTIVED' as const;
       if (normalizedType === 'ARCHIVE') return 'ARCHIVED' as const;
       return 'ONBOARDED' as const;
     }
 
-    if (normalizedType === 'UPDATE')
-      return 'Pending Approval - MODIFICATION' as const;
     if (normalizedType === 'ACTIVE')
-      return 'Pending Approval - ACTIVE' as const;
-    if (normalizedType === 'INACTIVE')
-      return 'Pending Approval - INACTIVE' as const;
-    if (normalizedType === 'ARCHIVE')
-      return 'Pending Approval - ARCHIVED' as const;
+      return 'PENDING APPROVAL - ACTIVATION' as const;
 
-    return 'Pending Approval - INITIATE' as const;
+    return 'PENDING APPROVAL' as const;
   }
 
   private static getWorkflowRequestDisplayName(request: any) {
@@ -5009,7 +4999,7 @@ export class WorkflowDbController {
         companyId: request.companyId,
         type: WorkflowDbController.getWorkflowNotificationType(
           workflowNotificationRequestType,
-          result?.status,
+          isPartialApproval ? 'PENDING' : result?.status,
         ),
         ...(workflowNotificationContent || {}),
         referenceType: 'WORKFLOW',

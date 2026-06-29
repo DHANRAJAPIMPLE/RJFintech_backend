@@ -6,22 +6,15 @@ import { HistoryUserUtil } from '../../utils/history-user.util';
 import { prisma } from '../../lib/prisma';
 
 type NotificationType =
-  | 'Pending Approval - INITIATE'
-  | 'Pending Approval - MODIFICATION'
-  | 'Pending Approval - ACTIVE'
-  | 'Pending Approval - INACTIVE'
-  | 'Pending Approval - ARCHIVED'
+  | 'PENDING APPROVAL'
+  | 'PENDING APPROVAL - ACTIVATION'
   | 'APPROVED'
   | 'ONBOARDED'
-  | 'MODIFIED'
+  | 'Modified'
   | 'ACTIVATED'
-  | 'INACTIVATED'
+  | 'INACTIVED'
   | 'ARCHIVED'
-  | 'REJECTED-INITIATE'
-  | 'REJECTED-MODIFICATION'
-  | 'REJECTED-ACTIVE'
-  | 'REJECTED-INACTIVE'
-  | 'REJECTED-ARCHIVED'
+  | 'REJECTED'
   | 'FAILED'
   | 'AUTO_DELETE';
 type LegacyNotificationType =
@@ -31,7 +24,19 @@ type LegacyNotificationType =
   | 'MODIFICATION'
   | 'ACTIVE'
   | 'INACTIVE'
-  | 'ARCHIVE';
+  | 'ARCHIVE'
+  | 'Pending Approval - INITIATE'
+  | 'Pending Approval - MODIFICATION'
+  | 'Pending Approval - ACTIVE'
+  | 'Pending Approval - INACTIVE'
+  | 'Pending Approval - ARCHIVED'
+  | 'MODIFIED'
+  | 'INACTIVATED'
+  | 'REJECTED-INITIATE'
+  | 'REJECTED-MODIFICATION'
+  | 'REJECTED-ACTIVE'
+  | 'REJECTED-INACTIVE'
+  | 'REJECTED-ARCHIVED';
 type NotificationReferenceType = 'USER' | 'ORG' | 'WORKFLOW' | 'COMPANY';
 type NotificationModule = 'USER' | 'WORKFLOW' | 'ORG' | 'COMPANY';
 type NotificationVisibilityStatus = 'UNREAD' | 'READ' | 'ARCHIVED' | 'HIDDEN';
@@ -102,24 +107,38 @@ type NotificationAccessScopeNode = NotificationAccessNode & {
 };
 
 const SUPPORTED_NOTIFICATION_TYPES: NotificationType[] = [
+  'PENDING APPROVAL',
+  'PENDING APPROVAL - ACTIVATION',
+  'APPROVED',
+  'ONBOARDED',
+  'Modified',
+  'ACTIVATED',
+  'INACTIVED',
+  'ARCHIVED',
+  'REJECTED',
+  'FAILED',
+  'AUTO_DELETE',
+];
+const SUPPORTED_LEGACY_NOTIFICATION_TYPES: LegacyNotificationType[] = [
+  'INITIATE',
+  'APPROVE',
+  'REJECT',
+  'MODIFICATION',
+  'ACTIVE',
+  'INACTIVE',
+  'ARCHIVE',
   'Pending Approval - INITIATE',
   'Pending Approval - MODIFICATION',
   'Pending Approval - ACTIVE',
   'Pending Approval - INACTIVE',
   'Pending Approval - ARCHIVED',
-  'APPROVED',
-  'ONBOARDED',
   'MODIFIED',
-  'ACTIVATED',
   'INACTIVATED',
-  'ARCHIVED',
   'REJECTED-INITIATE',
   'REJECTED-MODIFICATION',
   'REJECTED-ACTIVE',
   'REJECTED-INACTIVE',
   'REJECTED-ARCHIVED',
-  'FAILED',
-  'AUTO_DELETE',
 ];
 const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'USER',
@@ -128,11 +147,8 @@ const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'COMPANY',
 ];
 const PENDING_NOTIFICATION_TYPES: NotificationType[] = [
-  'Pending Approval - INITIATE',
-  'Pending Approval - MODIFICATION',
-  'Pending Approval - ACTIVE',
-  'Pending Approval - INACTIVE',
-  'Pending Approval - ARCHIVED',
+  'PENDING APPROVAL',
+  'PENDING APPROVAL - ACTIVATION',
 ];
 const NOTIFICATION_MODULES: NotificationModule[] = [
   'USER',
@@ -258,13 +274,18 @@ const normalizeNotificationFetchTypes = (value: unknown): NotificationType[] => 
             typeof item === 'string' ? item.trim().toUpperCase() : '';
           if (!normalized || normalized === 'ALL') return [];
 
-          if (normalized === 'INITIATE') return ['Pending Approval - INITIATE'];
-          if (normalized === 'MODIFICATION' || normalized === 'UPDATE') {
-            return ['Pending Approval - MODIFICATION'];
+          if (normalized === 'ACTIVE') {
+            return ['PENDING APPROVAL - ACTIVATION'];
           }
-          if (normalized === 'ACTIVE') return ['Pending Approval - ACTIVE'];
-          if (normalized === 'INACTIVE') return ['Pending Approval - INACTIVE'];
-          if (normalized === 'ARCHIVE') return ['Pending Approval - ARCHIVED'];
+          if (
+            normalized === 'INITIATE' ||
+            normalized === 'MODIFICATION' ||
+            normalized === 'UPDATE' ||
+            normalized === 'INACTIVE' ||
+            normalized === 'ARCHIVE'
+          ) {
+            return ['PENDING APPROVAL'];
+          }
 
           return [normalizeNotificationTypeValue(normalized, false)];
         })
@@ -303,13 +324,13 @@ const isUuidLike = (value: unknown) =>
   );
 
 const canonicalPendingTypeByRequestType: Record<string, NotificationType> = {
-  INITIATE: 'Pending Approval - INITIATE',
-  UPDATE: 'Pending Approval - MODIFICATION',
-  MODIFICATION: 'Pending Approval - MODIFICATION',
-  ACTIVE: 'Pending Approval - ACTIVE',
-  INACTIVE: 'Pending Approval - INACTIVE',
-  ARCHIVE: 'Pending Approval - ARCHIVED',
-  ARCHIVED: 'Pending Approval - ARCHIVED',
+  INITIATE: 'PENDING APPROVAL',
+  UPDATE: 'PENDING APPROVAL',
+  MODIFICATION: 'PENDING APPROVAL',
+  ACTIVE: 'PENDING APPROVAL - ACTIVATION',
+  INACTIVE: 'PENDING APPROVAL',
+  ARCHIVE: 'PENDING APPROVAL',
+  ARCHIVED: 'PENDING APPROVAL',
 };
 
 const normalizeNotificationTypeValue = (
@@ -319,10 +340,11 @@ const normalizeNotificationTypeValue = (
   const normalized = typeof type === 'string' ? type.trim().toUpperCase() : '';
 
   if (
+    normalized === 'PENDING APPROVAL' ||
     normalized === 'PENDING APPROVAL - INITIATE' ||
     normalized === 'PENDING_APPROVAL_INITIATE'
   ) {
-    return 'Pending Approval - INITIATE';
+    return 'PENDING APPROVAL';
   }
   if (
     normalized === 'PENDING APPROVAL - MODIFICATION' ||
@@ -330,19 +352,21 @@ const normalizeNotificationTypeValue = (
     normalized === 'PENDING_APPROVAL_MODIFICATION' ||
     normalized === 'PENDING_APPROVAL_UPDATE'
   ) {
-    return 'Pending Approval - MODIFICATION';
+    return 'PENDING APPROVAL';
   }
   if (
+    normalized === 'PENDING APPROVAL - ACTIVATION' ||
+    normalized === 'PENDING_APPROVAL_ACTIVATION' ||
     normalized === 'PENDING APPROVAL - ACTIVE' ||
     normalized === 'PENDING_APPROVAL_ACTIVE'
   ) {
-    return 'Pending Approval - ACTIVE';
+    return 'PENDING APPROVAL - ACTIVATION';
   }
   if (
     normalized === 'PENDING APPROVAL - INACTIVE' ||
     normalized === 'PENDING_APPROVAL_INACTIVE'
   ) {
-    return 'Pending Approval - INACTIVE';
+    return 'PENDING APPROVAL';
   }
   if (
     normalized === 'PENDING APPROVAL - ARCHIVE' ||
@@ -350,25 +374,28 @@ const normalizeNotificationTypeValue = (
     normalized === 'PENDING_APPROVAL_ARCHIVE' ||
     normalized === 'PENDING_APPROVAL_ARCHIVED'
   ) {
-    return 'Pending Approval - ARCHIVED';
+    return 'PENDING APPROVAL';
   }
 
   if (normalized === 'APPROVE' || normalized === 'APPROVED') {
     return 'APPROVED';
   }
   if (normalized === 'ONBOARDED') return 'ONBOARDED';
-  if (normalized === 'MODIFIED') return 'MODIFIED';
+  if (normalized === 'MODIFIED') return 'Modified';
   if (normalized === 'ACTIVATED') return 'ACTIVATED';
-  if (normalized === 'INACTIVATED') return 'INACTIVATED';
+  if (normalized === 'INACTIVED' || normalized === 'INACTIVATED') {
+    return 'INACTIVED';
+  }
   if (normalized === 'ARCHIVED') return 'ARCHIVED';
   if (normalized === 'FAILED') return 'FAILED';
   if (normalized === 'AUTO_DELETE') return 'AUTO_DELETE';
 
   if (
+    normalized === 'REJECTED' ||
     normalized === 'REJECTED-INITIATE' ||
     normalized === 'REJECTED_INITIATE'
   ) {
-    return 'REJECTED-INITIATE';
+    return 'REJECTED';
   }
   if (
     normalized === 'REJECTED-MODIFICATION' ||
@@ -376,16 +403,16 @@ const normalizeNotificationTypeValue = (
     normalized === 'REJECTED-UPDATE' ||
     normalized === 'REJECTED_UPDATE'
   ) {
-    return 'REJECTED-MODIFICATION';
+    return 'REJECTED';
   }
   if (normalized === 'REJECTED-ACTIVE' || normalized === 'REJECTED_ACTIVE') {
-    return 'REJECTED-ACTIVE';
+    return 'REJECTED';
   }
   if (
     normalized === 'REJECTED-INACTIVE' ||
     normalized === 'REJECTED_INACTIVE'
   ) {
-    return 'REJECTED-INACTIVE';
+    return 'REJECTED';
   }
   if (
     normalized === 'REJECTED-ARCHIVE' ||
@@ -393,11 +420,11 @@ const normalizeNotificationTypeValue = (
     normalized === 'REJECTED-ARCHIVED' ||
     normalized === 'REJECTED_ARCHIVED'
   ) {
-    return 'REJECTED-ARCHIVED';
+    return 'REJECTED';
   }
 
   if (normalized === 'REJECT' || normalized === 'REJECTED') {
-    return 'REJECTED-INITIATE';
+    return 'REJECTED';
   }
 
   if (isPending && canonicalPendingTypeByRequestType[normalized]) {
@@ -405,61 +432,32 @@ const normalizeNotificationTypeValue = (
   }
 
   if (normalized === 'MODIFICATION' || normalized === 'UPDATE') {
-    return 'MODIFIED';
+    return 'Modified';
   }
   if (normalized === 'ACTIVE') return 'ACTIVATED';
-  if (normalized === 'INACTIVE') return 'INACTIVATED';
+  if (normalized === 'INACTIVE') return 'INACTIVED';
   if (normalized === 'ARCHIVE') return 'ARCHIVED';
 
   return 'ONBOARDED';
 };
 
-const getViewerNotificationTypeValue = (
+const getStoredNotificationTypeValue = (
   type: unknown,
-  isPendingForViewer: boolean,
+  isPending: boolean,
 ): NotificationType | LegacyNotificationType => {
-  const normalized = typeof type === 'string' ? type.trim().toUpperCase() : '';
-
-  if (isPendingForViewer) {
-    return normalizeNotificationTypeValue(type, true);
-  }
-
-  if (
-    normalized === 'PENDING APPROVAL - INITIATE' ||
-    normalized === 'PENDING_APPROVAL_INITIATE'
-  ) {
-    return 'INITIATE';
+  const value = typeof type === 'string' ? type.trim() : '';
+  if (SUPPORTED_NOTIFICATION_TYPES.includes(value as NotificationType)) {
+    return value as NotificationType;
   }
   if (
-    normalized === 'PENDING APPROVAL - MODIFICATION' ||
-    normalized === 'PENDING APPROVAL - UPDATE' ||
-    normalized === 'PENDING_APPROVAL_MODIFICATION' ||
-    normalized === 'PENDING_APPROVAL_UPDATE'
+    SUPPORTED_LEGACY_NOTIFICATION_TYPES.includes(
+      value as LegacyNotificationType,
+    )
   ) {
-    return 'MODIFICATION';
-  }
-  if (
-    normalized === 'PENDING APPROVAL - ACTIVE' ||
-    normalized === 'PENDING_APPROVAL_ACTIVE'
-  ) {
-    return 'ACTIVE';
-  }
-  if (
-    normalized === 'PENDING APPROVAL - INACTIVE' ||
-    normalized === 'PENDING_APPROVAL_INACTIVE'
-  ) {
-    return 'INACTIVE';
-  }
-  if (
-    normalized === 'PENDING APPROVAL - ARCHIVE' ||
-    normalized === 'PENDING APPROVAL - ARCHIVED' ||
-    normalized === 'PENDING_APPROVAL_ARCHIVE' ||
-    normalized === 'PENDING_APPROVAL_ARCHIVED'
-  ) {
-    return 'ARCHIVE';
+    return value as LegacyNotificationType;
   }
 
-  return normalizeNotificationTypeValue(type, false);
+  return normalizeNotificationTypeValue(type, isPending);
 };
 
 export class NotificationService {
@@ -770,16 +768,6 @@ export class NotificationService {
         updatedAt: params.now,
       },
     });
-
-    await tx.notification.updateMany({
-      where: {
-        id: { in: pendingNotificationIds },
-      },
-      data: {
-        isPending: false,
-        updatedAt: params.now,
-      },
-    });
   }
 
   private static async formatNotification(
@@ -796,9 +784,9 @@ export class NotificationService {
         row.notification,
         row.userId,
       );
-    const normalizedType = getViewerNotificationTypeValue(
+    const normalizedType = getStoredNotificationTypeValue(
       row.notification.type,
-      resolvedPendingState,
+      row.notification.isPending === true,
     );
     const viewerUserId =
       typeof row.userId === 'string' ? row.userId.trim() : '';
@@ -865,18 +853,21 @@ export class NotificationService {
       case 'REJECTED-MODIFICATION':
       case 'MODIFIED':
         return `${entity} modification`;
-      case 'PENDING APPROVAL - ACTIVE':
+      case 'PENDING APPROVAL - ACTIVATION':
       case 'REJECTED-ACTIVE':
       case 'ACTIVATED':
         return `${entity} activation`;
       case 'PENDING APPROVAL - INACTIVE':
       case 'REJECTED-INACTIVE':
+      case 'INACTIVED':
       case 'INACTIVATED':
         return `${entity} inactivation`;
       case 'PENDING APPROVAL - ARCHIVED':
       case 'REJECTED-ARCHIVED':
       case 'ARCHIVED':
         return `${entity} archive`;
+      case 'REJECTED':
+        return `${entity} request`;
       default:
         return `${entity} onboarding`;
     }
@@ -914,6 +905,31 @@ export class NotificationService {
 
     const content = (() => {
       switch (`${input.referenceType}:${normalizedType}`) {
+      case 'USER:PENDING APPROVAL':
+        return {
+          name: 'User approval pending',
+          message: `User request is pending approval for ${userName}`,
+        };
+      case 'USER:PENDING APPROVAL - ACTIVATION':
+        return {
+          name: 'User activation pending',
+          message: `User activation request is pending approval for ${userName}`,
+        };
+      case 'USER:Modified':
+        return {
+          name: 'User modified',
+          message: `User details were modified for ${userName}`,
+        };
+      case 'USER:INACTIVED':
+        return {
+          name: 'User inactivated',
+          message: `${userName} was inactivated`,
+        };
+      case 'USER:REJECTED':
+        return {
+          name: 'User request rejected',
+          message: `User request was rejected for ${userName}`,
+        };
       case 'USER:Pending Approval - INITIATE':
         return {
           name: 'User onboarding initiated',
@@ -1003,6 +1019,31 @@ export class NotificationService {
         return {
           name: 'Organization onboarding initiated',
           message: `Organization onboarding request initiated for ${orgName}`,
+        };
+      case 'ORG:PENDING APPROVAL':
+        return {
+          name: 'Organization approval pending',
+          message: `Organization request is pending approval for ${orgName}`,
+        };
+      case 'ORG:PENDING APPROVAL - ACTIVATION':
+        return {
+          name: 'Organization activation pending',
+          message: `Organization activation request is pending approval for ${orgName}`,
+        };
+      case 'ORG:Modified':
+        return {
+          name: 'Organization modified',
+          message: `Organization was modified for ${orgName}`,
+        };
+      case 'ORG:INACTIVED':
+        return {
+          name: 'Organization inactivated',
+          message: `Organization was inactivated for ${orgName}`,
+        };
+      case 'ORG:REJECTED':
+        return {
+          name: 'Organization request rejected',
+          message: `Organization request was rejected for ${orgName}`,
         };
       case 'ORG:APPROVED':
         return {
@@ -1094,6 +1135,31 @@ export class NotificationService {
           name: 'Workflow onboarding initiated',
           message: `Workflow onboarding request initiated for ${workflowName}`,
         };
+      case 'WORKFLOW:PENDING APPROVAL':
+        return {
+          name: 'Workflow approval pending',
+          message: `Workflow request is pending approval for ${workflowName}`,
+        };
+      case 'WORKFLOW:PENDING APPROVAL - ACTIVATION':
+        return {
+          name: 'Workflow activation pending',
+          message: `Workflow activation request is pending approval for ${workflowName}`,
+        };
+      case 'WORKFLOW:Modified':
+        return {
+          name: 'Workflow modified',
+          message: `Workflow was modified for ${workflowName}`,
+        };
+      case 'WORKFLOW:INACTIVED':
+        return {
+          name: 'Workflow inactivated',
+          message: `Workflow was inactivated for ${workflowName}`,
+        };
+      case 'WORKFLOW:REJECTED':
+        return {
+          name: 'Workflow request rejected',
+          message: `Workflow request was rejected for ${workflowName}`,
+        };
       case 'WORKFLOW:APPROVED':
         return {
           name: 'Workflow request approved',
@@ -1183,6 +1249,21 @@ export class NotificationService {
         return {
           name: 'Company onboarding initiated',
           message: `Company onboarding request initiated for ${companyName}`,
+        };
+      case 'COMPANY:PENDING APPROVAL':
+        return {
+          name: 'Company approval pending',
+          message: `Company request is pending approval for ${companyName}`,
+        };
+      case 'COMPANY:PENDING APPROVAL - ACTIVATION':
+        return {
+          name: 'Company activation pending',
+          message: `Company activation request is pending approval for ${companyName}`,
+        };
+      case 'COMPANY:REJECTED':
+        return {
+          name: 'Company onboarding rejected',
+          message: `Company request was rejected for ${companyName}`,
         };
       case 'COMPANY:APPROVED':
         return {
@@ -2468,16 +2549,11 @@ export class NotificationService {
         row.notification.referenceType,
       );
 
-      const isPendingForViewer =
-        await NotificationService.resolveNotificationPendingState(
-          row.notification,
-          row.userId,
-        );
-      const viewerType = getViewerNotificationTypeValue(
+      const storedType = getStoredNotificationTypeValue(
         row.notification.type,
-        isPendingForViewer,
+        row.notification.isPending === true,
       );
-      NotificationService.addFilterOptionCount(typeCounts, viewerType);
+      NotificationService.addFilterOptionCount(typeCounts, storedType);
     }
 
     return {
