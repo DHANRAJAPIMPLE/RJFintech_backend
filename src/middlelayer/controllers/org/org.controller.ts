@@ -151,9 +151,22 @@ export class OrgController {
       nodeName: node.nodeName,
       nodeType: node.nodeType,
       nodePath: node.nodePath,
+      levelCount:
+        typeof node.levelCount === 'number'
+          ? node.levelCount
+          : OrgController.getNodeLevelCount(node.nodePath),
       isPending: node.isPending ?? false,
       status: node.status ?? 'ACTIVE',
     };
+  }
+
+  private static getNodeLevelCount(nodePath: string | null | undefined) {
+    const segments = String(nodePath || '')
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    return Math.max(segments.length, 1);
   }
 
   private static formatHistoryItem(
@@ -581,6 +594,19 @@ export class OrgController {
       const formattedPending: OrgPendingItem[] = orgData.data.pending.map(
         (req: OrgPendingInternalItem) => {
           const reqData = req.data || {};
+          const pendingNodePath =
+            typeof reqData.nodePath === 'string' && reqData.nodePath.trim()
+              ? reqData.nodePath.trim()
+              : typeof reqData.targetNodePath === 'string' &&
+                  reqData.targetNodePath.trim()
+                ? reqData.targetNodePath.trim()
+                : reqData.parentNode?.nodePath && reqData.newNodeName
+                  ? `${reqData.parentNode.nodePath}.${String(reqData.newNodeName)
+                      .trim()
+                      .replace(/[^a-zA-Z0-9_]/g, '_')
+                      .toUpperCase()}`
+                  : null;
+
           return {
             id: req.id,
             type: req.type,
@@ -591,6 +617,12 @@ export class OrgController {
             ),
             newNodeName: reqData.newNodeName ?? reqData.targetNodePath ?? '',
             nodeType: reqData.nodeType ?? null,
+            levelCount:
+              typeof req.levelCount === 'number'
+                ? req.levelCount
+                : typeof reqData.levelCount === 'number'
+                  ? reqData.levelCount
+                  : OrgController.getNodeLevelCount(pendingNodePath),
             status: reqData.status ?? null,
             parentNode: {
               nodeName: reqData.parentNode?.nodeName ?? '',

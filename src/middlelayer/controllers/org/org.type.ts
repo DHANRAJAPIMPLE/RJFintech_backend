@@ -28,6 +28,7 @@ export type OrgActiveNode = {
   nodeName: string;
   nodeType: OrgNodeType | null;
   nodePath: string;
+  levelCount: number;
   isPending: boolean;
   status?: OrgNodeStatus;
   isAutoDeleted?: boolean;
@@ -50,6 +51,7 @@ export type OrgPendingRequestData = {
   nodeType: OrgNodeType;
   parentNode: OrgParentNode;
   nodePath?: string;
+  levelCount?: number;
   status?: OrgNodeStatus;
   [key: string]: unknown;
 };
@@ -65,6 +67,7 @@ export type OrgPendingInternalItem = {
   impact?: string | null;
   oldData?: unknown | null;
   newData?: unknown | null;
+  levelCount?: number;
   data: OrgPendingRequestData;
   createdAt: string;
   initiator?: OrgPendingInitiator | null;
@@ -81,6 +84,7 @@ export type OrgPendingItem = {
   newData?: unknown | null;
   newNodeName: string;
   nodeType: OrgNodeType;
+  levelCount: number;
   status?: OrgNodeStatus | null;
   parentNode: OrgParentNode;
   initiatorName: string | null;

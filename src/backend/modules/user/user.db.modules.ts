@@ -6784,8 +6784,20 @@ export class UserDbController {
               permissions: cloneJson(currentInitiatePermissions),
             }
             : resolvedSnapshot.newData;
+        const archiveDisplayPermissions =
+          type === 'ARCHIVE'
+            ? existingActivePermissions.length > 0
+              ? existingActivePermissions
+              : Array.isArray(resolvedOldData?.permissions)
+                ? resolvedOldData.permissions
+                : []
+            : null;
         const effectivePermissions =
-          detail && resolvedNewData?.permissions
+          archiveDisplayPermissions && archiveDisplayPermissions.length > 0
+            ? archiveDisplayPermissions
+            : detail &&
+                type !== 'ARCHIVE' &&
+                Array.isArray(resolvedNewData?.permissions)
             ? resolvedNewData.permissions
             : currentInitiatePermissions.length > 0
               ? isInitiate || existingPermissions.length === 0

@@ -131,6 +131,7 @@ type OrgLinkedStructureNode = {
   nodePath: string;
   nodeName: string;
   nodeType: string;
+  levelCount: number;
   status: OrgNodeStatus;
   isPending: boolean;
   isAutoDeleted: boolean;
@@ -142,6 +143,15 @@ type OrgLinkedStructureNode = {
  * Handles the creation, approval, and retrieval of organization units (Roots, Groups, Locations, etc.)
  */
 export class OrgStructureDbController {
+  private static getNodeLevelCount(nodePath: string | null | undefined) {
+    const segments = String(nodePath || '')
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    return Math.max(segments.length, 1);
+  }
+
   private static getOrgHistoryDisplayEvent(
     event: string | null | undefined,
     requestType: string | null | undefined,
@@ -1073,6 +1083,7 @@ export class OrgStructureDbController {
         nodePath: node.nodePath,
         nodeName: node.nodeName,
         nodeType: node.nodeType,
+        levelCount: OrgStructureDbController.getNodeLevelCount(node.nodePath),
         status: node.status,
         isPending: pendingNodePaths?.has(node.nodePath) ?? false,
         isAutoDeleted: node.status !== 'ACTIVE',
@@ -6278,6 +6289,8 @@ export class OrgStructureDbController {
 
           const { orgHistories, ...rest } = req;
           const reqData = req.data as any;
+          const requestedNodePath =
+            OrgStructureDbController.resolveRequestedNodePath(reqData);
           const newData = {
             ...(reqData || {}),
             impactSummary: resolvedImpactSummary,
@@ -6287,6 +6300,12 @@ export class OrgStructureDbController {
             ...rest,
             oldData: req.oldData || (reqData?.oldData ?? null),
             newData,
+            levelCount:
+              typeof reqData?.levelCount === 'number'
+                ? reqData.levelCount
+                : OrgStructureDbController.getNodeLevelCount(
+                    requestedNodePath,
+                  ),
             initiator,
             workflowName: w?.name || 'N/A',
             alias: w?.alias || 'N/A',
@@ -6338,6 +6357,7 @@ export class OrgStructureDbController {
         nodeName: node.nodeName,
         nodeType: node.nodeType,
         nodePath: node.nodePath,
+        levelCount: OrgStructureDbController.getNodeLevelCount(node.nodePath),
         status: node.status,
         isPending: pendingByNodePath.has(node.nodePath),
         isAutoDeleted: node.status !== 'ACTIVE',
