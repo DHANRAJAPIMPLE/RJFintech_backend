@@ -1134,6 +1134,13 @@ export class UserDbController {
           : typeof request.operation === 'string'
             ? request.operation.toUpperCase()
             : null;
+      if (
+        operation === 'REMOVE' &&
+        permission.sourceTag === 'AUTO_GENERATED'
+      ) {
+        continue;
+      }
+
       const exactIndex = proposed.findIndex((stored) =>
         UserDbController.permissionsEqual(stored, permission),
       );
@@ -2110,7 +2117,9 @@ export class UserDbController {
     for (const permission of permissions) {
       expandedPermissions.push(permission);
 
+      const isRemoval = UserDbController.isPermissionRemoval(permission);
       if (
+        isRemoval ||
         permission?.roleName === 'Corp Admin' ||
         (permission?.accessCategory !== 'ALL_CHILD' &&
           permission?.accessCategory !== 'IMMEDIATE_CHILD') ||
@@ -2119,7 +2128,6 @@ export class UserDbController {
         continue;
       }
 
-      const isRemoval = UserDbController.isPermissionRemoval(permission);
       const children = await prisma.orgStructure.findMany({
         where: {
           companyId,
@@ -2140,7 +2148,7 @@ export class UserDbController {
         const permissionKey = [
           permission.roleName || '',
           child.nodePath || '',
-          isRemoval ? 'REMOVE' : 'UPSERT',
+          'UPSERT',
         ].join('|');
         if (
           explicitPermissionKeys.has(permissionKey) ||
