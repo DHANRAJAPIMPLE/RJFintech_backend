@@ -6980,18 +6980,26 @@ export class UserDbController {
         );
         const responseOldData =
           detail && !isInitiate
-            ? await HistoryUserUtil.enrichUserHistoryOldData(resolvedOldData)
+            ? await UserDbController.enrichUserHistoryPermissionMetadata(
+                resolvedCompanyId,
+                await HistoryUserUtil.enrichUserHistoryOldData(
+                  resolvedOldData,
+                ),
+              )
             : null;
         const responseNewData = detail
-          ? isInitiate
-            ? cloneJson(resolvedNewData)
-            : HistoryUserUtil.formatUserHistoryDetailNewData({
-              requestData: dataBlob,
-              requestOldData: onb.oldData,
-              resolvedOldData,
-              resolvedNewData,
-              requestType: type,
-            })
+          ? await UserDbController.enrichUserHistoryPermissionMetadata(
+              resolvedCompanyId,
+              isInitiate
+                ? cloneJson(resolvedNewData)
+                : HistoryUserUtil.formatUserHistoryDetailNewData({
+                    requestData: dataBlob,
+                    requestOldData: onb.oldData,
+                    resolvedOldData,
+                    resolvedNewData,
+                    requestType: type,
+                  }),
+            )
           : null;
 
         normalizedEffectivePermissions.forEach((p: any) => {
