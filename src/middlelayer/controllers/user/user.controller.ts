@@ -1120,6 +1120,9 @@ export class UserController {
         nodeName: node.nodeName,
         nodePath: node.nodePath,
         nodeType: node.nodeType,
+        ...(node.levelCount !== undefined
+          ? { levelCount: node.levelCount }
+          : {}),
         status: node.status,
         workflows: node.workflows.map((workflow) => ({
           levelsHash: workflow.levelsHash,

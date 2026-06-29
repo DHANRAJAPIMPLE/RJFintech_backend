@@ -11680,6 +11680,9 @@ export class UserDbController {
 
           return {
             ...nodeWithWorkflows,
+            levelCount: UserDbController.getNodeHierarchyLevelCount(
+              node.nodePath,
+            ),
             workflows: visibleWorkflows.map((workflow: any) => ({
               levelsHash: workflow.levelsHash,
               name: workflow.name,
@@ -11775,6 +11778,9 @@ export class UserDbController {
 
             return {
               ...nodeWithWorkflows,
+              levelCount: UserDbController.getNodeHierarchyLevelCount(
+                ua.orgStructure.nodePath,
+              ),
               workflows: visibleWorkflows.map((workflow: any) => ({
                 levelsHash: workflow.levelsHash,
                 name: workflow.name,

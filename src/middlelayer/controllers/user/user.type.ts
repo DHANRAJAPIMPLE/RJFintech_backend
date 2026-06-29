@@ -23,6 +23,7 @@ export type UserCompanyNode = {
   nodeName: string;
   nodePath: string;
   nodeType: UserCompanyNodeType;
+  levelCount?: number | null;
   status?: 'ACTIVE' | 'INACTIVE' | 'ARCHIVE' | string;
   workflows: UserCompanyNodeWorkflow[];
   roleName: string;
