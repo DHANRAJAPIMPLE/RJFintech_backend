@@ -134,6 +134,7 @@ type UserPermissionSnapshot = {
   roleSubCategory: string;
   nodeName: string;
   nodePath: string;
+  nodeType?: string | null;
   accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
   sourceTag?: 'USER' | 'AUTO_GENERATED';
 };
@@ -806,6 +807,7 @@ export class UserDbController {
       roleSubCategory: permission.roleSubCategory,
       nodeName: permission.nodeName,
       nodePath: permission.nodePath,
+      nodeType: permission.nodeType || '',
       accessCategory: permission.accessCategory || null,
       sourceTag:
         permission?.sourceTag === 'AUTO_GENERATED' ? 'AUTO_GENERATED' : 'USER',
@@ -1541,9 +1543,90 @@ export class UserDbController {
         roleSubCategory: permission.roleSubCategory || '',
         nodeName: permission.nodeName || '',
         nodePath: permission.nodePath || '',
+        nodeType: permission.nodeType || '',
         accessCategory: permission.accessCategory || null,
+        sourceTag:
+          permission?.sourceTag === 'AUTO_GENERATED' ||
+          permission?.source === 'AUTO_GENERATED' ||
+          permission?.sourceType === 'AUTO_GENERATED'
+            ? 'AUTO_GENERATED'
+            : 'USER',
       })),
     };
+  }
+
+  private static async enrichUserHistoryPermissionMetadata(
+    companyId: string,
+    data: unknown,
+  ) {
+    const enriched = cloneJson(data ?? null) as any;
+    const permissionGroups: any[][] = [];
+
+    const collectPermissionGroups = (value: any) => {
+      if (!value || typeof value !== 'object') return;
+      const permissions = value.permissions;
+      if (Array.isArray(permissions)) {
+        permissionGroups.push(permissions);
+        return;
+      }
+      if (permissions && typeof permissions === 'object') {
+        ['added', 'removed', 'updated'].forEach((key) => {
+          if (Array.isArray(permissions[key])) {
+            permissionGroups.push(permissions[key]);
+          }
+        });
+      }
+    };
+
+    collectPermissionGroups(enriched);
+    if (permissionGroups.length === 0) return enriched;
+
+    const nodePaths = Array.from(
+      new Set(
+        permissionGroups
+          .flat()
+          .map((permission) =>
+            typeof permission?.nodePath === 'string'
+              ? permission.nodePath.trim()
+              : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+    const nodes =
+      nodePaths.length > 0
+        ? await prisma.orgStructure.findMany({
+            where: {
+              companyId,
+              nodePath: { in: nodePaths },
+            },
+            select: {
+              nodePath: true,
+              nodeType: true,
+            },
+          })
+        : [];
+    const nodeTypeByPath = new Map(
+      nodes.map((node) => [node.nodePath, String(node.nodeType || '')]),
+    );
+
+    permissionGroups.flat().forEach((permission) => {
+      if (!permission || typeof permission !== 'object') return;
+      const sourceType =
+        permission.sourceTag === 'AUTO_GENERATED' ||
+        permission.source === 'AUTO_GENERATED' ||
+        permission.sourceType === 'AUTO_GENERATED'
+          ? 'AUTO_GENERATED'
+          : 'USER';
+      const nodePath =
+        typeof permission.nodePath === 'string' ? permission.nodePath.trim() : '';
+
+      permission.sourceTag = sourceType;
+      permission.nodeType =
+        permission.nodeType || (nodePath ? nodeTypeByPath.get(nodePath) : '') || '';
+    });
+
+    return enriched;
   }
 
   private static applyUserRequestSnapshot(
@@ -1837,6 +1920,7 @@ export class UserDbController {
           roleSubCategory: access.role?.subCategory || '',
           nodeName: access.orgStructure?.nodeName || '',
           nodePath: access.orgStructure?.nodePath || '',
+          nodeType: access.orgStructure?.nodeType || '',
           accessCategory: access.accessCategory || null,
           sourceTag: UserDbController.resolvePermissionSourceTag(
             access,
@@ -11462,14 +11546,21 @@ export class UserDbController {
         newData = fallbackSnapshot;
       }
       const responseOldData =
-        await HistoryUserUtil.enrichUserHistoryOldData(oldData);
-      const responseNewData = HistoryUserUtil.formatUserHistoryDetailNewData({
-        requestData,
-        requestOldData: onboarding?.oldData,
-        resolvedOldData: oldData,
-        resolvedNewData: newData,
-        requestType,
-      });
+        await UserDbController.enrichUserHistoryPermissionMetadata(
+          resolvedCompanyId,
+          await HistoryUserUtil.enrichUserHistoryOldData(oldData),
+        );
+      const responseNewData =
+        await UserDbController.enrichUserHistoryPermissionMetadata(
+          resolvedCompanyId,
+          HistoryUserUtil.formatUserHistoryDetailNewData({
+            requestData,
+            requestOldData: onboarding?.oldData,
+            resolvedOldData: oldData,
+            resolvedNewData: newData,
+            requestType,
+          }),
+        );
       const changeCount = UserDbController.getUserHistoryChangeCount(
         requestData,
         oldData,

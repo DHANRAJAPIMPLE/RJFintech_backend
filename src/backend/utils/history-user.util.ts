@@ -38,9 +38,18 @@ export class HistoryUserUtil {
         roleSubCategory: '',
         nodeName: '',
         nodePath: '',
+        nodeType: '',
         accessCategory: null,
+        sourceTag: 'USER',
       };
     }
+
+    const sourceTag =
+      permission.sourceTag === 'AUTO_GENERATED' ||
+      permission.source === 'AUTO_GENERATED' ||
+      permission.sourceType === 'AUTO_GENERATED'
+        ? 'AUTO_GENERATED'
+        : 'USER';
 
     return {
       accessType: String(permission.accessType || 'SECONDARY'),
@@ -49,8 +58,10 @@ export class HistoryUserUtil {
       roleSubCategory: String(permission.roleSubCategory || ''),
       nodeName: String(permission.nodeName || ''),
       nodePath: String(permission.nodePath || ''),
+      nodeType: String(permission.nodeType || ''),
       accessCategory:
         permission.accessCategory === undefined ? null : permission.accessCategory,
+      sourceTag,
     };
   }
 
