@@ -10437,6 +10437,8 @@ export class UserDbController {
           : NotificationService.mergeRecipientUserIds(
             requestInitiatorId,
             approverId,
+            affectedNodeRecipientUserIds,
+            onboardedUserRecipientIds,
           ),
         includeCreatedBy: true,
         isPending: isPartialApproval,

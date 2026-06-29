@@ -1510,6 +1510,131 @@ export class OrgStructureDbController {
       : null;
   }
 
+  private static extractOrgNotificationNodePaths(data: any): string[] {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const candidatePaths = [
+      source?.targetNodePath,
+      source?.nodePath,
+      source?.currentData?.nodePath,
+      source?.parentNode?.nodePath && source?.newNodeName
+        ? `${source.parentNode.nodePath}.${OrgStructureDbController.pathSegment(source.newNodeName)}`
+        : null,
+    ];
+
+    return Array.from(
+      new Set(
+        candidatePaths
+          .map((nodePath) =>
+            typeof nodePath === 'string' ? nodePath.trim() : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private static doesAccessCoverNode(
+    access: {
+      isGlobalAccess?: boolean | null;
+      accessCategory?: string | null;
+      orgStructure?: { nodePath?: string | null } | null;
+    },
+    targetNodePath: string,
+  ) {
+    if (access.isGlobalAccess) return true;
+
+    const accessNodePath =
+      typeof access.orgStructure?.nodePath === 'string'
+        ? access.orgStructure.nodePath.trim()
+        : '';
+    if (!accessNodePath) return false;
+
+    const normalizedCategory = String(access.accessCategory || 'NODE')
+      .trim()
+      .toUpperCase();
+
+    if (targetNodePath === accessNodePath) return true;
+    if (normalizedCategory === 'ALL_CHILD') {
+      return targetNodePath.startsWith(`${accessNodePath}.`);
+    }
+    if (normalizedCategory === 'IMMEDIATE_CHILD') {
+      const parentPath = targetNodePath.split('.').slice(0, -1).join('.');
+      return parentPath === accessNodePath;
+    }
+
+    return false;
+  }
+
+  private static async getNodeAccessNotificationRecipientIds(
+    companyId: string,
+    nodePaths: string[],
+  ) {
+    const normalizedNodePaths = Array.from(
+      new Set(
+        nodePaths
+          .map((nodePath) =>
+            typeof nodePath === 'string' ? nodePath.trim() : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+
+    if (normalizedNodePaths.length === 0) return [];
+
+    const mappedUsers = await prisma.userMapping.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+      },
+      select: { userId: true },
+    });
+    const mappedUserIds = Array.from(
+      new Set(
+        mappedUsers
+          .map((mapping) => String(mapping.userId || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (mappedUserIds.length === 0) return [];
+
+    const userAccesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        userId: { in: mappedUserIds },
+      },
+      include: {
+        role: {
+          select: { isActive: true },
+        },
+        orgStructure: {
+          select: {
+            nodePath: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    return Array.from(
+      new Set(
+        userAccesses
+          .filter((access) => {
+            if (access.role?.isActive === false) return false;
+            if (
+              !access.isGlobalAccess &&
+              access.orgStructure?.status !== 'ACTIVE'
+            ) {
+              return false;
+            }
+
+            return normalizedNodePaths.some((nodePath) =>
+              OrgStructureDbController.doesAccessCoverNode(access, nodePath),
+            );
+          })
+          .map((access) => access.userId),
+      ),
+    );
+  }
+
   private static extractOrgSnapshot(data: any) {
     const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
     const targetPath = OrgStructureDbController.extractOrgTargetPath(source);
@@ -4476,6 +4601,24 @@ export class OrgStructureDbController {
               requestInitiatorId,
               requestInitiatorReportingManagerUserIds,
             );
+        const isFinalApproval = result?.status === 'APPROVED';
+        const requestApproverIds = isFinalApproval
+          ? await NotificationService.getRequestApproverIds(
+              id,
+              'org_structure_req',
+            )
+          : [];
+        const approvedNodeRecipientUserIds = isFinalApproval
+          ? await OrgStructureDbController.getNodeAccessNotificationRecipientIds(
+              notificationCompanyId,
+              NotificationService.mergeRecipientUserIds(
+                inactivationNotification?.nodePath,
+                OrgStructureDbController.extractOrgNotificationNodePaths(
+                  (result as any)?.data,
+                ),
+              ),
+            )
+          : [];
         const orgNotificationContent = isOrgInactivation
           ? {
               name: 'Organization Removed',
@@ -4514,11 +4657,21 @@ export class OrgStructureDbController {
           createdBy: approverId,
           recipientUserIds: NotificationService.mergeRecipientUserIds(
             notificationRecipientUserIds,
-            ...(isPartialApproval ? [] : [corpAdminUserIds]),
+            ...(isPartialApproval
+              ? []
+              : [
+                  requestApproverIds,
+                  approvedNodeRecipientUserIds,
+                  corpAdminUserIds,
+                ]),
           ),
           requiredRecipientUserIds: isPartialApproval
             ? NotificationService.mergeRecipientUserIds(notificationRecipients)
-            : NotificationService.mergeRecipientUserIds(requestInitiatorId),
+            : NotificationService.mergeRecipientUserIds(
+                requestInitiatorId,
+                requestApproverIds,
+                approvedNodeRecipientUserIds,
+              ),
           includeCreatedBy: true,
           isPending: isPartialApproval,
         });
@@ -4903,6 +5056,12 @@ export class OrgStructureDbController {
           initiatorId,
           'ORG_STR',
         );
+      const nodeAccessRecipientUserIds = isAutoApproved
+        ? await OrgStructureDbController.getNodeAccessNotificationRecipientIds(
+            resolvedCompanyId,
+            OrgStructureDbController.extractOrgNotificationNodePaths(rest.data),
+          )
+        : [];
       await NotificationService.createRequestNotification({
         companyId: resolvedCompanyId,
         type: isAutoApproved ? 'ONBOARDED' : 'INITIATE',
@@ -4919,8 +5078,14 @@ export class OrgStructureDbController {
         recipientUserIds: NotificationService.mergeRecipientUserIds(
           notificationRecipients,
           initiatorReportingManagerUserIds,
+          nodeAccessRecipientUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
+        requiredRecipientUserIds: isAutoApproved
+          ? NotificationService.mergeRecipientUserIds(
+              nodeAccessRecipientUserIds,
+            )
+          : undefined,
         includeCreatedBy: true,
         isPending: isAutoApproved ? false : undefined,
       });

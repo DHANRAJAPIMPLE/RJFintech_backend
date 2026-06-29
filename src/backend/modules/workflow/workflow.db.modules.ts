@@ -4642,6 +4642,11 @@ export class WorkflowDbController {
           nodeAccessRecipientUserIds,
           await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
         ),
+        requiredRecipientUserIds: autoApprovedBySelectedWorkflow
+          ? NotificationService.mergeRecipientUserIds(
+              nodeAccessRecipientUserIds,
+            )
+          : undefined,
         includeCreatedBy: true,
         isPending: autoApprovedBySelectedWorkflow ? false : undefined,
       });
@@ -4954,15 +4959,25 @@ export class WorkflowDbController {
       const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
         request.companyId,
       );
+      const isFinalApproval = result?.status === 'APPROVED';
+      const requestApproverIds = isFinalApproval
+        ? await NotificationService.getRequestApproverIds(id, 'workflow_req')
+        : [];
       const notificationRecipientUserIds = isPartialApproval
         ? NotificationService.mergeRecipientUserIds(notificationRecipients)
         : NotificationService.mergeRecipientUserIds(
             notificationRecipients,
+            requestApproverIds,
             requestInitiatorId,
             requestInitiatorReportingManagerUserIds,
           );
       const approvedNodeRecipientUserIds =
-        result?.status === 'APPROVED' && requestType === 'INITIATE'
+        isFinalApproval &&
+        (requestType === 'INITIATE' ||
+          requestType === 'INACTIVE' ||
+          requestType === 'ARCHIVE' ||
+          (request.data as any)?.status === 'INACTIVE' ||
+          (request.data as any)?.status === 'ARCHIVE')
           ? await WorkflowDbController.getNodeAccessNotificationRecipientIds(
               request.companyId,
               [
@@ -5013,7 +5028,11 @@ export class WorkflowDbController {
         ),
         requiredRecipientUserIds: isPartialApproval
           ? NotificationService.mergeRecipientUserIds(notificationRecipients)
-          : NotificationService.mergeRecipientUserIds(requestInitiatorId),
+          : NotificationService.mergeRecipientUserIds(
+              requestInitiatorId,
+              requestApproverIds,
+              approvedNodeRecipientUserIds,
+            ),
         isPending: isPartialApproval,
       });
 
