@@ -329,7 +329,9 @@ export class UserDbController {
     if (cleanMessage.includes('invocation in')) {
       const lines = cleanMessage.split('\n');
       const lastLine = lines[lines.length - 1]?.trim();
-      cleanMessage = lastLine ? `System Error: ${lastLine}` : 'A system validation error occurred while processing the request.';
+      cleanMessage = lastLine
+        ? `System Error: ${lastLine}`
+        : 'A system validation error occurred while processing the request.';
     }
 
     const corpAdminUserIds =
@@ -688,9 +690,8 @@ export class UserDbController {
           UserDbController.permissionSummaryKey(originalPermission),
       ),
     );
-    const directAccess = UserDbController.formatPermissionAccessList(
-      originalPermissions,
-    );
+    const directAccess =
+      UserDbController.formatPermissionAccessList(originalPermissions);
     const generatedAccess = UserDbController.formatPermissionAccessList(
       Array.isArray(expandedPermissions)
         ? expandedPermissions.filter(
@@ -791,7 +792,8 @@ export class UserDbController {
       return 'ONBOARDED' as const;
     }
 
-    if (normalizedType === 'ACTIVE') return 'PENDING APPROVAL - ACTIVATION' as const;
+    if (normalizedType === 'ACTIVE')
+      return 'PENDING APPROVAL - ACTIVATION' as const;
 
     return 'PENDING APPROVAL' as const;
   }
@@ -806,9 +808,7 @@ export class UserDbController {
       nodePath: permission.nodePath,
       accessCategory: permission.accessCategory || null,
       sourceTag:
-        permission?.sourceTag === 'AUTO_GENERATED'
-          ? 'AUTO_GENERATED'
-          : 'USER',
+        permission?.sourceTag === 'AUTO_GENERATED' ? 'AUTO_GENERATED' : 'USER',
     };
   }
 
@@ -1410,7 +1410,10 @@ export class UserDbController {
           return false;
         }
 
-        if (!access.isGlobalAccess && access.orgStructure?.status !== 'ACTIVE') {
+        if (
+          !access.isGlobalAccess &&
+          access.orgStructure?.status !== 'ACTIVE'
+        ) {
           return false;
         }
 
@@ -2011,7 +2014,9 @@ export class UserDbController {
         [
           permission?.roleName || '',
           permission?.nodePath || '',
-          UserDbController.isPermissionRemoval(permission) ? 'REMOVE' : 'UPSERT',
+          UserDbController.isPermissionRemoval(permission)
+            ? 'REMOVE'
+            : 'UPSERT',
         ].join('|'),
       ),
     );
@@ -2354,9 +2359,8 @@ export class UserDbController {
       return levelDerivedCount;
     }
 
-    const aliasCount = UserDbController.extractWorkflowCheckerCountFromAlias(
-      alias,
-    );
+    const aliasCount =
+      UserDbController.extractWorkflowCheckerCountFromAlias(alias);
     return aliasCount ?? 0;
   }
 
@@ -2367,9 +2371,8 @@ export class UserDbController {
     const uniqueLevelCount = new Set(levelNumbers).size;
     if (uniqueLevelCount > 0) return uniqueLevelCount;
 
-    const aliasCount = UserDbController.extractWorkflowLevelCountFromAlias(
-      alias,
-    );
+    const aliasCount =
+      UserDbController.extractWorkflowLevelCountFromAlias(alias);
     return aliasCount ?? 0;
   }
 
@@ -2389,10 +2392,14 @@ export class UserDbController {
         ? (source.nodeName as Record<string, unknown>)
         : null;
     const nodeValues =
-      typeof source.nodeName === 'string' ? [source.nodeName] : nodeName?.values;
+      typeof source.nodeName === 'string'
+        ? [source.nodeName]
+        : nodeName?.values;
     const rawLevels = Array.isArray(source.levels)
       ? source.levels
-      : source.levels === undefined || source.levels === null || source.levels === ''
+      : source.levels === undefined ||
+          source.levels === null ||
+          source.levels === ''
         ? []
         : [source.levels];
     const normalizedLevels = rawLevels
@@ -2571,7 +2578,7 @@ export class UserDbController {
     let nodeAccess: Record<string, string[]> = {};
     const rawNodeAccess = nodeName?.nodeAccess;
     if (typeof rawNodeAccess === 'string') {
-      // Legacy format: single "primary" / "secondary" string → apply to ALL node values
+      // Legacy format: single "primary" / "secondary" string ? apply to ALL node values
       const normalizedAccessStr = rawNodeAccess.trim().toUpperCase();
       if (
         normalizedAccessStr === 'PRIMARY' ||
@@ -3086,7 +3093,7 @@ export class UserDbController {
         const hasMatchingAccess = allAccesses.some((access: any) => {
           const isPrimary = primarySet.has(access);
 
-          // ── nodeName / nodeAccess filter ──
+          // -- nodeName / nodeAccess filter --
           if (hasNodeNameFilter) {
             if (filters.nodeValues.length > 0) {
               const nodeMatch = filters.nodeValues.some((filterNodeValue) => {
@@ -3137,7 +3144,7 @@ export class UserDbController {
             }
           }
 
-          // ── nodeType filter ──
+          // -- nodeType filter --
           if (
             hasNodeTypeFilter &&
             !UserDbController.matchesNormalizedFilterValue(
@@ -3148,7 +3155,7 @@ export class UserDbController {
             return false;
           }
 
-          // ── category filter ──
+          // -- category filter --
           if (
             hasCategoryFilter &&
             !UserDbController.matchesNormalizedFilterValue(
@@ -3159,7 +3166,7 @@ export class UserDbController {
             return false;
           }
 
-          // ── subCategory filter (skip if satisfied by pending approvals) ──
+          // -- subCategory filter (skip if satisfied by pending approvals) --
           if (
             hasSubCategoryFilter &&
             !matchesPendingApprovalSubCategory &&
@@ -3171,7 +3178,7 @@ export class UserDbController {
             return false;
           }
 
-          // ── role filter ──
+          // -- role filter --
           if (
             hasRoleFilter &&
             !UserDbController.matchesRoleFilter(access, filters.role)
@@ -4245,9 +4252,7 @@ export class UserDbController {
       inactiveCount,
       pendingUsers,
       eligibleCounts,
-    ] =
-      await Promise.all(
-        [
+    ] = await Promise.all([
           prisma.user.findMany({
             where: {
               userMappings: {
@@ -4413,8 +4418,7 @@ export class UserDbController {
             companyId,
             appliedFilters,
           ),
-        ],
-      );
+    ]);
 
     const designationCounts = new Map<
       string,
@@ -4462,7 +4466,10 @@ export class UserDbController {
       });
     };
     const allUserEntries = [
-      ...activeUsers.map((user) => ({ user, defaultStatus: 'ACTIVE' as const })),
+      ...activeUsers.map((user) => ({
+        user,
+        defaultStatus: 'ACTIVE' as const,
+      })),
       ...inactiveUsers.map((user) => ({
         user,
         defaultStatus: 'INACTIVE' as const,
@@ -4555,7 +4562,8 @@ export class UserDbController {
       (entry) => entry.defaultStatus === 'INACTIVE',
     );
 
-    const pendingOnboardingRows = (pendingUsers.pendingOnboardings || []) as any[];
+    const pendingOnboardingRows = (pendingUsers.pendingOnboardings ||
+      []) as any[];
     const formattedPendingUsers = await UserDbController.formatPendingUsers(
       pendingOnboardingRows,
       companyId,
@@ -4919,9 +4927,7 @@ export class UserDbController {
     );
     const subCategoryEntries: Array<
       [string, Array<{ value: string; count: number }>]
-    > = Array.from(
-      subCategoryMap.entries(),
-    ).map(([categoryKey, values]) => {
+    > = Array.from(subCategoryMap.entries()).map(([categoryKey, values]) => {
       const categoryLabel = categoryMap.get(categoryKey)?.value || categoryKey;
       const subCategories = Array.from(values.values()).sort((a, b) =>
         a.value.localeCompare(b.value),
@@ -5126,9 +5132,8 @@ export class UserDbController {
           nodePath,
           nodeType: String(node.nodeType || ''),
           nodeTypeLabel:
-            UserDbController.humanizeFilterLabel(
+            UserDbController.humanizeFilterLabel(String(node.nodeType || '')) ||
               String(node.nodeType || ''),
-            ) || String(node.nodeType || ''),
           hierarchyLevel,
           hierarchyLabel,
           levelsHash: workflow.levelsHash,
@@ -5255,7 +5260,10 @@ export class UserDbController {
       { value: string; count: number }
     >();
     const checkerCounts = new Map<number, { value: number; count: number }>();
-    const workflowLevelCounts = new Map<number, { value: number; count: number }>();
+    const workflowLevelCounts = new Map<
+      number,
+      { value: number; count: number }
+    >();
     const statusCounts = new Map<string, { value: string; count: number }>();
 
     filteredWorkflows.forEach((workflow) => {
@@ -5340,11 +5348,9 @@ export class UserDbController {
     }
 
     const nodes = Array.from(
-      filteredWorkflows.reduce(
-        (
-          map,
-          workflow,
-        ) => {
+      filteredWorkflows
+        .reduce(
+          (map, workflow) => {
           const existing = map.get(workflow.nodePath) || {
             nodeName: workflow.nodeName,
             nodePath: workflow.nodePath,
@@ -5396,7 +5402,8 @@ export class UserDbController {
             }>;
           }
         >(),
-      ).values(),
+        )
+        .values(),
     )
       .map((node) => ({
         nodeName: node.nodeName,
@@ -5940,12 +5947,18 @@ export class UserDbController {
 
   private static getAccessRoleKey(access: any) {
     return String(
-      access?.roleCode ?? access?.role?.roleCode ?? access?.role?.roleName ?? access?.roleName ?? '',
+      access?.roleCode ??
+        access?.role?.roleCode ??
+        access?.role?.roleName ??
+        access?.roleName ??
+        '',
     ).trim();
   }
 
   private static getAccessNodePath(access: any) {
-    return String(access?.orgStructure?.nodePath ?? access?.nodePath ?? '').trim();
+    return String(
+      access?.orgStructure?.nodePath ?? access?.nodePath ?? '',
+    ).trim();
   }
 
   private static getParentNodePath(nodePath: string) {
@@ -5988,7 +6001,11 @@ export class UserDbController {
         .trim()
         .toUpperCase();
 
-      if (!candidateRoleKey || candidateRoleKey !== roleKey || !candidateNodePath) {
+      if (
+        !candidateRoleKey ||
+        candidateRoleKey !== roleKey ||
+        !candidateNodePath
+      ) {
         return false;
       }
 
@@ -6011,7 +6028,10 @@ export class UserDbController {
     });
   }
 
-  private static resolvePermissionSourceTag(access: any, allAccesses: any[] = []) {
+  private static resolvePermissionSourceTag(
+    access: any,
+    allAccesses: any[] = [],
+  ) {
     return UserDbController.isAutoGeneratedAccess(access, allAccesses)
       ? 'AUTO_GENERATED'
       : 'USER';
@@ -6076,7 +6096,9 @@ export class UserDbController {
         )
       : [];
     const resolvedNodePath =
-      primary[0]?.nodePath ?? summaryPrimaryAccess?.orgStructure?.nodePath ?? null;
+      primary[0]?.nodePath ??
+      summaryPrimaryAccess?.orgStructure?.nodePath ??
+      null;
     const levelCount =
       UserDbController.getNodeHierarchyLevelCount(resolvedNodePath);
 
@@ -6474,24 +6496,55 @@ export class UserDbController {
       existing.push(row);
       workflowApproverMap.set(row.reqId, existing);
     });
-    const allEligibleApproverIds = new Set<string>();
-    pendingOnboardings.forEach((onb: any) => {
-      const levels = workflowApproverMap.get(onb.id) || [];
-      const pendingLevel = levels.find(
-        (level: any) => level.status === 'PENDING',
-      );
-      const approverIds =
-        pendingLevel && Array.isArray(pendingLevel.approversList)
-          ? (pendingLevel.approversList as string[])
-          : Array.isArray(onb.eligibleApprovers)
-            ? (onb.eligibleApprovers as string[])
-            : [];
-      approverIds.forEach((id: unknown) => {
-        if (typeof id === 'string' && id.trim()) {
-          allEligibleApproverIds.add(id.trim());
-        }
-      });
+
+    const approvedHistoryRows =
+      pendingRequestIds.length > 0
+        ? await prisma.userHistory.findMany({
+            where: {
+              reqId: { in: pendingRequestIds },
+              event: 'APPROVED',
+            },
+            select: { reqId: true, eventUserId: true },
+          })
+        : [];
+    const approvedUserIdsByRequest = new Map<string, string[]>();
+    approvedHistoryRows.forEach((row) => {
+      if (!row.reqId || !row.eventUserId) return;
+      const existing = approvedUserIdsByRequest.get(row.reqId) || [];
+      existing.push(row.eventUserId);
+      approvedUserIdsByRequest.set(row.reqId, existing);
     });
+
+    const eligibleApproverIdsByRequest = new Map<string, string[]>();
+    const allEligibleApproverIds = new Set<string>();
+    await Promise.all(
+      pendingOnboardings.map(async (onb: any) => {
+        const levels = workflowApproverMap.get(onb.id) || [];
+        const pendingLevel = levels.find(
+          (level: any) => level.status === 'PENDING',
+        );
+        const rawApproverIds =
+          pendingLevel && Array.isArray(pendingLevel.approversList)
+            ? (pendingLevel.approversList as string[])
+            : Array.isArray(onb.eligibleApprovers)
+              ? (onb.eligibleApprovers as string[])
+              : [];
+        const approverIds = await WorkflowApproverUtil.getEnrichedApproverIds(
+          resolvedCompanyId,
+          rawApproverIds,
+          typeof onb.initiatorId === 'string' ? onb.initiatorId : null,
+          'USER_ACC',
+          approvedUserIdsByRequest.get(onb.id) || [],
+        );
+
+        eligibleApproverIdsByRequest.set(onb.id, approverIds);
+        approverIds.forEach((id: unknown) => {
+          if (typeof id === 'string' && id.trim()) {
+            allEligibleApproverIds.add(id.trim());
+          }
+        });
+      }),
+    );
     const eligibleApproverUsers =
       allEligibleApproverIds.size > 0
         ? await prisma.user.findMany({
@@ -6685,22 +6738,8 @@ export class UserDbController {
         const w = onb.workflowId ? workflowMap.get(onb.workflowId) : null;
         const type = onb.type || 'INITIATE';
         const isInitiate = type === 'INITIATE';
-        const levels = workflowApproverMap.get(onb.id) || [];
-        const pendingLevel = levels.find(
-          (level: any) => level.status === 'PENDING',
-        );
-        const rawEligibleApproverIds =
-          pendingLevel && Array.isArray(pendingLevel.approversList)
-            ? (pendingLevel.approversList as string[])
-            : Array.isArray(onb.eligibleApprovers)
-              ? (onb.eligibleApprovers as string[])
-              : [];
         const eligibleApproverIds =
-          await WorkflowApproverUtil.filterUsersToActiveCompanyMembers(
-            prisma as any,
-            resolvedCompanyId,
-            rawEligibleApproverIds,
-          );
+          eligibleApproverIdsByRequest.get(onb.id) || [];
         const eligibleapprovers = eligibleApproverIds
           .map((id: string) => eligibleApproverMap.get(id))
           .filter(Boolean);
@@ -6808,7 +6847,9 @@ export class UserDbController {
                 )
                 : UserDbController.mergePermissionMutations(
                   existingActivePermissions,
-                  currentInitiatePermissions.filter(hasActivePermissionNode),
+                      currentInitiatePermissions.filter(
+                        hasActivePermissionNode,
+                      ),
                 )
               : existingPermissions.filter(
                 (permission: any) => permission.nodeStatus === 'ACTIVE',
@@ -8766,7 +8807,9 @@ export class UserDbController {
             remarks: 'Auto-approved: selected workflow has NO_APPROVER',
           },
         });
-        return await tx.userOnboarding.findUnique({ where: { id: request.id } });
+        return await tx.userOnboarding.findUnique({
+          where: { id: request.id },
+        });
       }
 
       notificationRecipients = workflow.currentLevelApprovers;
@@ -8787,7 +8830,8 @@ export class UserDbController {
       current.user,
     );
     const isAutoApproved = onboarding?.status === 'APPROVED';
-    const modificationNotification = UserDbController.getUserNotificationContent(
+    const modificationNotification =
+      UserDbController.getUserNotificationContent(
       type,
       isAutoApproved ? 'approved' : 'initiated',
       userReferenceName,
@@ -8887,9 +8931,7 @@ export class UserDbController {
         accessCategory: permission.accessCategory || 'NODE',
         isGlobalAccess: permission.roleName === 'Corp Admin',
         source:
-          permission.sourceTag === 'AUTO_GENERATED'
-            ? 'AUTO_GENERATED'
-            : 'USER',
+          permission.sourceTag === 'AUTO_GENERATED' ? 'AUTO_GENERATED' : 'USER',
       },
       create: {
         userId: targetUserId,
@@ -8903,9 +8945,7 @@ export class UserDbController {
             : permission.accessCategory || 'NODE',
         isGlobalAccess: permission.roleName === 'Corp Admin',
         source:
-          permission.sourceTag === 'AUTO_GENERATED'
-            ? 'AUTO_GENERATED'
-            : 'USER',
+          permission.sourceTag === 'AUTO_GENERATED' ? 'AUTO_GENERATED' : 'USER',
       },
     });
   }
@@ -9086,7 +9126,8 @@ export class UserDbController {
       companyId: onboarding.companyId,
       userId: targetUserId,
       eventUserId,
-      createReason: 'Default notification setting created because access was granted.',
+      createReason:
+        'Default notification setting created because access was granted.',
       removeReason:
         onboarding.type === 'ARCHIVE'
           ? 'Notification setting removed because user was archived.'
@@ -9105,7 +9146,8 @@ export class UserDbController {
     const rawRequestData = (onboarding.data as any) || {};
     const requestData = {
       ...rawRequestData,
-      permissions: await UserDbController.expandInitiatePermissionsForChildNodes(
+      permissions:
+        await UserDbController.expandInitiatePermissionsForChildNodes(
         onboarding.companyId,
         Array.isArray(rawRequestData?.permissions)
           ? rawRequestData.permissions
@@ -9166,8 +9208,20 @@ export class UserDbController {
       });
     }
 
-    await tx.userMapping.create({
-      data: {
+    await tx.userMapping.upsert({
+      where: {
+        userId_companyId: {
+          userId: user.id,
+          companyId: company.id,
+        },
+      },
+      update: {
+        reportingManager: reportingManagerId,
+        status: 'ACTIVE',
+        designation,
+        employeeId,
+      },
+      create: {
         userId: user.id,
         companyId: company.id,
         reportingManager: reportingManagerId,
@@ -9368,12 +9422,19 @@ export class UserDbController {
       ORG_STR: 'ORG',
       WORK_FLOW: 'WORKFLOW',
     };
-    const neededPrefs = new Map<string, { nodeId: string; module: string; workflowId: string }>();
+    const neededPrefs = new Map<
+      string,
+      { nodeId: string; module: string; workflowId: string }
+    >();
 
     for (const access of finalAccesses) {
       if (!access.nodeId) continue;
       const subModules: string[] = [];
-      if (access.roleCode === 'SAAS_ADMIN' || access.roleCode === 'CORP_ADMIN' || access.isGlobalAccess) {
+      if (
+        access.roleCode === 'SAAS_ADMIN' ||
+        access.roleCode === 'CORP_ADMIN' ||
+        access.isGlobalAccess
+      ) {
         subModules.push('USER_ACC', 'ORG_STR', 'WORK_FLOW');
       } else if (access.role?.subCategory) {
         subModules.push(access.role.subCategory);
@@ -9382,7 +9443,11 @@ export class UserDbController {
         const mod = PREF_MODULE_MAP[sub];
         const defaultWfId = defaultWfBySubModule.get(sub);
         if (mod && defaultWfId) {
-          neededPrefs.set(`${access.nodeId}:${mod}`, { nodeId: access.nodeId, module: mod, workflowId: defaultWfId });
+          neededPrefs.set(`${access.nodeId}:${mod}`, {
+            nodeId: access.nodeId,
+            module: mod,
+            workflowId: defaultWfId,
+          });
         }
       }
     }
@@ -9390,7 +9455,9 @@ export class UserDbController {
     const existingPrefs = await tx.userWorkflowPreference.findMany({
       where: { userId: user.id, companyId: company.id },
     });
-    existingPrefs.forEach((pref: any) => neededPrefs.delete(`${pref.nodeId}:${pref.module}`));
+    existingPrefs.forEach((pref: any) =>
+      neededPrefs.delete(`${pref.nodeId}:${pref.module}`),
+    );
 
     if (neededPrefs.size > 0) {
       const newPrefsData = Array.from(neededPrefs.values()).map((p) => ({
@@ -9412,12 +9479,23 @@ export class UserDbController {
           OR: newPrefsData.map((p) => ({ nodeId: p.nodeId, module: p.module })),
         },
         include: {
-          node: { select: { id: true, nodeName: true, nodePath: true, nodeType: true } },
-          workflow: { select: { id: true, levelsHash: true, name: true, alias: true } },
+          node: {
+            select: {
+              id: true,
+              nodeName: true,
+              nodePath: true,
+              nodeType: true,
+            },
+          },
+          workflow: {
+            select: { id: true, levelsHash: true, name: true, alias: true },
+          },
         },
       });
 
-      const historyData = createdPrefs.filter((cp: any) => neededPrefs.has(`${cp.nodeId}:${cp.module}`)).map((pref: any) => ({
+      const historyData = createdPrefs
+        .filter((cp: any) => neededPrefs.has(`${cp.nodeId}:${cp.module}`))
+        .map((pref: any) => ({
         preferenceId: pref.id,
         companyId: company.id,
         eventUserId,
@@ -9450,8 +9528,7 @@ export class UserDbController {
       eventUserId,
       createReason:
         'Default notification setting created because access was granted.',
-      removeReason:
-        'Notification setting removed because access was removed.',
+      removeReason: 'Notification setting removed because access was removed.',
     });
 
     return { userId: user.id, email };
@@ -9555,7 +9632,7 @@ export class UserDbController {
         Array.isArray(permissions) &&
         permissions.some((p: any) => p.roleName === 'Corp Admin');
 
-      // ── Initiator Restriction for Corp Admin ──
+      // -- Initiator Restriction for Corp Admin --
       if (hasCorpAdminRole) {
         const initiatorAccess = await prisma.userAccess.findFirst({
           where: {
@@ -9655,7 +9732,7 @@ export class UserDbController {
           });
         }
 
-        // ── Resolve workflow approvers and create WorkflowApprover rows ──────
+        // -- Resolve workflow approvers and create WorkflowApprover rows ------
         // Determine the node for approver resolution from the permissions data
         const permissions = onboardingData.data?.permissions || [];
         let nodeId: string | null = null;
@@ -9781,7 +9858,8 @@ export class UserDbController {
             expandedInitiatePermissions,
           );
           return summary
-            ? `${UserDbController.getUserNotificationContent(
+            ? `${
+                UserDbController.getUserNotificationContent(
               'INITIATE',
               'initiated',
               userReferenceName,
@@ -9800,7 +9878,8 @@ export class UserDbController {
           expandedInitiatePermissions,
         );
       const responseMessage = generatedPermissionMessage
-        ? `${isAutoApproved
+        ? `${
+            isAutoApproved
           ? 'User onboarded successfully.'
           : 'User onboarding initiated successfully.'
         } ${generatedPermissionMessage}`
@@ -9811,8 +9890,7 @@ export class UserDbController {
       res.status(201).json({
         ...onboarding,
         message: responseMessage,
-        autoGeneratedAccessNames:
-          UserDbController.getGeneratedPermissionLabels(
+        autoGeneratedAccessNames: UserDbController.getGeneratedPermissionLabels(
             originalPermissions,
             expandedInitiatePermissions,
           ),
@@ -9875,8 +9953,8 @@ export class UserDbController {
    * 1. Checks the current pending level from WorkflowApprover.
    * 2. Verifies the approver is in the current level's approversList.
    * 3. Marks the level as APPROVED and checks if more levels remain.
-   * 4. If all levels are approved → creates user, mapping, access records.
-   * 5. If rejected at any level → marks all levels REJECTED.
+   * 4. If all levels are approved ? creates user, mapping, access records.
+   * 5. If rejected at any level ? marks all levels REJECTED.
    * 6. Logs level-wise events in UserHistory.
    */
   static async handleUserOnboardingStatus(
@@ -9899,7 +9977,7 @@ export class UserDbController {
         throw new AppError('User onboarding request not found', 404);
       }
 
-      // ── Check WorkflowApprover for level-wise authorization ──────────────
+      // -- Check WorkflowApprover for level-wise authorization --------------
       const rawRequestData = (onboarding.data as any) || {};
       const targetNotificationLookupEmail =
         rawRequestData?.targetUserEmail ||
@@ -10037,7 +10115,7 @@ export class UserDbController {
           : email;
       let notificationRecipients = onboarding.eligibleApprovers || [];
 
-      // ── Approver Restriction and Signatory Check ──
+      // -- Approver Restriction and Signatory Check --
       const statusStr = status.toString().toLowerCase();
       const isApproving = statusStr === 'approve' || statusStr === 'approved';
       const hasCorpAdminRole =
@@ -10072,14 +10150,15 @@ export class UserDbController {
         }
       }
 
-      const result = await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(
+        async (tx) => {
         // =========================
         const statusStr = status.toString().toLowerCase();
         // =========================
-        // ✅ APPROVED FLOW
+        // ? APPROVED FLOW
         // =========================
         if (statusStr === 'approve' || statusStr === 'approved') {
-          // ── Level-wise approval: mark current level as APPROVED ──────────
+          // -- Level-wise approval: mark current level as APPROVED ----------
           let allLevelsApproved = true;
           const approvedLevel = currentLevel?.level || null;
 
@@ -10148,11 +10227,15 @@ export class UserDbController {
         }
 
         // =========================
-        // ❌ REJECTED FLOW
+        // ? REJECTED FLOW
         // =========================
         else if (statusStr === 'reject' || statusStr === 'rejected') {
           // Reject all remaining approval levels
-          await WorkflowApproverUtil.rejectAllLevels(tx, id, 'user_onboarding');
+            await WorkflowApproverUtil.rejectAllLevels(
+              tx,
+              id,
+              'user_onboarding',
+            );
 
           const updated = await tx.userOnboarding.update({
             where: { id },
@@ -10185,15 +10268,17 @@ export class UserDbController {
         }
 
         // =========================
-        // ⚠️ INVALID STATUS
+        // ?? INVALID STATUS
         // =========================
         else {
           throw new AppError('Invalid status', 400);
         }
-      }, {
+        },
+        {
         maxWait: 10000,
         timeout: 30000,
-      });
+        },
+      );
 
       const requestType = String(onboarding.type || 'INITIATE').toUpperCase();
       let message = `User request ${status.toLowerCase()}d successfully`;
@@ -10230,8 +10315,7 @@ export class UserDbController {
           id,
           'user_onboarding',
         );
-      const notificationRecipientUserIds =
-        isPartialApproval
+      const notificationRecipientUserIds = isPartialApproval
           ? NotificationService.mergeRecipientUserIds(notificationRecipients)
           : NotificationService.mergeRecipientUserIds(
             notificationRecipients,
@@ -10261,8 +10345,7 @@ export class UserDbController {
           name: name || notificationUser?.name,
           email: notificationLookupEmail || notificationUser?.email,
         });
-      const userNotificationContent =
-        isPartialApproval
+      const userNotificationContent = isPartialApproval
           ? UserDbController.getUserPendingApprovalNotificationContent(
             requestType,
             notificationReferenceName,
@@ -10712,7 +10795,10 @@ export class UserDbController {
           levelStartByLevel.set(level.level, nextStep);
           getSortedApprovedEvents(reqId, level.level).forEach(
             (event: any, index: number) => {
-              approvedEventStepByHistoryId.set(event.historyId, nextStep + index);
+              approvedEventStepByHistoryId.set(
+                event.historyId,
+                nextStep + index,
+              );
             },
           );
           nextStep += getMandatoryApprovalCount(level);
@@ -10723,7 +10809,8 @@ export class UserDbController {
         });
       }
       const getLevelStartStep = (reqId: string, level: number) =>
-        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ?? null;
+        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ??
+        null;
       const getApprovedEventStep = (
         reqId: string,
         level: number,
@@ -11473,7 +11560,8 @@ export class UserDbController {
           companyId: resolvedCompanyId,
           type: 'FAILED',
           name: 'User request failed',
-          message: `User request failed: ${error instanceof Error ? error.message : 'Unexpected error'
+          message: `User request failed: ${
+            error instanceof Error ? error.message : 'Unexpected error'
             }`,
           referenceType: 'USER',
           referenceId: requestId,
@@ -11787,9 +11875,8 @@ export class UserDbController {
                 alias: workflow.alias,
                 status: workflow.status,
                 selected:
-                  workflowPreferencesByNodePath.get(
-                    ua.orgStructure.nodePath,
-                  )?.workflowId === workflow.id,
+                  workflowPreferencesByNodePath.get(ua.orgStructure.nodePath)
+                    ?.workflowId === workflow.id,
               })),
               roleName: ua.role?.roleName || ua.roleCode,
             };
