@@ -2785,26 +2785,24 @@ export class UserDbController {
     if (acceptedValues.length === 0) return true;
 
     const accessRoleBucket = UserDbController.resolveAccessRoleBucket(access);
-    const permissionLevel = String(
-      access?.permissionLevel ?? access?.role?.permissionLevel ?? '',
-    ).toUpperCase();
-    const canView = Boolean(access?.canView ?? access?.role?.view);
-    const canModify = Boolean(access?.canModify ?? access?.role?.modify);
-    const canApprove = Boolean(access?.canApprove ?? access?.role?.approve);
-    const canInitiate = Boolean(access?.canInitiate ?? access?.role?.initiate);
     const normalizedRoleName = UserDbController.compactFilterValue(
       access?.roleName ?? access?.role?.roleName,
     );
 
     return acceptedValues.some((accepted) => {
-      if (accepted === 'maker') {
-        return accessRoleBucket === 'maker';
-      }
-      if (accepted === 'checker') {
-        return accessRoleBucket === 'checker';
-      }
-      if (accepted === 'user' || accepted === 'viewer') {
-        return accessRoleBucket === 'user';
+      const normalizedAccepted =
+        accepted === 'manager'
+          ? 'checker'
+          : accepted === 'user'
+            ? 'maker'
+            : accepted;
+
+      if (
+        normalizedAccepted === 'checker' ||
+        normalizedAccepted === 'maker' ||
+        normalizedAccepted === 'viewer'
+      ) {
+        return accessRoleBucket === normalizedAccepted;
       }
 
       if (!normalizedRoleName) return false;
@@ -2835,7 +2833,7 @@ export class UserDbController {
       permissionLevel === 'VIEWER' ||
       (canView && !canModify && !canApprove && !canInitiate)
     ) {
-      return 'user' as const;
+      return 'viewer' as const;
     }
 
     if (
@@ -4523,6 +4521,7 @@ export class UserDbController {
       string,
       Map<string, { value: string; count: number }>
     >();
+    const nodeUserIds = new Map<string, Set<string>>();
     const reportingManagerMap = new Map<
       string,
       { value: string; count: number }
@@ -4537,6 +4536,7 @@ export class UserDbController {
       nodePathValue: unknown,
       nodeNameValue: unknown,
       nodeTypeValue: unknown,
+      userKeyValue: unknown,
     ) => {
       const nodePath = UserDbController.normalizeFilterText(nodePathValue);
       if (!nodePath) return;
@@ -4545,15 +4545,22 @@ export class UserDbController {
       const nodeType = UserDbController.normalizeFilterText(nodeTypeValue);
       const level = Math.max(nodePath.split('.').filter(Boolean).length, 1);
       const levelCount = level <= 1 ? 'root' : `level${level - 1}`;
-      const existingNode = nodeNameMap.get(nodePath.toLowerCase());
+      const nodeKey = nodePath.toLowerCase();
+      const existingNode = nodeNameMap.get(nodeKey);
+      const userKey = UserDbController.normalizeFilterText(userKeyValue);
+      const usersForNode = nodeUserIds.get(nodeKey) || new Set<string>();
+      if (userKey) {
+        usersForNode.add(userKey);
+        nodeUserIds.set(nodeKey, usersForNode);
+      }
 
-      nodeNameMap.set(nodePath.toLowerCase(), {
+      nodeNameMap.set(nodeKey, {
         value: nodeName || nodePath,
         path: nodePath,
         nodeType,
         level,
         levelCount,
-        count: (existingNode?.count || 0) + 1,
+        count: usersForNode.size || existingNode?.count || 0,
         permissionCount: (existingNode?.permissionCount || 0) + 1,
       });
     };
@@ -4734,7 +4741,7 @@ export class UserDbController {
           userPermissionBuckets.add('checker');
         } else if (accessBucket === 'maker') {
           userPermissionBuckets.add('maker');
-        } else if (accessBucket === 'user') {
+        } else if (accessBucket === 'viewer') {
           userPermissionBuckets.add('viewer');
         }
 
@@ -4810,7 +4817,7 @@ export class UserDbController {
           }
         }
 
-        addNodeDropdownOption(nodePath, nodeName, nodeType);
+        addNodeDropdownOption(nodePath, nodeName, nodeType, user.id);
       }
 
       userNodeTypeKeys.forEach((nodeTypeKey) => {
@@ -4939,6 +4946,7 @@ export class UserDbController {
           access?.nodePath,
           access?.nodeName,
           access?.nodeType,
+          pendingUser?.id || basicDetails.email || onboarding?.id,
         );
 
         const accessBucket = UserDbController.resolveAccessRoleBucket({
@@ -4953,7 +4961,7 @@ export class UserDbController {
           pendingPermissionBuckets.add('checker');
         } else if (accessBucket === 'maker') {
           pendingPermissionBuckets.add('maker');
-        } else if (accessBucket === 'user') {
+        } else if (accessBucket === 'viewer') {
           pendingPermissionBuckets.add('viewer');
         }
 
