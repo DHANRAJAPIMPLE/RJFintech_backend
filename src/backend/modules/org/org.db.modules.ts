@@ -2782,9 +2782,6 @@ export class OrgStructureDbController {
     );
 
     const groupedChanges = Array.from(groupedUserChanges.values());
-    const stakeholderRecipientUserIds = stakeholderUserIds.filter(
-      (userId) => !impactedUserIds.includes(userId),
-    );
     const stakeholderLines = groupedChanges.map((change) => {
       const emailPart = change.userEmail ? ` (${change.userEmail})` : '';
       const roles = Array.from(change.roles).sort().join(', ');
@@ -2792,11 +2789,20 @@ export class OrgStructureDbController {
     });
     const stakeholderReference =
       groupedChanges[0]?.nodePath || accessChanges[0]?.nodePath || 'organization';
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      stakeholderUserIds,
+      impactedUserIds,
+    );
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      requestInitiatorId,
+      requestApproverIds,
+      impactedUserIds,
+    );
 
-    if (stakeholderRecipientUserIds.length > 0) {
+    if (recipientUserIds.length > 0) {
       await NotificationService.createRequestNotification({
         companyId,
-        type: params.changeAction === 'REMOVED' ? 'INACTIVE' : 'MODIFICATION',
+        type: params.changeAction === 'REMOVED' ? 'AUTO_DELETE' : 'MODIFICATION',
         name:
           params.changeAction === 'REMOVED'
             ? 'Active user access removed'
@@ -2806,36 +2812,9 @@ export class OrgStructureDbController {
         referenceId: params.orgReqId,
         referenceName: stakeholderReference,
         createdBy: params.createdBy,
-        recipientUserIds: stakeholderRecipientUserIds,
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          requestInitiatorId,
-          requestApproverIds,
-        ).filter((userId) => !impactedUserIds.includes(userId)),
+        recipientUserIds,
+        requiredRecipientUserIds,
         includeCreatedBy: true,
-        isPending: false,
-      });
-    }
-
-    for (const change of groupedChanges) {
-      const roleLabel = Array.from(change.roles).sort().join(', ');
-      await NotificationService.createRequestNotification({
-        companyId,
-        type: params.changeAction === 'REMOVED' ? 'INACTIVE' : 'MODIFICATION',
-        name:
-          params.changeAction === 'REMOVED'
-            ? 'Active user access removed'
-            : 'Active user access added',
-        message: `Active user access ${params.changeAction === 'REMOVED' ? 'removed' : 'added'} for ${change.userName}${change.userEmail ? ` (${change.userEmail})` : ''}. Role ${roleLabel} was ${params.changeAction === 'REMOVED' ? 'removed from' : 'added to'} organization ${change.nodeName} (${change.nodePath}).`,
-        referenceType: 'ORG',
-        referenceId: params.orgReqId,
-        referenceName: change.nodePath,
-        createdBy: params.createdBy,
-        recipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.userId,
-        ),
-        requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
-          change.userId,
-        ),
         isPending: false,
       });
     }

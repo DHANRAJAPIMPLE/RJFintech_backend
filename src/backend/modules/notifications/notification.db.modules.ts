@@ -69,7 +69,7 @@ type CreateNotificationInput = {
 };
 
 type NormalizedCreateNotificationInput = Omit<CreateNotificationInput, 'type'> & {
-  type: NotificationType;
+  type: NotificationType | LegacyNotificationType;
 };
 
 type NotificationSettingsFetchParams = {
@@ -460,6 +460,112 @@ const getStoredNotificationTypeValue = (
   return normalizeNotificationTypeValue(type, isPending);
 };
 
+const getMakerStartedNotificationType = (
+  input: CreateNotificationInput | NormalizedCreateNotificationInput,
+): LegacyNotificationType => {
+  const normalized = typeof input.type === 'string'
+    ? input.type.trim().toUpperCase()
+    : '';
+
+  if (
+    normalized === 'MODIFICATION' ||
+    normalized === 'UPDATE' ||
+    normalized === 'PENDING APPROVAL - MODIFICATION' ||
+    normalized === 'PENDING APPROVAL - UPDATE' ||
+    normalized === 'PENDING_APPROVAL_MODIFICATION' ||
+    normalized === 'PENDING_APPROVAL_UPDATE'
+  ) {
+    return 'MODIFICATION';
+  }
+  if (
+    normalized === 'ACTIVE' ||
+    normalized === 'PENDING APPROVAL - ACTIVE' ||
+    normalized === 'PENDING APPROVAL - ACTIVATION' ||
+    normalized === 'PENDING_APPROVAL_ACTIVE' ||
+    normalized === 'PENDING_APPROVAL_ACTIVATION'
+  ) {
+    return 'ACTIVE';
+  }
+  if (
+    normalized === 'INACTIVE' ||
+    normalized === 'PENDING APPROVAL - INACTIVE' ||
+    normalized === 'PENDING_APPROVAL_INACTIVE'
+  ) {
+    return 'INACTIVE';
+  }
+  if (
+    normalized === 'ARCHIVE' ||
+    normalized === 'ARCHIVED' ||
+    normalized === 'PENDING APPROVAL - ARCHIVE' ||
+    normalized === 'PENDING APPROVAL - ARCHIVED' ||
+    normalized === 'PENDING_APPROVAL_ARCHIVE' ||
+    normalized === 'PENDING_APPROVAL_ARCHIVED'
+  ) {
+    return 'ARCHIVE';
+  }
+  if (
+    normalized === 'INITIATE' ||
+    normalized === 'PENDING APPROVAL - INITIATE' ||
+    normalized === 'PENDING_APPROVAL_INITIATE'
+  ) {
+    return 'INITIATE';
+  }
+
+  const text = `${input.name || ''} ${input.message || ''}`.toLowerCase();
+  if (text.includes('modification')) return 'MODIFICATION';
+  if (text.includes('inactivation')) return 'INACTIVE';
+  if (text.includes('activation')) return 'ACTIVE';
+  if (text.includes('archive')) return 'ARCHIVE';
+
+  return 'INITIATE';
+};
+
+const STARTED_NOTIFICATION_TYPE_VALUES = [
+    'INITIATE',
+    'MODIFICATION',
+    'UPDATE',
+    'ACTIVE',
+    'INACTIVE',
+    'ARCHIVE',
+    'ARCHIVED',
+] as const;
+
+const isMakerStartedNotificationType = (type: unknown) => {
+  const normalized = typeof type === 'string' ? type.trim().toUpperCase() : '';
+  return STARTED_NOTIFICATION_TYPE_VALUES.includes(
+    normalized as (typeof STARTED_NOTIFICATION_TYPE_VALUES)[number],
+  );
+};
+
+const isMakerStartedNotificationInput = (
+  input: CreateNotificationInput | NormalizedCreateNotificationInput,
+) => {
+  if (!isMakerStartedNotificationType(input.type)) return false;
+
+  const text = `${input.name || ''} ${input.message || ''}`.toLowerCase();
+  if (text.includes('initiated')) return true;
+  if (!text.trim()) return true;
+
+  return ![
+    'approved',
+    'rejected',
+    'onboarded',
+    'activated',
+    'inactivated',
+    'archived',
+    'modified',
+    'failed',
+  ].some((word) => text.includes(word));
+};
+
+const STARTED_NOTIFICATION_TYPES: LegacyNotificationType[] = [
+  'INITIATE',
+  'MODIFICATION',
+  'ACTIVE',
+  'INACTIVE',
+  'ARCHIVE',
+];
+
 export class NotificationService {
   private static unique(values: Array<string | null | undefined>) {
     return Array.from(
@@ -487,7 +593,12 @@ export class NotificationService {
       throw new Error('companyId and createdBy are required');
     }
 
-    if (!SUPPORTED_NOTIFICATION_TYPES.includes(input.type)) {
+    if (
+      !SUPPORTED_NOTIFICATION_TYPES.includes(input.type as NotificationType) &&
+      !SUPPORTED_LEGACY_NOTIFICATION_TYPES.includes(
+        input.type as LegacyNotificationType,
+      )
+    ) {
       throw new Error(`Unsupported notification type: ${input.type}`);
     }
 
@@ -730,7 +841,7 @@ export class NotificationService {
     return false;
   }
 
-  private static async hidePendingNotificationUsers(
+  private static async hidePreviousRequestNotificationUsers(
     tx: any,
     params: {
       companyId: string;
@@ -738,6 +849,7 @@ export class NotificationService {
       referenceId?: string | null;
       now: Date;
       excludeNotificationId?: string | null;
+      includeStarted?: boolean;
     },
   ) {
     const pendingNotifications = await tx.notification.findMany({
@@ -745,7 +857,17 @@ export class NotificationService {
         companyId: params.companyId,
         referenceType: params.referenceType || null,
         referenceId: params.referenceId || null,
-        isPending: true,
+        OR: [
+          { isPending: true },
+          ...(params.includeStarted
+            ? [
+                {
+                  isPending: false,
+                  type: { in: STARTED_NOTIFICATION_TYPES },
+                },
+              ]
+            : []),
+        ],
         ...(params.excludeNotificationId
           ? { id: { not: params.excludeNotificationId } }
           : {}),
@@ -784,10 +906,28 @@ export class NotificationService {
         row.notification,
         row.userId,
       );
-    const normalizedType = getStoredNotificationTypeValue(
+    const storedType = getStoredNotificationTypeValue(
       row.notification.type,
       row.notification.isPending === true,
     );
+    const isStartedNotification =
+      row.notification.isPending === false &&
+      isMakerStartedNotificationInput({
+        ...row.notification,
+        type: storedType,
+      });
+    const normalizedType =
+      row.notification.isPending === false &&
+      PENDING_NOTIFICATION_TYPES.includes(storedType as NotificationType)
+        ? getMakerStartedNotificationType({
+            ...row.notification,
+            type: storedType,
+          })
+        : row.notification.isPending === false &&
+            isMakerStartedNotificationType(storedType) &&
+            !isStartedNotification
+          ? normalizeNotificationTypeValue(storedType, false)
+        : storedType;
     const viewerUserId =
       typeof row.userId === 'string' ? row.userId.trim() : '';
     const createdByUserId =
@@ -894,10 +1034,15 @@ export class NotificationService {
     const orgName = getDisplayValue(input.referenceName, 'the organization');
     const workflowName = getDisplayValue(input.referenceName, 'the workflow');
     const companyName = getDisplayValue(input.referenceName, 'the company');
-    const normalizedType = normalizeNotificationTypeValue(
+    const storedType = getStoredNotificationTypeValue(
       input.type,
       Boolean(input.isPending),
     );
+    const normalizedType =
+      input.isPending === false ? storedType : normalizeNotificationTypeValue(
+        input.type,
+        Boolean(input.isPending),
+      );
     const lifecycleLabel = NotificationService.getRequestLifecycleLabel(
       input.referenceType,
       normalizedType,
@@ -905,10 +1050,15 @@ export class NotificationService {
 
     const content = (() => {
       switch (`${input.referenceType}:${normalizedType}`) {
+      case 'USER:INITIATE':
       case 'USER:PENDING APPROVAL':
         return {
-          name: 'User approval pending',
-          message: `User request is pending approval for ${userName}`,
+          name: input.isPending === false
+            ? 'User onboarding initiated'
+            : 'User approval pending',
+          message: input.isPending === false
+            ? `User onboarding request initiated for ${userName}`
+            : `User request is pending approval for ${userName}`,
         };
       case 'USER:PENDING APPROVAL - ACTIVATION':
         return {
@@ -940,6 +1090,11 @@ export class NotificationService {
           name: 'User request approved',
           message: `User request approved for ${userName}`,
         };
+      case 'USER:MODIFICATION':
+        return {
+          name: 'User modification initiated',
+          message: `User modification request initiated for ${userName}`,
+        };
       case 'USER:REJECTED-INITIATE':
         return {
           name: 'User onboarding rejected',
@@ -961,6 +1116,7 @@ export class NotificationService {
           message: `User details were modified for ${userName}`,
         };
       case 'USER:Pending Approval - ACTIVE':
+      case 'USER:ACTIVE':
         return {
           name: 'User activation initiated',
           message: `User activation request initiated for ${userName}`,
@@ -971,6 +1127,7 @@ export class NotificationService {
           message: `${userName} was activated`,
         };
       case 'USER:Pending Approval - INACTIVE':
+      case 'USER:INACTIVE':
         return {
           name: 'User inactivation initiated',
           message: `User inactivation request initiated for ${userName}`,
@@ -981,6 +1138,7 @@ export class NotificationService {
           message: `${userName} was inactivated`,
         };
       case 'USER:Pending Approval - ARCHIVED':
+      case 'USER:ARCHIVE':
         return {
           name: 'User archive initiated',
           message: `User archive request initiated for ${userName}`,
@@ -1016,6 +1174,7 @@ export class NotificationService {
           message: `User request failed for ${userName}`,
         };
       case 'ORG:Pending Approval - INITIATE':
+      case 'ORG:INITIATE':
         return {
           name: 'Organization onboarding initiated',
           message: `Organization onboarding request initiated for ${orgName}`,
@@ -1061,6 +1220,7 @@ export class NotificationService {
           message: `Organization structure was onboarded for ${orgName}`,
         };
       case 'ORG:Pending Approval - MODIFICATION':
+      case 'ORG:MODIFICATION':
         return {
           name: 'Organization modification initiated',
           message: `Organization modification request initiated for ${orgName}`,
@@ -1071,6 +1231,7 @@ export class NotificationService {
           message: `Organization structure was modified for ${orgName}`,
         };
       case 'ORG:Pending Approval - INACTIVE':
+      case 'ORG:INACTIVE':
         return {
           name: 'Organization inactivation initiated',
           message: `Organization inactivation request initiated for ${orgName}`,
@@ -1081,6 +1242,7 @@ export class NotificationService {
           message: `Organization was inactivated for ${orgName}`,
         };
       case 'ORG:Pending Approval - ARCHIVED':
+      case 'ORG:ARCHIVE':
         return {
           name: 'Organization archive initiated',
           message: `Organization archive request initiated for ${orgName}`,
@@ -1096,6 +1258,7 @@ export class NotificationService {
           message: `Organization was auto-deleted for ${orgName}`,
         };
       case 'ORG:Pending Approval - ACTIVE':
+      case 'ORG:ACTIVE':
         return {
           name: 'Organization activation initiated',
           message: `Organization activation request initiated for ${orgName}`,
@@ -1131,6 +1294,7 @@ export class NotificationService {
           message: `Organization request failed for ${orgName}`,
         };
       case 'WORKFLOW:Pending Approval - INITIATE':
+      case 'WORKFLOW:INITIATE':
         return {
           name: 'Workflow onboarding initiated',
           message: `Workflow onboarding request initiated for ${workflowName}`,
@@ -1176,6 +1340,7 @@ export class NotificationService {
           message: `Workflow was onboarded for ${workflowName}`,
         };
       case 'WORKFLOW:Pending Approval - MODIFICATION':
+      case 'WORKFLOW:MODIFICATION':
         return {
           name: 'Workflow modification initiated',
           message: `Workflow modification request initiated for ${workflowName}`,
@@ -1186,6 +1351,7 @@ export class NotificationService {
           message: `Workflow was modified for ${workflowName}`,
         };
       case 'WORKFLOW:Pending Approval - ACTIVE':
+      case 'WORKFLOW:ACTIVE':
         return {
           name: 'Workflow activation initiated',
           message: `Workflow activation request initiated for ${workflowName}`,
@@ -1196,6 +1362,7 @@ export class NotificationService {
           message: `Workflow was activated for ${workflowName}`,
         };
       case 'WORKFLOW:Pending Approval - INACTIVE':
+      case 'WORKFLOW:INACTIVE':
         return {
           name: 'Workflow inactivation initiated',
           message: `Workflow inactivation request initiated for ${workflowName}`,
@@ -1206,6 +1373,7 @@ export class NotificationService {
           message: `Workflow was inactivated for ${workflowName}`,
         };
       case 'WORKFLOW:Pending Approval - ARCHIVED':
+      case 'WORKFLOW:ARCHIVE':
         return {
           name: 'Workflow archive initiated',
           message: `Workflow archive request initiated for ${workflowName}`,
@@ -1246,6 +1414,7 @@ export class NotificationService {
           message: `Workflow request failed for ${workflowName}`,
         };
       case 'COMPANY:Pending Approval - INITIATE':
+      case 'COMPANY:INITIATE':
         return {
           name: 'Company onboarding initiated',
           message: `Company onboarding request initiated for ${companyName}`,
@@ -2274,14 +2443,44 @@ export class NotificationService {
     ).filter((userId) => !excludedApproverIds.has(userId));
   }
 
-  static async createNotification(input: CreateNotificationInput) {
+  static async createNotification(input: CreateNotificationInput): Promise<any> {
     const normalizedIsPending =
       input.isPending ?? NotificationService.isPendingNotificationType(input.type);
+    const normalizedType =
+      !normalizedIsPending && isMakerStartedNotificationInput(input)
+        ? getMakerStartedNotificationType(input)
+        : normalizeNotificationTypeValue(input.type, normalizedIsPending);
     const normalizedInput: NormalizedCreateNotificationInput = {
       ...input,
-      type: normalizeNotificationTypeValue(input.type, normalizedIsPending),
+      type: normalizedType,
       isPending: normalizedIsPending,
     };
+
+    if (normalizedIsPending && normalizedInput.includeCreatedBy === true) {
+      const createdBy = normalizedInput.createdBy;
+      const withoutCreatedBy = (userIds?: string[]) =>
+        NotificationService.unique(userIds || []).filter(
+          (userId) => userId !== createdBy,
+        );
+
+      const approverNotification = await NotificationService.createNotification({
+        ...input,
+        recipientUserIds: withoutCreatedBy(input.recipientUserIds),
+        requiredRecipientUserIds: withoutCreatedBy(input.requiredRecipientUserIds),
+        includeCreatedBy: false,
+        isPending: true,
+      });
+      const makerNotification = await NotificationService.createNotification({
+        ...input,
+        type: getMakerStartedNotificationType(input),
+        recipientUserIds: [createdBy],
+        requiredRecipientUserIds: [createdBy],
+        includeCreatedBy: false,
+        isPending: false,
+      });
+
+      return approverNotification || makerNotification;
+    }
 
     NotificationService.validateNotificationInput(normalizedInput);
 
@@ -2298,14 +2497,24 @@ export class NotificationService {
       actorName,
     );
     const isPending = normalizedIsPending;
-    const shouldClearPreviousPending =
-      Boolean(normalizedInput.referenceType) && Boolean(normalizedInput.referenceId);
+    const isMakerStartedNotification =
+      !isPending && isMakerStartedNotificationInput(normalizedInput);
+    const shouldClearPreviousRequestNotifications =
+      Boolean(normalizedInput.referenceType) &&
+      Boolean(normalizedInput.referenceId) &&
+      (isPending || !isMakerStartedNotification);
+    const shouldClearStartedNotifications =
+      !isPending && !isMakerStartedNotification;
     const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);
     const requestedRecipients = NotificationService.unique(
-      [
-        ...(normalizedInput.recipientUserIds || []),
-        normalizedInput.includeCreatedBy === true ? normalizedInput.createdBy : null,
-      ],
+      isMakerStartedNotification
+        ? [normalizedInput.createdBy]
+        : [
+            ...(normalizedInput.recipientUserIds || []),
+            normalizedInput.includeCreatedBy === true
+              ? normalizedInput.createdBy
+              : null,
+          ],
     );
     const [companyRecipientUserIds, requiredRecipientUserIds] =
       await Promise.all([
@@ -2314,12 +2523,14 @@ export class NotificationService {
           requestedRecipients,
         ),
         NotificationService.filterExistingUserIds(
-          NotificationService.mergeRecipientUserIds(
-            normalizedInput.requiredRecipientUserIds || [],
-            normalizedInput.includeCreatedBy === true
-              ? normalizedInput.createdBy
-              : null,
-          ),
+          isMakerStartedNotification
+            ? [normalizedInput.createdBy]
+            : NotificationService.mergeRecipientUserIds(
+                normalizedInput.requiredRecipientUserIds || [],
+                normalizedInput.includeCreatedBy === true
+                  ? normalizedInput.createdBy
+                  : null,
+              ),
         ),
       ]);
     const requiredRecipientSet = new Set(requiredRecipientUserIds);
@@ -2328,10 +2539,11 @@ export class NotificationService {
     const recipientUserIds = NotificationService.unique([
       ...companyRecipientUserIds,
       ...requiredRecipientUserIds,
-      ...saasAdmins,
+      ...(isMakerStartedNotification ? [] : saasAdmins),
     ]).filter(
       (userId) =>
         normalizedInput.includeCreatedBy === true ||
+        isMakerStartedNotification ||
         requiredRecipientSet.has(userId) ||
         userId !== normalizedInput.createdBy,
     );
@@ -2360,13 +2572,19 @@ export class NotificationService {
         ) as NotificationVisibilityStatus,
         updatedAt: now,
       }));
+      const duplicateReferenceWhere = isMakerStartedNotification
+        ? { referenceType: normalizedInput.referenceType || null }
+        : {
+            referenceType: normalizedInput.referenceType || null,
+            referenceId: normalizedInput.referenceId || null,
+          };
       const existingNotification = await tx.notification.findFirst({
         where: {
           companyId: normalizedInput.companyId,
           type: normalizedInput.type,
-          referenceType: normalizedInput.referenceType || null,
-          referenceId: normalizedInput.referenceId || null,
+          ...duplicateReferenceWhere,
           createdBy: normalizedInput.createdBy,
+          isPending,
           name: content.name,
           message: content.message,
           createdAt: { gte: duplicateWindowStart },
@@ -2380,23 +2598,32 @@ export class NotificationService {
       });
 
       if (existingNotification) {
-        if (shouldClearPreviousPending) {
-          await NotificationService.hidePendingNotificationUsers(tx, {
+        if (shouldClearPreviousRequestNotifications) {
+          await NotificationService.hidePreviousRequestNotificationUsers(tx, {
             companyId: normalizedInput.companyId,
             referenceType: normalizedInput.referenceType,
             referenceId: normalizedInput.referenceId,
             now,
             excludeNotificationId: existingNotification.id,
+            includeStarted: shouldClearStartedNotifications,
           });
         }
 
+        const shouldRefreshMakerReference =
+          isMakerStartedNotification &&
+          existingNotification.referenceId !==
+            (normalizedInput.referenceId || null);
         const updatedNotification =
-          existingNotification.isPending === isPending
+          existingNotification.isPending === isPending &&
+          !shouldRefreshMakerReference
             ? existingNotification
             : await tx.notification.update({
                 where: { id: existingNotification.id },
                 data: {
                   isPending,
+                  ...(shouldRefreshMakerReference
+                    ? { referenceId: normalizedInput.referenceId || null }
+                    : {}),
                   updatedAt: now,
                 },
                 include: {
@@ -2413,12 +2640,13 @@ export class NotificationService {
         };
       }
 
-      if (shouldClearPreviousPending) {
-        await NotificationService.hidePendingNotificationUsers(tx, {
+      if (shouldClearPreviousRequestNotifications) {
+        await NotificationService.hidePreviousRequestNotificationUsers(tx, {
           companyId: normalizedInput.companyId,
           referenceType: normalizedInput.referenceType,
           referenceId: normalizedInput.referenceId,
           now,
+          includeStarted: shouldClearStartedNotifications,
         });
       }
 
