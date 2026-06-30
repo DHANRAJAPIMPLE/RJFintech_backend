@@ -1032,8 +1032,15 @@ export class WorkflowDbController {
       return 'ONBOARDED' as const;
     }
 
+    if (normalizedType === 'INITIATE') return 'Pending Approval - INITIATE' as const;
+    if (normalizedType === 'UPDATE' || normalizedType === 'MODIFICATION')
+      return 'Pending Approval - MODIFICATION' as const;
     if (normalizedType === 'ACTIVE')
       return 'PENDING APPROVAL - ACTIVATION' as const;
+    if (normalizedType === 'INACTIVE')
+      return 'Pending Approval - INACTIVE' as const;
+    if (normalizedType === 'ARCHIVE' || normalizedType === 'ARCHIVED')
+      return 'Pending Approval - ARCHIVED' as const;
 
     return 'PENDING APPROVAL' as const;
   }

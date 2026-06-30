@@ -146,9 +146,14 @@ const SUPPORTED_REFERENCE_TYPES: NotificationReferenceType[] = [
   'WORKFLOW',
   'COMPANY',
 ];
-const PENDING_NOTIFICATION_TYPES: NotificationType[] = [
+const PENDING_NOTIFICATION_TYPES: Array<NotificationType | LegacyNotificationType> = [
   'PENDING APPROVAL',
   'PENDING APPROVAL - ACTIVATION',
+  'Pending Approval - INITIATE',
+  'Pending Approval - MODIFICATION',
+  'Pending Approval - ACTIVE',
+  'Pending Approval - INACTIVE',
+  'Pending Approval - ARCHIVED',
 ];
 const NOTIFICATION_MODULES: NotificationModule[] = [
   'USER',
@@ -256,7 +261,29 @@ const normalizeDateValue = (value: unknown) => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const normalizeNotificationFetchTypes = (value: unknown): NotificationType[] => {
+const normalizeNotificationFetchType = (
+  value: unknown,
+): NotificationType | LegacyNotificationType | null => {
+  if (typeof value !== 'string') return null;
+  const rawType = value.trim();
+  if (!rawType || rawType.toUpperCase() === 'ALL') return null;
+
+  const supportedTypes = [
+    ...SUPPORTED_NOTIFICATION_TYPES,
+    ...SUPPORTED_LEGACY_NOTIFICATION_TYPES,
+  ];
+  const exactType = supportedTypes.find((type) => type === rawType);
+  if (exactType) return exactType;
+
+  const normalized = rawType.toUpperCase();
+  return (
+    supportedTypes.find((type) => type.toUpperCase() === normalized) || null
+  );
+};
+
+const normalizeNotificationFetchTypes = (
+  value: unknown,
+): Array<NotificationType | LegacyNotificationType> => {
   const values =
     typeof value === 'string'
       ? value.includes(',')
@@ -269,31 +296,28 @@ const normalizeNotificationFetchTypes = (value: unknown): NotificationType[] => 
   return Array.from(
     new Set(
       values
-        .flatMap((item) => {
-          const normalized =
-            typeof item === 'string' ? item.trim().toUpperCase() : '';
-          if (!normalized || normalized === 'ALL') return [];
-
-          if (normalized === 'ACTIVE') {
-            return ['PENDING APPROVAL - ACTIVATION'];
-          }
-          if (
-            normalized === 'INITIATE' ||
-            normalized === 'MODIFICATION' ||
-            normalized === 'UPDATE' ||
-            normalized === 'INACTIVE' ||
-            normalized === 'ARCHIVE'
-          ) {
-            return ['PENDING APPROVAL'];
-          }
-
-          return [normalizeNotificationTypeValue(normalized, false)];
-        })
-        .filter((type): type is NotificationType =>
-          SUPPORTED_NOTIFICATION_TYPES.includes(type as NotificationType),
+        .map((item) => normalizeNotificationFetchType(item))
+        .filter(
+          (type): type is NotificationType | LegacyNotificationType =>
+            Boolean(type),
         ),
     ),
   );
+};
+
+const buildNotificationTypeFetchWhere = (
+  types: Array<NotificationType | LegacyNotificationType>,
+) => {
+  if (types.length === 0) return null;
+
+  const OR = types.map((type) => {
+    if (PENDING_NOTIFICATION_TYPES.includes(type)) {
+      return { type, isPending: true };
+    }
+    return { type };
+  });
+
+  return OR.length === 1 ? OR[0] : { OR };
 };
 
 const normalizeCursorId = (value: unknown) => {
@@ -323,20 +347,23 @@ const isUuidLike = (value: unknown) =>
     value.trim(),
   );
 
-const canonicalPendingTypeByRequestType: Record<string, NotificationType> = {
-  INITIATE: 'PENDING APPROVAL',
-  UPDATE: 'PENDING APPROVAL',
-  MODIFICATION: 'PENDING APPROVAL',
+const canonicalPendingTypeByRequestType: Record<
+  string,
+  NotificationType | LegacyNotificationType
+> = {
+  INITIATE: 'Pending Approval - INITIATE',
+  UPDATE: 'Pending Approval - MODIFICATION',
+  MODIFICATION: 'Pending Approval - MODIFICATION',
   ACTIVE: 'PENDING APPROVAL - ACTIVATION',
-  INACTIVE: 'PENDING APPROVAL',
-  ARCHIVE: 'PENDING APPROVAL',
-  ARCHIVED: 'PENDING APPROVAL',
+  INACTIVE: 'Pending Approval - INACTIVE',
+  ARCHIVE: 'Pending Approval - ARCHIVED',
+  ARCHIVED: 'Pending Approval - ARCHIVED',
 };
 
 const normalizeNotificationTypeValue = (
   type: unknown,
   isPending: boolean,
-): NotificationType => {
+): NotificationType | LegacyNotificationType => {
   const normalized = typeof type === 'string' ? type.trim().toUpperCase() : '';
 
   if (
@@ -344,7 +371,9 @@ const normalizeNotificationTypeValue = (
     normalized === 'PENDING APPROVAL - INITIATE' ||
     normalized === 'PENDING_APPROVAL_INITIATE'
   ) {
-    return 'PENDING APPROVAL';
+    return normalized === 'PENDING APPROVAL'
+      ? 'PENDING APPROVAL'
+      : 'Pending Approval - INITIATE';
   }
   if (
     normalized === 'PENDING APPROVAL - MODIFICATION' ||
@@ -352,7 +381,7 @@ const normalizeNotificationTypeValue = (
     normalized === 'PENDING_APPROVAL_MODIFICATION' ||
     normalized === 'PENDING_APPROVAL_UPDATE'
   ) {
-    return 'PENDING APPROVAL';
+    return 'Pending Approval - MODIFICATION';
   }
   if (
     normalized === 'PENDING APPROVAL - ACTIVATION' ||
@@ -366,7 +395,7 @@ const normalizeNotificationTypeValue = (
     normalized === 'PENDING APPROVAL - INACTIVE' ||
     normalized === 'PENDING_APPROVAL_INACTIVE'
   ) {
-    return 'PENDING APPROVAL';
+    return 'Pending Approval - INACTIVE';
   }
   if (
     normalized === 'PENDING APPROVAL - ARCHIVE' ||
@@ -374,7 +403,7 @@ const normalizeNotificationTypeValue = (
     normalized === 'PENDING_APPROVAL_ARCHIVE' ||
     normalized === 'PENDING_APPROVAL_ARCHIVED'
   ) {
-    return 'PENDING APPROVAL';
+    return 'Pending Approval - ARCHIVED';
   }
 
   if (normalized === 'APPROVE' || normalized === 'APPROVED') {
@@ -556,6 +585,41 @@ const isMakerStartedNotificationInput = (
     'modified',
     'failed',
   ].some((word) => text.includes(word));
+};
+
+const getNotificationFetchTypeValue = (notification: {
+  type?: string | null;
+  isPending?: boolean | null;
+  name?: string | null;
+  message?: string | null;
+}) => {
+  const storedType = getStoredNotificationTypeValue(
+    notification.type,
+    notification.isPending === true,
+  );
+
+  if (
+    notification.isPending === false &&
+    PENDING_NOTIFICATION_TYPES.includes(storedType as NotificationType)
+  ) {
+    return getMakerStartedNotificationType({
+      ...notification,
+      type: storedType,
+    } as NormalizedCreateNotificationInput);
+  }
+
+  if (
+    notification.isPending === false &&
+    isMakerStartedNotificationType(storedType) &&
+    !isMakerStartedNotificationInput({
+      ...notification,
+      type: storedType,
+    } as NormalizedCreateNotificationInput)
+  ) {
+    return normalizeNotificationTypeValue(storedType, false);
+  }
+
+  return storedType;
 };
 
 const STARTED_NOTIFICATION_TYPES: LegacyNotificationType[] = [
@@ -2744,6 +2808,7 @@ export class NotificationService {
 
   private static async buildFetchFilters(params: {
     where: any;
+    moduleTypeWhere?: any;
   }): Promise<{
     status: NotificationFilterOption[];
     module: NotificationFilterOption[];
@@ -2757,6 +2822,8 @@ export class NotificationService {
         notification: {
           select: {
             companyId: true,
+            name: true,
+            message: true,
             type: true,
             referenceType: true,
             referenceId: true,
@@ -2765,6 +2832,22 @@ export class NotificationService {
         },
       },
     });
+    const moduleTypeRows = params.moduleTypeWhere
+      ? await prisma.notificationUser.findMany({
+          where: params.moduleTypeWhere,
+          select: {
+            notification: {
+              select: {
+                name: true,
+                message: true,
+                type: true,
+                referenceType: true,
+                isPending: true,
+              },
+            },
+          },
+        })
+      : rows;
 
     const statusCounts = new Map<string, number>();
     const moduleCounts = new Map<string, number>();
@@ -2772,16 +2855,18 @@ export class NotificationService {
 
     for (const row of rows) {
       NotificationService.addFilterOptionCount(statusCounts, row.status);
+    }
+
+    for (const row of moduleTypeRows) {
       NotificationService.addFilterOptionCount(
         moduleCounts,
         row.notification.referenceType,
       );
 
-      const storedType = getStoredNotificationTypeValue(
-        row.notification.type,
-        row.notification.isPending === true,
+      NotificationService.addFilterOptionCount(
+        typeCounts,
+        getNotificationFetchTypeValue(row.notification),
       );
-      NotificationService.addFilterOptionCount(typeCounts, storedType);
     }
 
     return {
@@ -2824,8 +2909,10 @@ export class NotificationService {
       notificationWhere.referenceType = { in: referenceTypes };
     }
 
-    if (notificationTypes.length > 0) {
-      notificationWhere.type = { in: notificationTypes };
+    const notificationTypeWhere =
+      buildNotificationTypeFetchWhere(notificationTypes);
+    if (notificationTypeWhere) {
+      Object.assign(notificationWhere, notificationTypeWhere);
     }
 
     if (dateRange !== 'ALL') {
@@ -2893,6 +2980,8 @@ export class NotificationService {
       status === 'ALL' && !statusValues ? scopedWhere : where;
     const filters = await NotificationService.buildFetchFilters({
       where: filterWhere,
+      moduleTypeWhere:
+        status === 'ALL' && !statusValues ? visibleBaseWhere : undefined,
     });
 
     const [unreadCount, allCount, hiddenCount, currentStatusCount, cursorRow] =
