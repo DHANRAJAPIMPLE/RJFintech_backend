@@ -12068,6 +12068,7 @@ export class UserDbController {
         include: {
           role: {
             select: {
+              category: true,
               subCategory: true,
               permissionLevel: true,
               isActive: true,
@@ -12084,7 +12085,10 @@ export class UserDbController {
 
       const countsMap: Record<
         string,
-        { MANAGER: Set<string>; USER: Set<string>; VIEWER: Set<string> }
+        Record<
+          string,
+          { MANAGER: Set<string>; USER: Set<string>; VIEWER: Set<string> }
+        >
       > = {};
 
       userAccesses.forEach((ua) => {
@@ -12100,53 +12104,63 @@ export class UserDbController {
           return;
         }
 
+        const category = String(ua.role?.category || '').trim();
         const subCat = String(ua.role?.subCategory || '').trim();
         const pLevel = ua.role?.permissionLevel?.toUpperCase();
 
         if (
+          category &&
           subCat &&
           pLevel &&
           (pLevel === 'MANAGER' || pLevel === 'USER' || pLevel === 'VIEWER')
         ) {
-          if (!countsMap[subCat]) {
-            countsMap[subCat] = {
+          if (!countsMap[category]) {
+            countsMap[category] = {};
+          }
+          if (!countsMap[category][subCat]) {
+            countsMap[category][subCat] = {
               MANAGER: new Set(),
               USER: new Set(),
               VIEWER: new Set(),
             };
           }
-          countsMap[subCat][pLevel as 'MANAGER' | 'USER' | 'VIEWER'].add(
-            ua.userId,
-          );
+          countsMap[category][subCat][
+            pLevel as 'MANAGER' | 'USER' | 'VIEWER'
+          ].add(ua.userId);
         }
       });
 
       const finalData: Record<string, any> = {};
 
-      Object.entries(countsMap).forEach(([subCat, levels]) => {
-        const managerCount = levels.MANAGER.size;
-        const userCount = levels.USER.size;
-        const viewerCount = levels.VIEWER.size;
+      Object.entries(countsMap).forEach(([category, subCategoryMap]) => {
+        Object.entries(subCategoryMap).forEach(([subCat, levels]) => {
+          const managerCount = levels.MANAGER.size;
+          const userCount = levels.USER.size;
+          const viewerCount = levels.VIEWER.size;
 
-        if (managerCount > 0 || userCount > 0 || viewerCount > 0) {
-          finalData[subCat] = [
-            {
-              label: 'Checker',
-              count: managerCount,
-              permissionlevel: 'MANAGER',
-            },
-            {
-              label: 'Maker',
-              count: userCount,
-              permissionlevel: 'USER',
-            },
-            {
-              label: 'Viewer',
-              count: viewerCount,
-              permissionlevel: 'VIEWER',
-            },
-          ];
-        }
+          if (managerCount > 0 || userCount > 0 || viewerCount > 0) {
+            if (!finalData[category]) {
+              finalData[category] = {};
+            }
+            finalData[category][subCat] = [
+              {
+                label: 'Checker',
+                count: managerCount,
+                permissionlevel: 'MANAGER',
+              },
+              {
+                label: 'Maker',
+                count: userCount,
+                permissionlevel: 'USER',
+              },
+              {
+                label: 'Viewer',
+                count: viewerCount,
+                permissionlevel: 'VIEWER',
+              },
+            ];
+          }
+        });
       });
 
       res.status(200).json({

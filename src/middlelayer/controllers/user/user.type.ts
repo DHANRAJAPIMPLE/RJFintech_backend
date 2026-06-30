@@ -200,8 +200,9 @@ export type UserNodePathCountItem = {
   permissionlevel: UserNodePathCountPermissionLevel;
 };
 
-export type FetchUsersByNodePathCountData = Partial<
-  Record<UserCompanyNodesSubCategory, UserNodePathCountItem[]>
+export type FetchUsersByNodePathCountData = Record<
+  string,
+  Partial<Record<string, UserNodePathCountItem[]>>
 >;
 
 export type FetchUsersByNodePathCountInternalResponse = {
