@@ -12050,38 +12050,33 @@ export class UserDbController {
         ),
       );
 
-      if (mappedUserIds.length === 0) {
-        return res.status(200).json({
-          message: 'User counts fetched successfully!',
-          code: 200,
-          data: {},
-        });
-      }
-
-      const userAccesses = await prisma.userAccess.findMany({
-        where: {
-          companyId,
-          userId: {
-            in: mappedUserIds,
-          },
-        },
-        include: {
-          role: {
-            select: {
-              category: true,
-              subCategory: true,
-              permissionLevel: true,
-              isActive: true,
+      const userAccesses =
+        mappedUserIds.length > 0
+          ? await prisma.userAccess.findMany({
+            where: {
+              companyId,
+              userId: {
+                in: mappedUserIds,
+              },
             },
-          },
-          orgStructure: {
-            select: {
-              nodePath: true,
-              status: true,
+            include: {
+              role: {
+                select: {
+                  category: true,
+                  subCategory: true,
+                  permissionLevel: true,
+                  isActive: true,
+                },
+              },
+              orgStructure: {
+                select: {
+                  nodePath: true,
+                  status: true,
+                },
+              },
             },
-          },
-        },
-      });
+          })
+          : [];
 
       const countsMap: Record<
         string,
@@ -12130,35 +12125,65 @@ export class UserDbController {
         }
       });
 
-      const finalData: Record<string, any> = {};
+      const categorySequence = [
+        'TRANSACTIONAL',
+        'OPERATIONAL',
+        'SYSTEM_ACCESS',
+      ] as const;
+      type OrderedUserCountCategory = (typeof categorySequence)[number];
+      const subCategorySequence: Record<OrderedUserCountCategory, string[]> = {
+        TRANSACTIONAL: ['ACCOUNTS', 'PAYMENTS', 'PURCHASE'],
+        OPERATIONAL: ['FIN_OPS', 'MASTER'],
+        SYSTEM_ACCESS: ['ORG_STR', 'USER_ACC', 'WORK_FLOW'],
+      };
+      const formatCountItems = (
+        levels?: {
+          MANAGER: Set<string>;
+          USER: Set<string>;
+          VIEWER: Set<string>;
+        },
+      ) => [
+        {
+          label: 'Checker',
+          count: levels?.MANAGER.size ?? 0,
+          permissionlevel: 'MANAGER',
+        },
+        {
+          label: 'Maker',
+          count: levels?.USER.size ?? 0,
+          permissionlevel: 'USER',
+        },
+        {
+          label: 'Viewer',
+          count: levels?.VIEWER.size ?? 0,
+          permissionlevel: 'VIEWER',
+        },
+      ];
+
+      const finalData: Record<string, Record<string, any>> = {};
+
+      categorySequence.forEach((category) => {
+        const categoryData: Record<string, any> = {};
+        finalData[category] = categoryData;
+        subCategorySequence[category].forEach((subCat) => {
+          categoryData[subCat] = formatCountItems(countsMap[category]?.[subCat]);
+        });
+      });
 
       Object.entries(countsMap).forEach(([category, subCategoryMap]) => {
+        if ((categorySequence as readonly string[]).includes(category)) {
+          return;
+        }
+
+        const categoryData: Record<string, any> = {};
+        finalData[category] = categoryData;
         Object.entries(subCategoryMap).forEach(([subCat, levels]) => {
           const managerCount = levels.MANAGER.size;
           const userCount = levels.USER.size;
           const viewerCount = levels.VIEWER.size;
 
           if (managerCount > 0 || userCount > 0 || viewerCount > 0) {
-            if (!finalData[category]) {
-              finalData[category] = {};
-            }
-            finalData[category][subCat] = [
-              {
-                label: 'Checker',
-                count: managerCount,
-                permissionlevel: 'MANAGER',
-              },
-              {
-                label: 'Maker',
-                count: userCount,
-                permissionlevel: 'USER',
-              },
-              {
-                label: 'Viewer',
-                count: viewerCount,
-                permissionlevel: 'VIEWER',
-              },
-            ];
+            categoryData[subCat] = formatCountItems(levels);
           }
         });
       });
