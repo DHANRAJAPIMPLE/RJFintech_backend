@@ -5017,6 +5017,27 @@ export class WorkflowDbController {
             )
           : null;
 
+      if (isPartialApproval && requestInitiatorId) {
+        await NotificationService.createRequestNotification({
+          companyId: request.companyId,
+          type: 'APPROVED',
+          name: `Workflow Level ${result.level} approved`,
+          message: `Workflow request approved at Level ${result.level} for ${workflowReferenceName}`,
+          referenceType: 'WORKFLOW',
+          referenceId: request.id,
+          referenceName: workflowReferenceName,
+          createdBy: approverId,
+          recipientUserIds: NotificationService.mergeRecipientUserIds(
+            requestInitiatorId,
+          ),
+          requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+            requestInitiatorId,
+          ),
+          isPending: false,
+          replacePreviousCompletedNotifications: true,
+        });
+      }
+
       await NotificationService.createRequestNotification({
         companyId: request.companyId,
         type: WorkflowDbController.getWorkflowNotificationType(
@@ -5041,6 +5062,7 @@ export class WorkflowDbController {
               approvedNodeRecipientUserIds,
             ),
         isPending: isPartialApproval,
+        replacePreviousCompletedNotifications: !isPartialApproval,
       });
 
       if (

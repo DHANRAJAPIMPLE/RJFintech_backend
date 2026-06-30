@@ -10522,6 +10522,7 @@ export class UserDbController {
           ),
           includeCreatedBy: true,
           isPending: false,
+          replacePreviousCompletedNotifications: true,
         });
       }
 
@@ -10541,11 +10542,11 @@ export class UserDbController {
           ...(isPartialApproval
             ? []
             : [
-              targetNotificationUserIds,
-              affectedNodeRecipientUserIds,
-              onboardedUserRecipientIds,
-              corpAdminUserIds,
-            ]),
+                targetNotificationUserIds,
+                affectedNodeRecipientUserIds,
+                onboardedUserRecipientIds,
+                corpAdminUserIds,
+              ]),
         ),
         requiredRecipientUserIds: isPartialApproval
           ? NotificationService.mergeRecipientUserIds(notificationRecipients)
@@ -10555,8 +10556,9 @@ export class UserDbController {
             affectedNodeRecipientUserIds,
             onboardedUserRecipientIds,
           ),
-        includeCreatedBy: true,
+        includeCreatedBy: !isPartialApproval,
         isPending: isPartialApproval,
+        replacePreviousCompletedNotifications: !isPartialApproval,
       });
 
       res.status(200).json({

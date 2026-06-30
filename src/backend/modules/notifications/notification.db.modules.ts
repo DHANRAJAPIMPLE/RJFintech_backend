@@ -66,6 +66,7 @@ type CreateNotificationInput = {
   requiredRecipientUserIds?: string[];
   includeCreatedBy?: boolean;
   isPending?: boolean;
+  replacePreviousCompletedNotifications?: boolean;
 };
 
 type NormalizedCreateNotificationInput = Omit<CreateNotificationInput, 'type'> & {
@@ -914,6 +915,7 @@ export class NotificationService {
       now: Date;
       excludeNotificationId?: string | null;
       includeStarted?: boolean;
+      includeCompleted?: boolean;
     },
   ) {
     const pendingNotifications = await tx.notification.findMany({
@@ -928,6 +930,14 @@ export class NotificationService {
                 {
                   isPending: false,
                   type: { in: STARTED_NOTIFICATION_TYPES },
+                },
+              ]
+            : []),
+          ...(params.includeCompleted
+            ? [
+                {
+                  isPending: false,
+                  type: { notIn: STARTED_NOTIFICATION_TYPES },
                 },
               ]
             : []),
@@ -2569,6 +2579,10 @@ export class NotificationService {
       (isPending || !isMakerStartedNotification);
     const shouldClearStartedNotifications =
       !isPending && !isMakerStartedNotification;
+    const shouldClearCompletedNotifications =
+      !isPending &&
+      !isMakerStartedNotification &&
+      normalizedInput.replacePreviousCompletedNotifications === true;
     const duplicateWindowStart = new Date(Date.now() - 2 * 60 * 1000);
     const requestedRecipients = NotificationService.unique(
       isMakerStartedNotification
@@ -2670,6 +2684,7 @@ export class NotificationService {
             now,
             excludeNotificationId: existingNotification.id,
             includeStarted: shouldClearStartedNotifications,
+            includeCompleted: shouldClearCompletedNotifications,
           });
         }
 
@@ -2711,6 +2726,7 @@ export class NotificationService {
           referenceId: normalizedInput.referenceId,
           now,
           includeStarted: shouldClearStartedNotifications,
+          includeCompleted: shouldClearCompletedNotifications,
         });
       }
 
@@ -2946,6 +2962,34 @@ export class NotificationService {
       }
     }
 
+    notificationWhere.AND = [
+      ...(Array.isArray(notificationWhere.AND) ? notificationWhere.AND : []),
+      {
+        OR: [
+          { isPending: true },
+          { type: { notIn: STARTED_NOTIFICATION_TYPES } },
+          {
+            AND: [
+              { createdBy: params.userId },
+              { type: { in: STARTED_NOTIFICATION_TYPES } },
+              {
+                name: {
+                  not: { contains: 'approval pending' },
+                },
+              },
+              {
+                message: {
+                  not: {
+                    contains: 'pending for your approval',
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
     const scopedWhere: any = {
       userId: params.userId,
       ...(includeAllCompanies ? {} : { companyId: params.companyId }),
@@ -3026,7 +3070,11 @@ export class NotificationService {
           },
         },
       },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: [
+        { notification: { createdAt: 'desc' } },
+        { createdAt: 'desc' },
+        { id: 'desc' },
+      ],
       ...(cursorId
         ? { cursor: { id: cursorId }, skip: 1 }
         : { skip: params.offset }),

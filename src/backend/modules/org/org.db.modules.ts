@@ -1468,6 +1468,27 @@ export class OrgStructureDbController {
     };
   }
 
+  private static getOrgLevelApprovalNotificationContent(
+    type: string | null | undefined,
+    referenceName: string,
+    level: number | null | undefined,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Organization modification'
+        : 'Organization onboarding';
+    const levelLabel =
+      typeof level === 'number' && Number.isFinite(level)
+        ? ` at Level ${level}`
+        : '';
+
+    return {
+      name: `${label} approved${levelLabel}`,
+      message: `${label} request approved${levelLabel} for ${referenceName}`,
+    };
+  }
+
   private static getOrgNotificationType(
     type: string | null | undefined,
     status: string | null | undefined,
@@ -4632,6 +4653,37 @@ export class OrgStructureDbController {
               isPartialApproval ? 'PENDING' : result?.status,
             );
 
+        if (isPartialApproval && requestInitiatorId) {
+          const levelApprovalNotificationContent =
+            OrgStructureDbController.getOrgLevelApprovalNotificationContent(
+              result?.type || requestType,
+              notificationSubject,
+              result?.level ?? null,
+            );
+
+          await NotificationService.createRequestNotification({
+            companyId: notificationCompanyId,
+            type: OrgStructureDbController.getOrgNotificationType(
+              result?.type || requestType,
+              result?.status,
+            ),
+            ...levelApprovalNotificationContent,
+            referenceType: 'ORG',
+            referenceId: id,
+            referenceName:
+              inactivationNotification?.nodePath || notificationSubject,
+            createdBy: approverId,
+            recipientUserIds: NotificationService.mergeRecipientUserIds(
+              requestInitiatorId,
+            ),
+            requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+              requestInitiatorId,
+            ),
+            isPending: false,
+            replacePreviousCompletedNotifications: true,
+          });
+        }
+
         await NotificationService.createRequestNotification({
           companyId: notificationCompanyId,
           type: notificationType,
@@ -4658,8 +4710,9 @@ export class OrgStructureDbController {
                 requestApproverIds,
                 approvedNodeRecipientUserIds,
               ),
-          includeCreatedBy: true,
+          includeCreatedBy: !isPartialApproval,
           isPending: isPartialApproval,
+          replacePreviousCompletedNotifications: !isPartialApproval,
         });
 
         if (
