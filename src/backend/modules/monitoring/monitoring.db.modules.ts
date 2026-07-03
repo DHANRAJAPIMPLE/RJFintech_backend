@@ -201,6 +201,24 @@ export const createApiSpanSafely = async (
       });
     }
 
+    if (
+      error instanceof Prisma.PrismaClientUnknownRequestError &&
+      error.message.includes('\\u0000')
+    ) {
+      return prisma.apiSpan.create({
+        data: {
+          ...data,
+          headers: toPrismaJson(data.headers ?? null),
+          reqBody: toPrismaJson(data.reqBody ?? null),
+          resBody: toPrismaJson(data.resBody ?? null),
+          resHeaders: toPrismaJson(data.resHeaders ?? null),
+          companyId: null,
+          userId: null,
+        },
+        select: apiSpanDetailSelect,
+      });
+    }
+
     throw error;
   }
 };

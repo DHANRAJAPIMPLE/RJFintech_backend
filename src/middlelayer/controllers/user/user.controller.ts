@@ -1015,6 +1015,75 @@ export class UserController {
       next(error);
     }
   }
+
+  static async downloadBulkUserUploadTemplate(
+    req: Request & { user?: { id: string; companyId?: string } },
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const companyId = req.user?.companyId;
+      if (!companyId) {
+        throw new AppError('Unauthorized', 401);
+      }
+
+      const maxAccess = Number(req.body?.maxAccess || 10);
+      const type =
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
+          : 'initiate';
+      const userId = req.user?.id;
+      if (type === 'modify' && !userId) {
+        throw new AppError('Unauthorized', 401);
+      }
+
+      const response = await fetch(
+        `${config.backendUrl}/internal/user/bulk-upload/template`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            companyId,
+            userId,
+            maxAccess,
+            type,
+            query: req.body?.query,
+            filter: req.body?.filter === true,
+            applied: req.body?.filter === true ? (req.body?.applied ?? null) : null,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        const errorData = contentType.includes('application/json')
+          ? await response.json()
+          : { message: await response.text() };
+        throw new AppError(
+          errorData?.message ||
+            errorData?.error ||
+            'Failed to generate bulk user upload template',
+          response.status,
+        );
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${type === 'modify' ? 'bulk_user_modify_template.xlsx' : 'bulk_user_upload_template.xlsx'}"`,
+      );
+      res.status(200).send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async fetchCompanyNodes(
     req: Request & { user?: { id: string; companyId: string } },
     res: Response<FetchCompanyNodesControllerResponse>,

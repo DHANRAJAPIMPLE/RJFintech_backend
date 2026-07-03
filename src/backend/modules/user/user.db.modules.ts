@@ -7,6 +7,10 @@ import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
 import { NotificationService } from '../notifications/notification.db.modules';
 import { HistoryUserUtil } from '../../utils/history-user.util';
 import { buildJsonPatch, cloneJson } from '../../utils/json-patch.util';
+import {
+  buildUserBulkUploadTemplate,
+  type UserBulkUploadTemplateRow,
+} from '../../utils/user-bulk-upload-template.util';
 
 type TextFilterOption = {
   label: string;
@@ -12202,6 +12206,385 @@ export class UserDbController {
         code: 200,
         data: finalData,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async downloadBulkUserUploadTemplate(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const companyId =
+        typeof req.body?.companyId === 'string' ? req.body.companyId : '';
+      const maxAccess = Number(req.body?.maxAccess || 10);
+      const templateType =
+        typeof req.body?.type === 'string'
+          ? req.body.type.trim().toLowerCase()
+          : 'initiate';
+
+      if (templateType === 'modify') {
+        return UserDbController.downloadBulkUserModifyTemplate(req, res, next);
+      }
+
+      if (!companyId) {
+        throw new AppError('Company id is required', 400);
+      }
+
+      const [roles, nodes, managers] = await Promise.all([
+        prisma.roles.findMany({
+          where: {
+            isActive: true,
+            roleCode: { not: 'SAAS_ADMIN' },
+          },
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+          },
+          orderBy: [{ category: 'asc' }, { subCategory: 'asc' }, { roleName: 'asc' }],
+        }),
+        prisma.orgStructure.findMany({
+          where: {
+            companyId,
+            status: 'ACTIVE',
+          },
+          select: {
+            nodeName: true,
+            nodePath: true,
+          },
+          orderBy: [{ nodePath: 'asc' }],
+        }),
+        prisma.userMapping.findMany({
+          where: {
+            companyId,
+            status: 'ACTIVE',
+          },
+          select: {
+            user: {
+              select: {
+                email: true,
+              },
+            },
+          },
+          orderBy: [{ user: { email: 'asc' } }],
+        }),
+      ]);
+
+      const buffer = await buildUserBulkUploadTemplate({
+        roles,
+        nodes,
+        managers: managers
+          .map((manager) => ({ email: manager.user.email }))
+          .filter((manager) => manager.email),
+        maxAccess,
+      });
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="bulk_user_upload_template.xlsx"',
+      );
+      res.status(200).send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async downloadBulkUserModifyTemplate(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const companyId =
+        typeof req.body?.companyId === 'string' ? req.body.companyId : '';
+      const userId = typeof req.body?.userId === 'string' ? req.body.userId : '';
+      const maxAccess = Number(req.body?.maxAccess || 10);
+      const query =
+        typeof req.body?.query === 'string' ? req.body.query.trim().toLowerCase() : '';
+      const applied = UserDbController.normalizeUserListAppliedFilters(
+        req.body?.applied,
+      );
+
+      if (!companyId || !userId) {
+        throw new AppError('Company id and user id are required', 400);
+      }
+
+      const viewerScope = await UserDbController.getFetchUserViewerScope(
+        userId,
+        companyId,
+      );
+
+      if (!viewerScope.isGlobal && viewerScope.visibleNodeIds.length === 0) {
+        throw new AppError('No accessible users found for modify template', 403);
+      }
+
+      const visibleNodeIdSet = new Set(viewerScope.visibleNodeIds);
+      const visibleNodePathSet = new Set(viewerScope.visibleNodePaths);
+
+      const [roles, nodes, managers, mappings] = await Promise.all([
+        prisma.roles.findMany({
+          where: {
+            isActive: true,
+            roleCode: { not: 'SAAS_ADMIN' },
+          },
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+          },
+          orderBy: [{ category: 'asc' }, { subCategory: 'asc' }, { roleName: 'asc' }],
+        }),
+        prisma.orgStructure.findMany({
+          where: {
+            companyId,
+            status: 'ACTIVE',
+            ...(viewerScope.isGlobal
+              ? {}
+              : {
+                id: {
+                  in: viewerScope.visibleNodeIds,
+                },
+              }),
+          },
+          select: {
+            id: true,
+            nodeName: true,
+            nodePath: true,
+          },
+          orderBy: [{ nodePath: 'asc' }],
+        }),
+        prisma.userMapping.findMany({
+          where: {
+            companyId,
+            status: 'ACTIVE',
+          },
+          select: {
+            user: {
+              select: {
+                email: true,
+              },
+            },
+          },
+          orderBy: [{ user: { email: 'asc' } }],
+        }),
+        prisma.userMapping.findMany({
+          where: {
+            companyId,
+            status: 'ACTIVE',
+          },
+          include: {
+            manager: {
+              select: {
+                email: true,
+              },
+            },
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+                userAccesses: {
+                  where: {
+                    companyId,
+                    role: {
+                      isActive: true,
+                    },
+                    orgStructure: {
+                      status: 'ACTIVE',
+                    },
+                    ...(viewerScope.isGlobal
+                      ? {}
+                      : {
+                        nodeId: {
+                          in: viewerScope.visibleNodeIds,
+                        },
+                      }),
+                  },
+                  include: {
+                    role: {
+                      select: {
+                        roleName: true,
+                        category: true,
+                        subCategory: true,
+                      },
+                    },
+                    orgStructure: {
+                      select: {
+                        id: true,
+                        nodeName: true,
+                        nodePath: true,
+                      },
+                    },
+                  },
+                  orderBy: [{ accessType: 'asc' }, { createdAt: 'asc' }],
+                },
+              },
+            },
+          },
+          orderBy: [{ user: { email: 'asc' } }],
+        }),
+      ]);
+
+      const nodeFilterValues = new Set(
+        (applied?.nodeValues || []).map((value) => value.toLowerCase()),
+      );
+      const designationFilter = new Set(
+        (applied?.designation || []).map((value) => value.toLowerCase()),
+      );
+      const categoryFilter = new Set(
+        (applied?.category || []).map((value) => value.toLowerCase()),
+      );
+      const subCategoryFilter = new Set(
+        (applied?.subCategory || []).map((value) => value.toLowerCase()),
+      );
+      const roleFilter = new Set(
+        (applied?.role || []).map((value) => value.toLowerCase()),
+      );
+      const managerFilter = new Set(
+        (applied?.reportingManager || []).map((value) => value.toLowerCase()),
+      );
+
+      const templateRows: UserBulkUploadTemplateRow[] = mappings
+        .map((mapping) => {
+          const visibleAccesses = mapping.user.userAccesses.filter((access) => {
+            const nodePath = access.orgStructure?.nodePath || '';
+            if (!viewerScope.isGlobal) {
+              const isVisible =
+                visibleNodeIdSet.has(access.orgStructure.id) ||
+                visibleNodePathSet.has(nodePath);
+              if (!isVisible) return false;
+            }
+
+            if (nodeFilterValues.size > 0) {
+              const matchesNode =
+                nodeFilterValues.has(nodePath.toLowerCase()) ||
+                nodeFilterValues.has(
+                  String(access.orgStructure?.nodeName || '').toLowerCase(),
+                );
+              if (!matchesNode) return false;
+            }
+
+            if (
+              categoryFilter.size > 0 &&
+              !categoryFilter.has(String(access.role?.category || '').toLowerCase())
+            ) {
+              return false;
+            }
+
+            if (
+              subCategoryFilter.size > 0 &&
+              !subCategoryFilter.has(
+                String(access.role?.subCategory || '').toLowerCase(),
+              )
+            ) {
+              return false;
+            }
+
+            if (
+              roleFilter.size > 0 &&
+              !roleFilter.has(String(access.role?.roleName || '').toLowerCase())
+            ) {
+              return false;
+            }
+
+            return true;
+          });
+
+          return {
+            mapping,
+            visibleAccesses,
+          };
+        })
+        .filter(({ mapping, visibleAccesses }) => {
+          if (visibleAccesses.length === 0) return false;
+
+          if (
+            designationFilter.size > 0 &&
+            !designationFilter.has(String(mapping.designation || '').toLowerCase())
+          ) {
+            return false;
+          }
+
+          const managerEmail = String(mapping.manager?.email || '').toLowerCase();
+          if (managerFilter.size > 0 && !managerFilter.has(managerEmail)) {
+            return false;
+          }
+
+          if (query) {
+            const searchable = [
+              mapping.user.name,
+              mapping.user.email,
+              mapping.user.phone,
+              mapping.designation,
+              mapping.employeeId,
+              mapping.manager?.email,
+              ...visibleAccesses.flatMap((access) => [
+                access.role?.roleName,
+                access.role?.category,
+                access.role?.subCategory,
+                access.orgStructure?.nodeName,
+                access.orgStructure?.nodePath,
+              ]),
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase();
+            if (!searchable.includes(query)) return false;
+          }
+
+          return true;
+        })
+        .map(({ mapping, visibleAccesses }) => ({
+          name: mapping.user.name,
+          email: mapping.user.email,
+          phone: mapping.user.phone,
+          designation: mapping.designation,
+          employeeId: mapping.employeeId,
+          reportingManagerEmail: mapping.manager?.email || '',
+          inactive: false,
+          archive: false,
+          accesses: visibleAccesses.map((access) => ({
+            accessType: access.accessType,
+            roleName: access.role?.roleName || '',
+            roleCategory: access.role?.category || '',
+            roleSubCategory: access.role?.subCategory || '',
+            nodeName: access.orgStructure?.nodeName || '',
+            nodePath: access.orgStructure?.nodePath || '',
+            accessCategory: access.accessCategory,
+          })),
+        }));
+
+      const buffer = await buildUserBulkUploadTemplate({
+        roles,
+        nodes: nodes.map((node) => ({
+          nodeName: node.nodeName,
+          nodePath: node.nodePath,
+        })),
+        managers: managers
+          .map((manager) => ({ email: manager.user.email }))
+          .filter((manager) => manager.email),
+        maxAccess,
+        templateType: 'MODIFY',
+        rows: templateRows,
+      });
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="bulk_user_modify_template.xlsx"',
+      );
+      res.status(200).send(buffer);
     } catch (error) {
       next(error);
     }

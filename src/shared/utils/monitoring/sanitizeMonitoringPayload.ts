@@ -1,9 +1,13 @@
 const MAX_JSON_SIZE_BYTES = 50_000;
 const MASKED_VALUE = '***MASKED***';
+const POSTGRES_UNSUPPORTED_NULL_BYTE = /\u0000/g;
 
 const sensitiveKeys: ReadonlySet<string> = new Set([]);
 
 const normalizeKey = (key: string) => key.toLowerCase().replace(/[_\s-]/g, '');
+
+const sanitizeString = (value: string) =>
+  value.replace(POSTGRES_UNSUPPORTED_NULL_BYTE, '');
 
 const sanitizeRecursive = (value: unknown, seen: WeakSet<object>): unknown => {
   if (value === null || value === undefined) return value ?? null;
@@ -13,11 +17,15 @@ const sanitizeRecursive = (value: unknown, seen: WeakSet<object>): unknown => {
   }
 
   if (Buffer.isBuffer(value)) {
-    return value.toString('utf8');
+    return sanitizeString(value.toString('utf8'));
   }
 
   if (value instanceof Date) {
     return value.toISOString();
+  }
+
+  if (typeof value === 'string') {
+    return sanitizeString(value);
   }
 
   if (Array.isArray(value)) {

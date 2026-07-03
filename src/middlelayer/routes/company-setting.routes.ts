@@ -188,6 +188,12 @@ router.post(
 );
 
 router.post(
+  '/user/bulk-upload/template',
+  authorizeUserInitiate,
+  UserController.downloadBulkUserUploadTemplate,
+);
+
+router.post(
   '/user/action',
   authorize('approve', 'USER_ACC'),
   UserController.actionUserOnboarding,
