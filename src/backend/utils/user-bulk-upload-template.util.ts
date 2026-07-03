@@ -247,6 +247,9 @@ export const buildUserBulkUploadTemplate = async ({
   addHeaderNote(3, 'Required. Phone number must contain 10 to 15 digits.');
   addHeaderNote(6, 'Required. Select reporting manager email from dropdown.');
   if (isModifyTemplate) {
+    addHeaderNote(2, 'Locked in modify template. Email is used to identify the user.');
+    addHeaderNote(5, 'Locked in modify template.');
+    addHeaderNote(6, 'Locked in modify template.');
     addHeaderNote(7, 'Optional. Select TRUE to mark user inactive.');
     addHeaderNote(8, 'Optional. Select TRUE to archive user.');
   }
@@ -254,7 +257,10 @@ export const buildUserBulkUploadTemplate = async ({
   const baseColumnCount = baseColumns.length;
   const accessStartColumn = baseColumnCount + 1;
 
-  Array.from({ length: baseColumnCount }, (_, index) => index + 1).forEach((columnNumber) =>
+  const editableBaseColumns = isModifyTemplate
+    ? [1, 3, 4, 7, 8]
+    : Array.from({ length: baseColumnCount }, (_, index) => index + 1);
+  editableBaseColumns.forEach((columnNumber) =>
     unlockDataCells(usersSheet, columnNumber),
   );
 
