@@ -18,10 +18,15 @@ const normalizeNodeIdentifier = (value: unknown): string | undefined => {
   return normalizeNodeIdentifier(node.nodePath);
 };
 
-const getTargetNode = (body: any): string | undefined => {
+const getTargetNode = (body: any, moduleName?: string): string | undefined => {
+  if (moduleName === 'ORG_STR' && body?.pending === true) {
+    return normalizeNodeIdentifier(body?.parentNodePath);
+  }
+
   const data = body?.data;
   const candidates = [
     body?.nodePath,
+    body?.target?.nodePath,
     body?.parentNode,
     body?.node,
     data?.nodePath,
@@ -78,7 +83,7 @@ export const authorize = (
 
       // Extract node context if available. Initiate requests also send the
       // full body so the backend can inspect nested org/workflow/user nodes.
-      const targetNode = getTargetNode(req.body);
+      const targetNode = getTargetNode(req.body, module);
 
       if (!userId || !companyId) {
         throw new AppError('Unauthorized: User information missing', 401);

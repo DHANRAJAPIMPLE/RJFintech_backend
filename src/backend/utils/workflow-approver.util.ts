@@ -23,6 +23,7 @@ interface ResolveApproversParams {
   companyId: string;
   nodeId: string;
   initiatorId: string;
+  excludedUserIds?: string[];
   reqId: string;
   reqTable: string;
 }
@@ -42,6 +43,14 @@ interface WorkflowLevelLike {
   approver1: string;
   approver2?: string | null;
   approverType: string;
+}
+
+interface ResolveApproversResult {
+  workflowId: string;
+  approvers: any[];
+  eligibleApprovers: string[];
+  currentLevelApprovers: string[];
+  autoApprove: boolean;
 }
 
 interface ApproverRowDraft {
@@ -65,6 +74,10 @@ interface HistoryConfig {
   field: string;
 }
 
+interface RequestConfig {
+  table: string;
+}
+
 /**
  * WorkflowApproverUtil is the single source of truth for workflow approver
  * resolution. Controllers should create the business request first, then call
@@ -80,7 +93,7 @@ export class WorkflowApproverUtil {
   static async resolveAndCreateApprovers(
     tx: TxClient,
     params: ResolveApproversParams,
-  ) {
+  ): Promise<ResolveApproversResult> {
     const {
       levelsHash,
       module,
@@ -88,9 +101,11 @@ export class WorkflowApproverUtil {
       companyId,
       nodeId,
       initiatorId,
+      excludedUserIds = [],
       reqId,
       reqTable,
     } = params;
+    const excludedApproverIds = new Set([initiatorId, ...excludedUserIds]);
 
     const requestNode = await (tx as any).orgStructure.findUnique({
       where: { id: nodeId },
@@ -116,6 +131,9 @@ export class WorkflowApproverUtil {
       levelsHash,
       subModule,
     });
+    const approvalLevels = levels.filter(
+      (level) => !this.isNoApproverLevel(level),
+    );
 
     const rmChain = await this.getReportingManagerChain(
       tx,
@@ -135,7 +153,7 @@ export class WorkflowApproverUtil {
     const approverRows: ApproverRowDraft[] = [];
     const requestEligibleApprovers = new Set<string>();
 
-    for (const level of levels) {
+    for (const level of approvalLevels) {
       const approverSet = new Set<string>();
 
       const primaryApprovers = await this.resolveByApproverType(tx, {
@@ -162,9 +180,9 @@ export class WorkflowApproverUtil {
 
       globalAccessUsers.forEach((id) => approverSet.add(id));
 
-      // Maker-checker separation starts at persisted approver resolution so
-      // the initiator never appears as an eligible approver for the request.
-      approverSet.delete(initiatorId);
+      // Maker-checker and target-user separation start at persisted approver
+      // resolution so excluded users never appear as eligible approvers.
+      excludedApproverIds.forEach((id) => approverSet.delete(id));
 
       const mandatoryCount = this.getMandatoryCount(level);
       const approversList = Array.from(approverSet);
@@ -211,10 +229,15 @@ export class WorkflowApproverUtil {
       Array.from(requestEligibleApprovers),
     );
 
+    const currentLevelApprovers = approverRows
+      .sort((left, right) => left.level - right.level)[0]?.approversList || [];
+
     return {
       workflowId: workflow.id,
       approvers: created,
       eligibleApprovers: Array.from(requestEligibleApprovers),
+      currentLevelApprovers: this.unique(currentLevelApprovers),
+      autoApprove: approverRows.length === 0,
     };
   }
 
@@ -241,6 +264,7 @@ export class WorkflowApproverUtil {
           companyId: opts.companyId,
           module: opts.module,
           subModule: opts.subModule,
+          status: 'ACTIVE',
         },
         select: { id: true, name: true },
       });
@@ -261,6 +285,7 @@ export class WorkflowApproverUtil {
         module: opts.module,
         subModule: opts.subModule,
         name: { contains: 'DEFAULT' },
+        status: 'ACTIVE',
       },
       orderBy: { createdAt: 'desc' },
       select: { id: true, name: true },
@@ -361,6 +386,9 @@ export class WorkflowApproverUtil {
           opts.node.nodePath,
           opts.subModule,
         );
+
+      case 'NO_APPROVER':
+        return [];
 
       default:
         return this.getAllEligibleApproverIds(
@@ -504,12 +532,7 @@ export class WorkflowApproverUtil {
       this.getGlobalAccessUserIds(tx, companyId, subModule),
       this.getNodeApprovers(tx, companyId, node.id, subModule),
       this.getHierarchyApprovers(tx, companyId, node.nodePath, subModule),
-      this.filterUserIdsBySubModuleApproval(
-        tx,
-        companyId,
-        rmChain,
-        subModule,
-      ),
+      this.filterUserIdsBySubModuleApproval(tx, companyId, rmChain, subModule),
     ]);
 
     [...globalIds, ...nodeIds, ...hierarchyIds, ...managerIds].forEach((id) =>
@@ -581,6 +604,36 @@ export class WorkflowApproverUtil {
   }
 
   /**
+   * Keeps only users who are actively mapped to the provided company.
+   * This protects runtime approver displays from stale or cross-company IDs.
+   */
+  static async filterUsersToActiveCompanyMembers(
+    tx: TxClient,
+    companyId: string,
+    userIds: string[],
+  ): Promise<string[]> {
+    const normalizedUserIds = this.unique(userIds);
+    if (normalizedUserIds.length === 0) return [];
+
+    const mappings = await (tx as any).userMapping.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        userId: { in: normalizedUserIds },
+      },
+      select: { userId: true },
+    });
+
+    const activeUserIds = new Set<string>(
+      mappings.map((mapping: any) => String(mapping.userId || '').trim()),
+    );
+
+    return normalizedUserIds.filter((userId: string) =>
+      activeUserIds.has(userId),
+    );
+  }
+
+  /**
    * Returns the flat current eligible approver list for a request. The stored
    * workflow_approver rows are authoritative, and already-approved users are
    * removed so callers do not offer an approval action twice.
@@ -594,7 +647,11 @@ export class WorkflowApproverUtil {
       orderBy: { level: 'asc' },
     });
 
-    const initiatorId = await this.getInitiatorId(prisma as any, reqId, reqTable);
+    const initiatorId = await this.getInitiatorId(
+      prisma as any,
+      reqId,
+      reqTable,
+    );
     const approvedUsers = new Set(
       await this.getApprovedUserIds(prisma as any, reqId, reqTable),
     );
@@ -729,7 +786,7 @@ export class WorkflowApproverUtil {
    * and users who have already approved this request.
    */
   static async getEnrichedApproverIds(
-    _companyId: string,
+    companyId: string,
     storedApproverIds: string[],
     initiatorId: string | null,
     _subModule: string,
@@ -738,7 +795,13 @@ export class WorkflowApproverUtil {
     const excludedUsers = new Set(approvedUserIds);
     if (initiatorId) excludedUsers.add(initiatorId);
 
-    return this.unique(storedApproverIds).filter(
+    const companyScopedApprovers = await this.filterUsersToActiveCompanyMembers(
+      prisma as any,
+      companyId,
+      storedApproverIds,
+    );
+
+    return companyScopedApprovers.filter(
       (userId) => !excludedUsers.has(userId),
     );
   }
@@ -771,6 +834,10 @@ export class WorkflowApproverUtil {
     return level.approverType === 'AND' && level.approver2 ? 2 : 1;
   }
 
+  private static isNoApproverLevel(level: WorkflowLevelLike) {
+    return level.approver1 === 'NO_APPROVER' && !level.approver2;
+  }
+
   private static getAncestorPaths(nodePath: string): string[] {
     if (!nodePath) return [];
     const parts = nodePath.split('.');
@@ -796,6 +863,16 @@ export class WorkflowApproverUtil {
     };
 
     return historyMap[reqTable] ?? null;
+  }
+
+  private static getRequestConfig(reqTable: string): RequestConfig | null {
+    const requestMap: Record<string, RequestConfig> = {
+      user_onboarding: { table: 'userOnboarding' },
+      org_structure_req: { table: 'orgStructureReq' },
+      workflow_req: { table: 'workflowReq' },
+    };
+
+    return requestMap[reqTable] ?? null;
   }
 
   private static async getApprovedUserIds(
@@ -835,7 +912,19 @@ export class WorkflowApproverUtil {
       select: { eventUserId: true },
     });
 
-    return initiatorLog?.eventUserId || null;
+    if (initiatorLog?.eventUserId) {
+      return initiatorLog.eventUserId;
+    }
+
+    const requestConfig = this.getRequestConfig(reqTable);
+    if (!requestConfig) return null;
+
+    const request = await (tx as any)[requestConfig.table].findUnique({
+      where: { id: reqId },
+      select: { initiatorId: true },
+    });
+
+    return request?.initiatorId || null;
   }
 
   private static async getNextPendingLevel(
@@ -848,8 +937,6 @@ export class WorkflowApproverUtil {
       orderBy: { level: 'asc' },
     });
   }
-
-
 
   private static async syncPendingEligibleApprovers(
     tx: TxClient,
@@ -941,10 +1028,7 @@ export class WorkflowApproverUtil {
         seenUsers.add(userId);
 
         const assignedSlot = userToSlot.get(userId);
-        if (
-          assignedSlot === undefined ||
-          tryAssign(assignedSlot, seenUsers)
-        ) {
+        if (assignedSlot === undefined || tryAssign(assignedSlot, seenUsers)) {
           userToSlot.set(userId, slotIndex);
           return true;
         }
@@ -980,7 +1064,11 @@ export class WorkflowApproverUtil {
     },
   ) {
     const pendingRows = await (tx as any).workflowApprover.findMany({
-      where: { reqId: opts.reqId, reqTable: opts.reqTable, status: 'PENDING' },
+      where: {
+        reqId: opts.reqId,
+        reqTable: opts.reqTable,
+        status: 'PENDING',
+      },
       orderBy: { level: 'asc' },
       select: {
         level: true,
@@ -995,15 +1083,19 @@ export class WorkflowApproverUtil {
     );
     consumedApprovers.add(opts.approverId);
 
-    const initiatorId = await this.getInitiatorId(tx, opts.reqId, opts.reqTable);
+    const initiatorId = await this.getInitiatorId(
+      tx,
+      opts.reqId,
+      opts.reqTable,
+    );
     if (initiatorId) consumedApprovers.add(initiatorId);
 
     for (const row of pendingRows) {
       if (row.level < opts.level) continue;
 
-      const approversList = this
-        .toStringArray(row.approversList)
-        .filter((id) => !consumedApprovers.has(id));
+      const approversList = this.toStringArray(row.approversList).filter(
+        (id) => !consumedApprovers.has(id),
+      );
 
       if (row.level === opts.level) {
         if (opts.currentLevelSatisfied) continue;

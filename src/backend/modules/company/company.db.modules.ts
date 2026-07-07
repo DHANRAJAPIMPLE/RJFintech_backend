@@ -2,12 +2,483 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../lib/prisma';
 import { HashUtil } from '../../../shared/utils/hash.util';
 import { AppError } from '../../middlewares/error.middleware';
+import { NotificationService } from '../notifications/notification.db.modules';
+import { HistoryUserUtil } from '../../utils/history-user.util';
+import {
+  appendCursorWhere,
+  buildPage,
+  getInMemoryPageRows,
+  getPageOrder,
+  isRowInCursorDirection,
+  resolveCursorPagination,
+} from '../../../shared/utils/cursor-pagination.util';
+
+type NormalizedCompanyListAppliedFilters = {
+  incorporationDate: {
+    from: Date | null;
+    to: Date | null;
+  } | null;
+  gstCode: boolean | null;
+  ieCode: boolean | null;
+  signatoryCounts: number[];
+};
 
 /**
  * Controller for managing company records, group associations, and the company onboarding lifecycle.
  * Handles the transition from a pending company request to a live production environment.
  */
 export class CompanyDbController {
+  private static normalizeFilterText(value: unknown) {
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim();
+    return normalized || null;
+  }
+
+  private static parseYesNoFilter(value: unknown) {
+    const normalized =
+      CompanyDbController.normalizeFilterText(value)?.toLowerCase();
+    if (normalized === 'yes') return true;
+    if (normalized === 'no') return false;
+    return null;
+  }
+
+  private static hasTextValue(value: unknown) {
+    return typeof value === 'string'
+      ? value.trim().length > 0
+      : value !== null && value !== undefined;
+  }
+
+  private static parseCompanyFilterDateRange(applied: any) {
+    const incorporationDate =
+      applied && typeof applied === 'object'
+        ? (applied.incorporationDate ?? applied.incorperationDate)
+        : null;
+    if (!incorporationDate || typeof incorporationDate !== 'object') {
+      return null;
+    }
+
+    const parseBoundary = (
+      value: unknown,
+      boundary: 'start' | 'end',
+    ): Date | null => {
+      const normalized = CompanyDbController.normalizeFilterText(value);
+      if (!normalized) return null;
+
+      const suffix = boundary === 'start' ? 'T00:00:00.000Z' : 'T23:59:59.999Z';
+      const parsed = new Date(`${normalized}${suffix}`);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    const startOfDay = (date: Date) =>
+      new Date(
+        Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+      );
+    const endOfDay = (date: Date) =>
+      new Date(
+        Date.UTC(
+          date.getUTCFullYear(),
+          date.getUTCMonth(),
+          date.getUTCDate(),
+          23,
+          59,
+          59,
+          999,
+        ),
+      );
+
+    const explicitFrom = parseBoundary(incorporationDate.fromDate, 'start');
+    const explicitTo = parseBoundary(incorporationDate.toDate, 'end');
+    const range = CompanyDbController.normalizeFilterText(
+      incorporationDate.dateRange,
+    )?.toUpperCase();
+
+    if (range === 'CUSTOM') {
+      if (!explicitFrom || !explicitTo) {
+        throw new AppError(
+          'fromDate and toDate are required when dateRange is CUSTOM',
+          400,
+        );
+      }
+
+      if (explicitFrom > explicitTo) {
+        throw new AppError(
+          'fromDate must be earlier than or equal to toDate',
+          400,
+        );
+      }
+
+      return { from: explicitFrom, to: explicitTo };
+    }
+
+    if (explicitFrom || explicitTo) {
+      return { from: explicitFrom, to: explicitTo };
+    }
+
+    if (!range) return null;
+
+    const now = new Date();
+    const todayStart = startOfDay(now);
+    const todayEnd = endOfDay(now);
+    const from = new Date(todayStart);
+
+    if (range === '7DAYS') {
+      from.setUTCDate(from.getUTCDate() - 6);
+    } else if (range === '15DAYS') {
+      from.setUTCDate(from.getUTCDate() - 14);
+    } else if (range === '1MONTH') {
+      from.setUTCMonth(from.getUTCMonth() - 1);
+    } else {
+      return null;
+    }
+
+    return { from, to: todayEnd };
+  }
+
+  private static normalizeSignatoryCounts(value: unknown) {
+    const rawValues = Array.isArray(value) ? value : [value];
+    return Array.from(
+      new Set(
+        rawValues
+          .map((rawValue) => Number(rawValue))
+          .filter(
+            (count) => Number.isInteger(count) && count >= 2 && count <= 5,
+          ),
+      ),
+    );
+  }
+
+  private static normalizeCompanyListAppliedFilters(
+    applied: unknown,
+  ): NormalizedCompanyListAppliedFilters | null {
+    const source =
+      applied && typeof applied === 'object'
+        ? (applied as Record<string, unknown>)
+        : null;
+    if (!source) return null;
+
+    const normalized: NormalizedCompanyListAppliedFilters = {
+      incorporationDate:
+        CompanyDbController.parseCompanyFilterDateRange(source),
+      gstCode: CompanyDbController.parseYesNoFilter(
+        source.gstcode ?? source.gstCode,
+      ),
+      ieCode: CompanyDbController.parseYesNoFilter(
+        source.isCode ?? source.ieCode,
+      ),
+      signatoryCounts: CompanyDbController.normalizeSignatoryCounts(
+        source.signatoryCount,
+      ),
+    };
+
+    const hasFilters =
+      normalized.incorporationDate !== null ||
+      normalized.gstCode !== null ||
+      normalized.ieCode !== null ||
+      normalized.signatoryCounts.length > 0;
+
+    return hasFilters ? normalized : null;
+  }
+
+  private static matchesDateRange(
+    value: unknown,
+    range: NormalizedCompanyListAppliedFilters['incorporationDate'],
+  ) {
+    if (!range) return true;
+
+    const date = value instanceof Date ? value : new Date(String(value || ''));
+    if (Number.isNaN(date.getTime())) return false;
+    if (range.from && date < range.from) return false;
+    if (range.to && date > range.to) return false;
+    return true;
+  }
+
+  private static getCompanySignatoryCount(company: any) {
+    if (Array.isArray(company?.signatories)) return company.signatories.length;
+    if (Array.isArray(company?.userAccesses)) {
+      return company.userAccesses.filter(
+        (userAccess: any) => userAccess?.roleCode === 'CORP_ADMIN',
+      ).length;
+    }
+    return 0;
+  }
+
+  private static buildCompanySignatories(company: any) {
+    if (!Array.isArray(company?.userAccesses)) return [];
+
+    return company.userAccesses
+      .filter((userAccess: any) => userAccess?.roleCode === 'CORP_ADMIN')
+      .map((userAccess: any) => {
+        const mapping = Array.isArray(userAccess.user?.userMappings)
+          ? userAccess.user.userMappings.find(
+              (userMapping: any) =>
+                userMapping.companyId === company.id &&
+                userMapping.status === 'ACTIVE',
+            )
+          : null;
+
+        return {
+          name: userAccess.user?.name || '',
+          email: userAccess.user?.email || '',
+          phone: userAccess.user?.phone || '',
+          designation: mapping?.designation || null,
+          employeeId: mapping?.employeeId || null,
+        };
+      });
+  }
+
+  private static matchesAppliedCompanyFilters(
+    company: any,
+    filters: NormalizedCompanyListAppliedFilters | null,
+    isPendingRecord = false,
+  ) {
+    if (!filters) return true;
+
+    const companyData = isPendingRecord
+      ? (company?.data as any)?.company || {}
+      : company;
+    const signatories = isPendingRecord
+      ? (company?.data as any)?.signatories
+      : company?.signatories;
+    const signatoryCount = Array.isArray(signatories)
+      ? signatories.length
+      : CompanyDbController.getCompanySignatoryCount(company);
+    const registrationDate = isPendingRecord
+      ? companyData.registeredAt
+      : companyData.registrationDate;
+    const gstValue = isPendingRecord ? companyData.gst : companyData.gstNumber;
+    const ieValue = isPendingRecord ? companyData.ieCode : companyData.ieCode;
+
+    if (
+      !CompanyDbController.matchesDateRange(
+        registrationDate,
+        filters.incorporationDate,
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      filters.gstCode !== null &&
+      CompanyDbController.hasTextValue(gstValue) !== filters.gstCode
+    ) {
+      return false;
+    }
+
+    if (
+      filters.ieCode !== null &&
+      CompanyDbController.hasTextValue(ieValue) !== filters.ieCode
+    ) {
+      return false;
+    }
+
+    if (
+      filters.signatoryCounts.length > 0 &&
+      !filters.signatoryCounts.includes(signatoryCount)
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private static matchesPendingCompanyQuery(onboarding: any, query: string) {
+    const normalizedQuery = query.toLowerCase();
+    const data = onboarding.data as any;
+    return [
+      onboarding.companyCode,
+      onboarding.groupCode,
+      data?.company?.name,
+      data?.company?.gst,
+      data?.company?.ieCode,
+      data?.group?.name,
+    ].some(
+      (value) =>
+        typeof value === 'string' &&
+        value.toLowerCase().includes(normalizedQuery),
+    );
+  }
+
+  private static async resolveNotificationCompanyId(
+    userId?: string,
+    companyId?: string | null,
+  ) {
+    if (companyId) return companyId;
+    if (!userId) return null;
+
+    const mapping = await prisma.userMapping.findFirst({
+      where: { userId, status: 'ACTIVE' },
+      select: { companyId: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return mapping?.companyId || null;
+  }
+
+  private static getCompanyProvisioningUserLabel(user: {
+    name?: string | null;
+    email?: string | null;
+  }) {
+    const name =
+      typeof user.name === 'string' && user.name.trim() ? user.name.trim() : '';
+    const email =
+      typeof user.email === 'string' && user.email.trim()
+        ? user.email.trim()
+        : '';
+
+    if (name && email) return `${name} (${email})`;
+    if (name) return name;
+    if (email) return email;
+    return 'Unknown user';
+  }
+
+  private static async sendCompanyProvisioningNotifications(params: {
+    companyId: string;
+    companyName: string;
+    approverId: string;
+    rootNodeReqId: string;
+    rootNodeName: string;
+    rootNodePath: string;
+    createdUsers: Array<{
+      userId: string;
+      name?: string | null;
+      email?: string | null;
+    }>;
+    workflows: Array<{
+      workflowReqId: string;
+      name: string;
+      subModule: string;
+    }>;
+  }) {
+    const {
+      companyId,
+      companyName,
+      approverId,
+      rootNodeReqId,
+      rootNodeName,
+      rootNodePath,
+      createdUsers,
+      workflows,
+    } = params;
+
+    const corpAdminUserIds =
+      await NotificationService.getCorpAdminUserIds(companyId);
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      corpAdminUserIds,
+      createdUsers.map((user) => user.userId),
+    );
+    const notificationTasks: Promise<unknown>[] = [];
+
+    for (const user of createdUsers) {
+      const userLabel = CompanyDbController.getCompanyProvisioningUserLabel(
+        user,
+      );
+      notificationTasks.push(
+        NotificationService.createRequestNotification({
+          companyId,
+          type: 'ONBOARDED',
+          referenceType: 'USER',
+          referenceId: user.userId,
+          referenceName: user.email || user.name || user.userId,
+          createdBy: approverId,
+          recipientUserIds,
+          requiredRecipientUserIds: [approverId],
+          isPending: false,
+          name: 'Company user added',
+          message: `${companyName} added user ${userLabel}`,
+        }),
+      );
+    }
+
+    notificationTasks.push(
+      NotificationService.createRequestNotification({
+        companyId,
+        type: 'ONBOARDED',
+        referenceType: 'ORG',
+        referenceId: rootNodeReqId,
+        referenceName: `${rootNodeName} (${rootNodePath})`,
+        createdBy: approverId,
+        recipientUserIds,
+        requiredRecipientUserIds: [approverId],
+        isPending: false,
+        name: 'Company organization added',
+        message: `${companyName} added organization ${rootNodeName} (${rootNodePath})`,
+      }),
+    );
+
+    for (const workflow of workflows) {
+      notificationTasks.push(
+        NotificationService.createRequestNotification({
+          companyId,
+          type: 'ONBOARDED',
+          referenceType: 'WORKFLOW',
+          referenceId: workflow.workflowReqId,
+          referenceName: workflow.name,
+          createdBy: approverId,
+          recipientUserIds,
+          requiredRecipientUserIds: [approverId],
+          isPending: false,
+          name: 'Company workflow added',
+          message: `${companyName} added workflow ${workflow.name} for ${workflow.subModule}`,
+        }),
+      );
+    }
+
+    await Promise.all(notificationTasks);
+  }
+
+  private static async getPendingInitiationMetaByCompanyCodes(
+    companyCodes: string[],
+    viewerUserId?: string | null,
+  ) {
+    const uniqueCompanyCodes = Array.from(
+      new Set(
+        companyCodes.filter(
+          (companyCode): companyCode is string =>
+            typeof companyCode === 'string' && companyCode.trim().length > 0,
+        ),
+      ),
+    );
+    if (uniqueCompanyCodes.length === 0) {
+      return new Map<string, { initiator: unknown; initiatedDate: Date }>();
+    }
+
+    const histories = await prisma.companyHistory.findMany({
+      where: {
+        companyCode: { in: uniqueCompanyCodes },
+        event: 'INITIATE',
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+      viewerUserId,
+      ...histories.map((history) => history.eventUserId),
+    ]);
+    const initiationMetaByCompanyCode = new Map<
+      string,
+      { initiator: unknown; initiatedDate: Date }
+    >();
+
+    histories.forEach((history) => {
+      if (!initiationMetaByCompanyCode.has(history.companyCode)) {
+        initiationMetaByCompanyCode.set(history.companyCode, {
+          initiator: HistoryUserUtil.formatAuditUser(
+            history.user,
+            history.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+          initiatedDate: history.createdAt,
+        });
+      }
+    });
+
+    return initiationMetaByCompanyCode;
+  }
+
   /**
    * Fetches all companies that a specific user is mapped to.
    */
@@ -29,12 +500,7 @@ export class CompanyDbController {
   }
 
   /**
-   * Fetches a structured view of all company records for the administration panel.
-   * This method performs a multi-step aggregation:
-   * 1. Retrieves Group Companies and their associated Active companies.
-   * 2. Retrieves Solo Companies (those not mapped to any group).
-   * 3. Retrieves Pending Onboarding requests.
-   * 4. Enriches all records with Initiator and Approver data from the history tables.
+   * Fetches one cursor-paginated active or pending company list.
    */
   static async getGroupCompanies(
     req: Request,
@@ -42,192 +508,358 @@ export class CompanyDbController {
     next: NextFunction,
   ) {
     try {
-      // 1. Fetch groups and their companies (Active)
-      const groups = await prisma.groupCompany.findMany({
-        include: {
-          companyMappings: {
-            include: {
-              company: {
-                include: {
-                  userAccesses: {
-                    where: { isGlobalAccess: true },
-                    include: {
-                      user: {
-                        include: {
-                          userMappings: true,
-                        },
+      const viewerUserId =
+        typeof req.body?.userId === 'string' ? req.body.userId : null;
+      const paginationInput =
+        req.body?.pagination &&
+        typeof req.body.pagination === 'object' &&
+        !Array.isArray(req.body.pagination)
+          ? req.body.pagination
+          : req.body;
+      const rawStatusType =
+        typeof (paginationInput?.statusType ?? req.body?.statusType) ===
+        'string'
+          ? (paginationInput.statusType ?? req.body.statusType)
+              .trim()
+              .toLowerCase()
+          : '';
+      if (rawStatusType !== 'active' && rawStatusType !== 'pending') {
+        throw new AppError('Invalid statusType', 400);
+      }
+      const statusType = rawStatusType as 'active' | 'pending';
+      const query =
+        typeof paginationInput?.query === 'string' &&
+        paginationInput.query.trim()
+          ? paginationInput.query.trim()
+          : null;
+      const pagination = resolveCursorPagination(paginationInput ?? {});
+      const filterEnabled = req.body?.filter === true;
+      const appliedFilters = filterEnabled
+        ? CompanyDbController.normalizeCompanyListAppliedFilters(
+            req.body?.applied,
+          )
+        : null;
+      const buildCompanyWhere = (status: 'ACTIVE' | 'INACTIVE') => ({
+        status,
+        ...(query
+          ? {
+              OR: [
+                {
+                  legalName: { contains: query, mode: 'insensitive' as const },
+                },
+                {
+                  companyCode: {
+                    contains: query,
+                    mode: 'insensitive' as const,
+                  },
+                },
+                {
+                  gstNumber: {
+                    contains: query,
+                    mode: 'insensitive' as const,
+                  },
+                },
+                { ieCode: { contains: query, mode: 'insensitive' as const } },
+                {
+                  companyMappings: {
+                    some: {
+                      group: {
+                        OR: [
+                          {
+                            name: {
+                              contains: query,
+                              mode: 'insensitive' as const,
+                            },
+                          },
+                          {
+                            groupCode: {
+                              contains: query,
+                              mode: 'insensitive' as const,
+                            },
+                          },
+                        ],
                       },
                     },
                   },
                 },
-              },
-            },
+              ],
+            }
+          : {}),
+      });
+      const pendingWhere = { status: 'PENDING' as const };
+      const activeWhere = buildCompanyWhere('ACTIVE');
+      const inactiveWhere = buildCompanyWhere('INACTIVE');
+      const normalizedQuery = query?.toLowerCase() || null;
+      const filteredPendingRows = normalizedQuery
+        ? (
+            await prisma.companyOnboarding.findMany({ where: pendingWhere })
+          ).filter((onboarding) => {
+            const data = onboarding.data as any;
+            return [
+              onboarding.companyCode,
+              onboarding.groupCode,
+              data?.company?.name,
+              data?.company?.gst,
+              data?.company?.ieCode,
+              data?.group?.name,
+            ].some(
+              (value) =>
+                typeof value === 'string' &&
+                value.toLowerCase().includes(normalizedQuery),
+            );
+          })
+        : null;
+      const listWhere = statusType === 'active' ? activeWhere : pendingWhere;
+      const pageWhere = pagination.cursor
+        ? appendCursorWhere(
+            listWhere as any,
+            pagination.cursor,
+            pagination.direction === 'prev' ? 'newer' : 'older',
+          )
+        : listWhere;
+      const newWhere = pagination.topCursor
+        ? appendCursorWhere(listWhere as any, pagination.topCursor, 'newer')
+        : null;
+      const companyInclude = {
+        companyMappings: {
+          take: 1,
+          include: {
+            group: { select: { groupCode: true, name: true } },
           },
         },
-      });
-
-      // 2. Fetch companies NOT in any group (Solo)
-      const soloCompanies = await prisma.company.findMany({
-        where: {
-          companyMappings: {
-            none: {},
+        userAccesses: {
+          where: {
+            isGlobalAccess: true,
+            roleCode: 'CORP_ADMIN',
+          },
+          include: {
+            user: { include: { userMappings: true } },
           },
         },
-        include: {
-          userAccesses: {
-            where: { isGlobalAccess: true },
-            include: {
-              user: {
-                include: {
-                  userMappings: true,
-                },
-              },
-            },
-          },
-        },
-      });
+      } as const;
+      if (filterEnabled && appliedFilters) {
+        const [allActiveRows, allInactiveRows, allPendingRows] =
+          await Promise.all([
+            prisma.company.findMany({
+              where: activeWhere,
+              include: companyInclude,
+              orderBy: getPageOrder('next') as any,
+            }),
+            prisma.company.findMany({
+              where: inactiveWhere,
+              include: companyInclude,
+              orderBy: getPageOrder('next') as any,
+            }),
+            prisma.companyOnboarding.findMany({
+              where: pendingWhere,
+              orderBy: getPageOrder('next') as any,
+            }),
+          ]);
 
-      // 3. Fetch pending onboarding records
-      const pendingOnboardings = await prisma.companyOnboarding.findMany({
-        where: { status: 'PENDING' },
-      });
+        const filteredActiveRows = allActiveRows.filter((company) =>
+          CompanyDbController.matchesAppliedCompanyFilters(
+            company,
+            appliedFilters,
+          ),
+        );
+        const filteredInactiveRows = allInactiveRows.filter((company) =>
+          CompanyDbController.matchesAppliedCompanyFilters(
+            company,
+            appliedFilters,
+          ),
+        );
+        const filteredPendingRows = allPendingRows
+          .filter((onboarding) =>
+            query
+              ? CompanyDbController.matchesPendingCompanyQuery(
+                  onboarding,
+                  query,
+                )
+              : true,
+          )
+          .filter((onboarding) =>
+            CompanyDbController.matchesAppliedCompanyFilters(
+              onboarding,
+              appliedFilters,
+              true,
+            ),
+          );
 
-      // 4. Resolve audit history for all entities to identify who initiated/approved them
-      const allActiveCompanyCodes = [
-        ...groups.flatMap((g: any) =>
-          g.companyMappings.map((cm: any) => cm.company.companyCode),
-        ),
-        ...soloCompanies.map((c: any) => c.companyCode),
-      ];
-      const allGroupCodes = groups.map((g: any) => g.groupCode);
-      const allPendingCodes = pendingOnboardings.map((onb) => onb.companyCode);
+        const selectedRowsSource =
+          statusType === 'active' ? filteredActiveRows : filteredPendingRows;
+        const selectedRows = getInMemoryPageRows(
+          selectedRowsSource as any[],
+          pagination,
+        );
+        const newCount = pagination.topCursor
+          ? selectedRowsSource.filter((row: any) =>
+              isRowInCursorDirection(row, pagination.topCursor!, 'newer'),
+            ).length
+          : 0;
+        const pageData = buildPage(selectedRows as any[], pagination, newCount);
+        const firstPageRow = pageData.pageRows[0];
 
-      const allCodes = [
-        ...new Set([
-          ...allActiveCompanyCodes,
-          ...allGroupCodes,
-          ...allPendingCodes,
-        ]),
-      ];
+        if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
+          const newerCount = selectedRowsSource.filter((row: any) =>
+            isRowInCursorDirection(row, firstPageRow, 'newer'),
+          ).length;
+          pageData.pageInfo.page =
+            Math.floor(newerCount / pagination.limit) + 1;
+        }
 
-      const histories = await prisma.companyHistory.findMany({
-        where: {
-          companyCode: { in: allCodes },
-        },
-        include: {
-          user: { select: { name: true, email: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+        if (statusType === 'active') {
+          const companies = pageData.pageRows.map((company: any) => {
+            const signatories =
+              CompanyDbController.buildCompanySignatories(company);
+            const companyData = { ...company };
+            delete companyData.userAccesses;
+            return { ...companyData, signatories };
+          });
 
-      const historyMap = new Map();
-      histories.forEach((h) => {
-        const key = `${h.companyCode}_${h.event}`;
-        if (!historyMap.has(key)) {
-          historyMap.set(key, {
-            user: h.user,
-            createdAt: h.createdAt,
+          return res.status(200).json({
+            data: companies,
+            activeCount: filteredActiveRows.length,
+            inactiveCount: filteredInactiveRows.length,
+            pendingCount: filteredPendingRows.length,
+            pageInfo: pageData.pageInfo,
           });
         }
-      });
 
-      // 5. Enhance Active data with history
-      const enhancedGroups = groups.map((g: any) => {
-        const initiateHistory = historyMap.get(`${g.groupCode}_INITIATE`);
-        const approveHistory = historyMap.get(`${g.groupCode}_APPROVE`);
-
-        return {
-          ...g,
-          initiator: initiateHistory?.user || null,
-          approver: approveHistory?.user || null,
-          approvedAt: approveHistory?.createdAt || null,
-          createdAt: initiateHistory?.createdAt || g.createdAt,
-          companyMappings: g.companyMappings.map((cm: any) => {
-            const compInit = historyMap.get(
-              `${cm.company.companyCode}_INITIATE`,
-            );
-            const compApprove = historyMap.get(
-              `${cm.company.companyCode}_APPROVE`,
-            );
-            const signatories = cm.company.userAccesses.map((ua: any) => {
-              const mapping = ua.user.userMappings.find(
-                (m: any) => m.companyId === cm.company.id,
-              );
-              return {
-                name: ua.user.name,
-                email: ua.user.email,
-                phone: ua.user.phone,
-                designation: mapping?.designation || null,
-                employeeId: mapping?.employeeId || null,
-              };
-            });
-
-            // Remove internal mapping fields to keep response clean
-            const { userAccesses, ...companyData } = cm.company;
-
-            return {
-              ...cm,
-              company: {
-                ...companyData,
-                signatories,
-                initiator: compInit?.user || initiateHistory?.user || null,
-                approver: compApprove?.user || approveHistory?.user || null,
-                approvedAt:
-                  compApprove?.createdAt || approveHistory?.createdAt || null,
-                createdAt:
-                  compInit?.createdAt ||
-                  initiateHistory?.createdAt ||
-                  cm.company.createdAt,
-              },
-            };
-          }),
-        };
-      });
-
-      const enhancedSoloCompanies = soloCompanies.map((c: any) => {
-        const compInit = historyMap.get(`${c.companyCode}_INITIATE`);
-        const compApprove = historyMap.get(`${c.companyCode}_APPROVE`);
-        const signatories = c.userAccesses.map((ua: any) => {
-          const mapping = ua.user.userMappings.find(
-            (m: any) => m.companyId === c.id,
+        const pendingCodes = pageData.pageRows.map(
+          (onboarding: any) => onboarding.companyCode,
+        );
+        const initiationMetaByCompanyCode =
+          await CompanyDbController.getPendingInitiationMetaByCompanyCodes(
+            pendingCodes,
+            viewerUserId,
           );
+        const pending = pageData.pageRows.map((onboarding: any) => {
+          const initiationMeta =
+            initiationMetaByCompanyCode.get(onboarding.companyCode) || null;
           return {
-            name: ua.user.name,
-            email: ua.user.email,
-            phone: ua.user.phone,
-            designation: mapping?.designation || null,
-            employeeId: mapping?.employeeId || null,
+            ...onboarding,
+            initiator: initiationMeta?.initiator || null,
+            initiatedDate:
+              initiationMeta?.initiatedDate || onboarding.createdAt,
           };
         });
 
-        const { userAccesses, ...companyData } = c;
+        return res.status(200).json({
+          data: pending,
+          activeCount: filteredActiveRows.length,
+          inactiveCount: filteredInactiveRows.length,
+          pendingCount: filteredPendingRows.length,
+          pageInfo: pageData.pageInfo,
+        });
+      }
 
+      const [activeCount, inactiveCount, pendingCount, selectedRows, newCount] =
+        await Promise.all([
+          prisma.company.count({ where: activeWhere }),
+          prisma.company.count({ where: inactiveWhere }),
+          filteredPendingRows
+            ? Promise.resolve(filteredPendingRows.length)
+            : prisma.companyOnboarding.count({ where: pendingWhere }),
+          statusType === 'active'
+            ? prisma.company.findMany({
+                where: pageWhere as any,
+                include: companyInclude,
+                orderBy: getPageOrder(pagination.direction) as any,
+                skip: pagination.cursor ? 0 : pagination.offset,
+                take: pagination.limit + 1,
+              })
+            : filteredPendingRows
+              ? Promise.resolve(
+                  getInMemoryPageRows(filteredPendingRows, pagination),
+                )
+              : prisma.companyOnboarding.findMany({
+                  where: pageWhere as any,
+                  orderBy: getPageOrder(pagination.direction) as any,
+                  skip: pagination.cursor ? 0 : pagination.offset,
+                  take: pagination.limit + 1,
+                }),
+          newWhere
+            ? statusType === 'active'
+              ? prisma.company.count({ where: newWhere as any })
+              : filteredPendingRows && pagination.topCursor
+                ? Promise.resolve(
+                    filteredPendingRows.filter((onboarding) =>
+                      isRowInCursorDirection(
+                        onboarding,
+                        pagination.topCursor!,
+                        'newer',
+                      ),
+                    ).length,
+                  )
+                : prisma.companyOnboarding.count({ where: newWhere as any })
+            : Promise.resolve(0),
+        ]);
+      const pageData = buildPage(selectedRows as any[], pagination, newCount);
+      const firstPageRow = pageData.pageRows[0];
+      if (pagination.cursor && !pagination.isPagePagination && firstPageRow) {
+        const newerWhere = appendCursorWhere(
+          listWhere as any,
+          firstPageRow,
+          'newer',
+        );
+        const newerCount =
+          statusType === 'active'
+            ? await prisma.company.count({ where: newerWhere as any })
+            : filteredPendingRows
+              ? filteredPendingRows.filter((onboarding) =>
+                  isRowInCursorDirection(onboarding, firstPageRow, 'newer'),
+                ).length
+              : await prisma.companyOnboarding.count({
+                  where: newerWhere as any,
+                });
+        pageData.pageInfo.page = Math.floor(newerCount / pagination.limit) + 1;
+      }
+
+      if (statusType === 'active') {
+        const companies = pageData.pageRows.map((company: any) => {
+          const signatories =
+            CompanyDbController.buildCompanySignatories(company);
+          const companyData = { ...company };
+          delete companyData.userAccesses;
+          return { ...companyData, signatories };
+        });
+
+        return res.status(200).json({
+          data: companies,
+          activeCount,
+          inactiveCount,
+          pendingCount,
+          pageInfo: pageData.pageInfo,
+        });
+      }
+
+      const pendingCodes = pageData.pageRows.map(
+        (onboarding: any) => onboarding.companyCode,
+      );
+      const initiationMetaByCompanyCode =
+        await CompanyDbController.getPendingInitiationMetaByCompanyCodes(
+          pendingCodes,
+          viewerUserId,
+        );
+      const pending = pageData.pageRows.map((onboarding: any) => {
+        const initiationMeta =
+          initiationMetaByCompanyCode.get(onboarding.companyCode) || null;
         return {
-          ...companyData,
-          signatories,
-          initiator: compInit?.user || null,
-          approver: compApprove?.user || null,
-          approvedAt: compApprove?.createdAt || null,
-          createdAt: compInit?.createdAt || c.createdAt,
+          ...onboarding,
+          initiator: initiationMeta?.initiator || null,
+          initiatedDate: initiationMeta?.initiatedDate || onboarding.createdAt,
         };
       });
 
-      // 6. Enhance Pending data with history
-      const enhancedPending = pendingOnboardings.map((onb: any) => {
-        const init = historyMap.get(`${onb.companyCode}_INITIATE`);
-        return {
-          ...onb,
-          initiator: init?.user || null,
-        };
-      });
-
-      res.status(200).json({
-        groups: enhancedGroups,
-        soloCompanies: enhancedSoloCompanies,
-        pendingOnboardings: enhancedPending,
+      return res.status(200).json({
+        data: pending,
+        activeCount,
+        inactiveCount,
+        pendingCount,
+        pageInfo: pageData.pageInfo,
       });
     } catch (error) {
-      next(error);
+      return next(error);
     }
   }
 
@@ -245,6 +877,124 @@ export class CompanyDbController {
         where: { companyCode },
       });
       res.json(company);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Fetches complete company details for one company code.
+   * Used by the details screen so the list API can stay lightweight.
+   */
+  static async getCompanyDetailsByCode(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { companyCode, userId: viewerUserId } = req.body;
+      if (!companyCode) {
+        throw new AppError('companyCode is required', 400);
+      }
+
+      const company = await prisma.company.findUnique({
+        where: { companyCode },
+        include: {
+          companyMappings: {
+            take: 1,
+            include: {
+              group: { select: { groupCode: true, name: true } },
+            },
+          },
+          userAccesses: {
+            where: {
+              isGlobalAccess: true,
+              roleCode: 'CORP_ADMIN',
+            },
+            include: {
+              user: { include: { userMappings: true } },
+            },
+          },
+        },
+      });
+
+      if (company) {
+        const signatories = CompanyDbController.buildCompanySignatories(company);
+        const group = company.companyMappings?.[0]?.group;
+
+        return res.status(200).json({
+          groupDetails: group
+            ? {
+                groupCode: group.groupCode,
+                groupName: group.name,
+              }
+            : null,
+          companyDetails: [
+            {
+              companyCode: company.companyCode,
+              name: company.legalName,
+              gst: company.gstNumber,
+              brand: company.brandName,
+              ieCode: company.ieCode || '',
+              registration: company.registrationDate,
+              address: company.address || '',
+              signatories,
+            },
+          ],
+        });
+      }
+
+      const onboarding = await prisma.companyOnboarding.findUnique({
+        where: { companyCode },
+      });
+
+      if (!onboarding) {
+        throw new AppError('Company not found', 404);
+      }
+
+      const onboardingData = (onboarding.data as any) || {};
+      const group = onboardingData.group || {};
+      const pendingCompany = onboardingData.company || {};
+      const initiationMetaByCompanyCode =
+        await CompanyDbController.getPendingInitiationMetaByCompanyCodes(
+          [onboarding.companyCode],
+          viewerUserId,
+        );
+      const initiationMeta =
+        initiationMetaByCompanyCode.get(onboarding.companyCode) || null;
+      const signatories = Array.isArray(onboardingData.signatories)
+        ? onboardingData.signatories.map((signatory: any) => ({
+            name: signatory.name || '',
+            email: signatory.email || '',
+            phone: signatory.phone || '',
+            designation: signatory.designation || null,
+            employeeId: signatory.employeeId || null,
+          }))
+        : [];
+
+      return res.status(200).json({
+        groupDetails: onboarding.groupCode
+          ? {
+              groupCode: onboarding.groupCode,
+              groupName: group.name || 'Pending Group',
+            }
+          : null,
+        companyDetails: [
+          {
+            companyCode: onboarding.companyCode,
+            name: pendingCompany.name || '',
+            gst: pendingCompany.gst || '',
+            brand: pendingCompany.brand || '',
+            ieCode: pendingCompany.ieCode || '',
+            registration: pendingCompany.registeredAt || '',
+            address: pendingCompany.address || '',
+            initiator: initiationMeta?.initiator || null,
+            initiatedDate:
+              initiationMeta?.initiatedDate || onboarding.createdAt,
+            signatories,
+          },
+        ],
+      });
     } catch (error) {
       next(error);
     }
@@ -277,16 +1027,25 @@ export class CompanyDbController {
    * Performs an atomic transaction to:
    * 1. Create a CompanyOnboarding record.
    * 2. Log 'INITIATE' events in CompanyHistory.
-   * 3. Log 'INITIATE' events in UserHistory for all proposed signatories.
    */
 
   static async createCompanyOnboarding(req: Request, res: Response) {
-    const { initiatorId, userId: _u, companyId: _c, _trackingContext: _t, ...onboardingData } = req.body;
+    const { initiatorId, notificationCompanyId, ...onboardingData } = req.body;
     const companyCode = onboardingData.companyCode;
+    const resolvedNotificationCompanyId =
+      await CompanyDbController.resolveNotificationCompanyId(
+        initiatorId,
+        notificationCompanyId,
+      );
+    onboardingData.eligibleApprovers =
+      NotificationService.mergeRecipientUserIds(
+        onboardingData.eligibleApprovers || [],
+      ).filter((userId) => userId !== initiatorId);
+    const notificationRecipients = onboardingData.eligibleApprovers;
 
     const onboarding = await prisma.$transaction(async (tx) => {
       const onb = await tx.companyOnboarding.create({
-        data: onboardingData as any,
+        data: onboardingData,
       });
       if (initiatorId && companyCode) {
         await tx.companyHistory.create({
@@ -296,29 +1055,24 @@ export class CompanyDbController {
             eventUserId: initiatorId,
           },
         });
-
-        const signatories = (onboardingData.data as any)?.signatories || [];
-        for (const sig of signatories) {
-          if (sig.email) {
-            // Only log user history if company already exists (e.g. for re-onboarding or existing company)
-            const company = await tx.company.findUnique({
-              where: { companyCode },
-            });
-            if (company) {
-              await tx.userHistory.create({
-                data: {
-                  email: sig.email,
-                  event: 'INITIATE',
-                  eventUserId: initiatorId,
-                  companyId: company.id,
-                },
-              });
-            }
-          }
-        }
       }
       return onb;
     });
+
+    if (resolvedNotificationCompanyId && initiatorId) {
+      await NotificationService.createRequestNotification({
+        companyId: resolvedNotificationCompanyId,
+        type: 'INITIATE',
+        referenceType: 'COMPANY',
+        referenceId: onboarding.id,
+        referenceName: (onboardingData.data as any)?.company?.name,
+        createdBy: initiatorId,
+        recipientUserIds: notificationRecipients,
+        requiredRecipientUserIds: notificationRecipients,
+        includeCreatedBy: true,
+      });
+    }
+
     res.status(201).json(onboarding);
   }
 
@@ -353,7 +1107,26 @@ export class CompanyDbController {
     next: NextFunction,
   ) {
     try {
-      const { id, action, approverId, remark } = req.body;
+      const { id, action, approverId, remark, notificationCompanyId } =
+        req.body;
+      const actionStr = String(action || '').toLowerCase();
+      const isRejectAction = actionStr === 'reject' || actionStr === 'rejected';
+      const isApproveAction =
+        actionStr === 'approve' || actionStr === 'approved';
+
+      if (!isRejectAction && !isApproveAction) {
+        throw new AppError('Invalid company onboarding action', 400);
+      }
+
+      const resolvedNotificationCompanyId =
+        await CompanyDbController.resolveNotificationCompanyId(
+          approverId,
+          notificationCompanyId,
+        );
+      let notificationRecipients: string[] = [];
+      let notificationSubject = 'Company';
+      let notificationCompanyCode: string | null = null;
+
       const result = await prisma.$transaction(async (tx) => {
         // 1. Fetch onboarding record
         const onboarding = await tx.companyOnboarding.findUnique({
@@ -368,6 +1141,13 @@ export class CompanyDbController {
           throw new AppError('Onboarding request already processed', 400);
         }
 
+        notificationRecipients = onboarding.eligibleApprovers || [];
+        notificationCompanyCode = onboarding.companyCode || null;
+        notificationSubject =
+          (onboarding.data as any)?.company?.name ||
+          onboarding.companyCode ||
+          notificationSubject;
+
         // Authorization check
         if (
           onboarding.eligibleApprovers &&
@@ -378,7 +1158,7 @@ export class CompanyDbController {
         }
 
         // --- REJECT FLOW ---
-        if (action === 'rejected') {
+        if (isRejectAction) {
           await tx.companyOnboarding.update({
             where: { id },
             data: {
@@ -417,7 +1197,11 @@ export class CompanyDbController {
             }
           }
 
-          return { message: 'Onboarding rejected successfully' };
+          return {
+            message: 'Onboarding rejected successfully',
+            status: 'REJECTED',
+            provisioningSummary: null,
+          };
         }
 
         // --- APPROVE FLOW ---
@@ -495,9 +1279,9 @@ export class CompanyDbController {
             companyId: newCompany.id,
             status: 'APPROVED',
             data: {
-              newNodeName: company.name,
               nodeType: 'ROOT',
               parentNode: null,
+              newNodeName: company.name,
             },
             remarks: 'Initial root node created during company onboarding',
           },
@@ -540,18 +1324,45 @@ export class CompanyDbController {
             roleCode: 'WORK_FLOW_MGR',
           },
         ];
+        const createdWorkflowNotifications: Array<{
+          workflowReqId: string;
+          name: string;
+          subModule: string;
+        }> = [];
 
         for (const dwf of defaultWorkflows) {
+          const levelsHash = `DEFAULT_${dwf.subModule}_1M_1C_1`;
+          const workflowData = {
+            name: dwf.name,
+            module: 'SYSTEM_ACCESS',
+            subModule: dwf.subModule,
+            roleCode: dwf.roleCode,
+            nodeId: rootNode.id,
+            nodePath: rootNode.nodePath,
+            nodeName: rootNode.nodeName,
+            nodeType: rootNode.nodeType,
+            workflowType: 'NODE',
+            levelsHash,
+            alias: '1M_1C_D',
+            levels: {
+              // eslint-disable-next-line @typescript-eslint/naming-convention -- Workflow levels use numeric keys.
+              1: {
+                approver1: 'NODE_APPROVER',
+                type: 'OR',
+              },
+            },
+          };
+
           const workflow = await tx.workflow.create({
             data: {
               name: dwf.name,
-              alias: '1M_1C_1',
+              alias: '1M_1C_D',
               module: 'SYSTEM_ACCESS',
               subModule: dwf.subModule,
               roleCode: dwf.roleCode,
               companyId: newCompany.id,
               nodeId: rootNode.id,
-              levelsHash: `DEFAULT_${dwf.subModule}_1M_1C_1`,
+              levelsHash,
               levels: {
                 create: [
                   {
@@ -563,9 +1374,63 @@ export class CompanyDbController {
               },
             },
           });
+
+          const workflowReq = await tx.workflowReq.create({
+            data: {
+              companyId: newCompany.id,
+              nodeId: rootNode.id,
+              module: 'SYSTEM_ACCESS',
+              subModule: dwf.subModule,
+              levelsHash,
+              workflowId: workflow.id,
+              alias: '1M_1C_D',
+              status: 'APPROVED',
+              data: {
+                ...workflowData,
+                workflowId: workflow.id,
+              },
+              eligibleApprovers: [],
+            },
+          });
+
+          await tx.workflow.update({
+            where: { id: workflow.id },
+            data: { workflowReqIds: [workflowReq.id] },
+          });
+
+          await tx.workflowReq.update({
+            where: { id: workflowReq.id },
+            data: {
+              data: {
+                ...workflowData,
+                workflowId: workflow.id,
+                workflowReqId: workflowReq.id,
+              },
+            },
+          });
+
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: workflowReq.id,
+              companyId: newCompany.id,
+              event: 'APPROVED',
+              eventUserId: approverId,
+            },
+          });
+
+          createdWorkflowNotifications.push({
+            workflowReqId: workflowReq.id,
+            name: workflow.name,
+            subModule: workflow.subModule,
+          });
         }
 
         // 5. Signatories Setup
+        const createdUserNotifications: Array<{
+          userId: string;
+          name?: string | null;
+          email?: string | null;
+        }> = [];
         for (const sig of signatories) {
           let user = await tx.user.findUnique({
             where: { email: sig.email },
@@ -599,7 +1464,7 @@ export class CompanyDbController {
           const existingAccess = await tx.userAccess.findFirst({
             where: {
               userId: user.id,
-              roleCode: "CORP_ADMIN",
+              roleCode: 'CORP_ADMIN',
               companyId: newCompany.id,
               nodeId: rootNode.id,
             },
@@ -615,12 +1480,13 @@ export class CompanyDbController {
           await tx.userAccess.create({
             data: {
               userId: user.id,
-              roleCode: "CORP_ADMIN",
+              roleCode: 'CORP_ADMIN',
               nodeId: rootNode.id,
               accessType: 'PRIMARY',
               companyId: newCompany.id,
               isGlobalAccess: true,
               accessCategory: 'ALL_CHILD',
+              source: 'USER',
             },
           });
 
@@ -632,6 +1498,12 @@ export class CompanyDbController {
               eventUserId: approverId,
               companyId: newCompany.id,
             },
+          });
+
+          createdUserNotifications.push({
+            userId: user.id,
+            name: user.name,
+            email: user.email,
           });
         }
 
@@ -655,11 +1527,81 @@ export class CompanyDbController {
           });
         }
 
+        const provisioningSummary = {
+          companyId: newCompany.id,
+          companyName: newCompany.legalName,
+          rootNodeReqId: rootNodeReq.id,
+          rootNodeName: rootNode.nodeName,
+          rootNodePath: rootNode.nodePath,
+          createdUsers: createdUserNotifications,
+          workflows: createdWorkflowNotifications,
+        };
+
+        const notificationSettingUserIds: string[] = Array.from(
+          new Set([
+            ...createdUserNotifications.map((user) => user.userId),
+          ]),
+        );
+
+        for (const userId of notificationSettingUserIds) {
+          await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+            companyId: newCompany.id,
+            userId,
+            eventUserId: approverId,
+            createReason:
+              'Default notification setting created because access was granted.',
+            removeReason:
+              'Notification setting removed because access was removed.',
+          });
+        }
+
         return {
           message: 'Onboarding approved and company created successfully',
-          companyId: newCompany.id,
+          status: 'APPROVED',
+          provisioningSummary,
         };
       });
+
+      if (resolvedNotificationCompanyId && approverId) {
+        const requestInitiatorId =
+          await NotificationService.getCompanyRequestInitiatorId(
+            notificationCompanyCode,
+          );
+        const notificationRecipientUserIds =
+          NotificationService.mergeRecipientUserIds(
+            notificationRecipients,
+            requestInitiatorId,
+          );
+
+        await NotificationService.createRequestNotification({
+          companyId: resolvedNotificationCompanyId,
+          type:
+            result.status === 'REJECTED'
+              ? 'REJECTED-INITIATE'
+              : 'ONBOARDED',
+          referenceType: 'COMPANY',
+          referenceId: id,
+          referenceName: notificationSubject,
+          createdBy: approverId,
+          recipientUserIds: notificationRecipientUserIds,
+          requiredRecipientUserIds: notificationRecipientUserIds,
+          includeCreatedBy: true,
+          isPending: false,
+        });
+      }
+
+      if (
+        result.status === 'APPROVED' &&
+        approverId &&
+        result.provisioningSummary
+      ) {
+        const provisioningSummary = result.provisioningSummary;
+
+        await CompanyDbController.sendCompanyProvisioningNotifications({
+          ...provisioningSummary,
+          approverId,
+        });
+      }
 
       res.status(200).json(result);
     } catch (error) {
@@ -676,21 +1618,31 @@ export class CompanyDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode } = req.body;
+      const { companyCode, userId: viewerUserId } = req.body;
 
       const histories = await prisma.companyHistory.findMany({
         where: { companyCode },
         include: {
-          user: { select: { name: true, email: true } },
+          user: { select: { id: true, name: true, email: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
+
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        ...histories.map((h) => h.eventUserId),
+      ]);
 
       const formattedHistories = histories.map((h) => ({
         companyCode: h.companyCode,
         event: h.event,
         createdAt: h.createdAt,
-        user: h.user,
+        user: HistoryUserUtil.formatAuditUser(
+          h.user,
+          h.eventUserId,
+          saasAdminUserIds,
+          viewerUserId,
+        ),
       }));
 
       res.json(formattedHistories);

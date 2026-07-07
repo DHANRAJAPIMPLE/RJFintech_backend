@@ -8,52 +8,65 @@ datasource db {
 }
 
 model User {
-  id                String               @id @default(uuid())
-  name              String
-  email             String               @unique
-  password          String
-  phone             String
-  createdAt         DateTime             @default(now()) @map("created_at")
-  updatedAt         DateTime             @updatedAt @map("updated_at")
-  companyHistory    CompanyHistory[]     @relation("UserCompanyHistoryRel")
-  orgHistory        OrgHistory[]         @relation("UserOrgHistoryRel")
-  userAccesses      UserAccess[]
-  userActivities    UserActivity[]
-  userHistory       UserHistory[]        @relation("UserHistoryRel")
-  managedUsers      UserMapping[]        @relation("ReportingManager")
-  userMappings      UserMapping[]        @relation("UserMappings")
-  workflowHistories WorkflowReqHistory[] @relation("UserWorkflowHistoryRel")
-  apiTraces         ApiTrace[]           @relation("UserApiTraceRel")
-  apiSpans          ApiSpan[]            @relation("UserApiSpanRel")
+  id                         String                       @id @default(uuid())
+  name                       String
+  email                      String                       @unique
+  password                   String
+  phone                      String
+  editLockedBy               String?                      @map("edit_locked_by")
+  editLockedAt               DateTime?                    @map("edit_locked_at")
+  editLockExpiresAt          DateTime?                    @map("edit_lock_expires_at")
+  apiSpans                   ApiSpan[]                    @relation("UserApiSpanRel")
+  createdAt                  DateTime                     @default(now()) @map("created_at")
+  updatedAt                  DateTime                     @updatedAt @map("updated_at")
+  companyHistory             CompanyHistory[]             @relation("UserCompanyHistoryRel")
+  createdNotifications       Notification[]               @relation("NotificationCreatedBy")
+  notificationSettings       NotificationSetting[]        @relation("UserNotificationSettingRel")
+  notificationSettingHistory NotificationSettingHistory[] @relation("UserNotificationSettingHistoryRel")
+  notificationUsers          NotificationUser[]
+  orgHistory                 OrgHistory[]                 @relation("UserOrgHistoryRel")
+  userWorkflowPreferenceHistories UserWorkflowPreferenceHistory[] @relation("UserWorkflowPreferenceHistoryRel")
+  userWorkflowPreferences    UserWorkflowPreference[]     @relation("UserWorkflowPreferenceRel")
+  userAccesses               UserAccess[]
+  userActivities             UserActivity[]
+  userHistory                UserHistory[]                @relation("UserHistoryRel")
+  managedUsers               UserMapping[]                @relation("ReportingManager")
+  userMappings               UserMapping[]                @relation("UserMappings")
+  workflowHistories          WorkflowReqHistory[]         @relation("UserWorkflowHistoryRel")
 
   @@map("user")
 }
 
 model Company {
-  id                   String               @id @default(uuid())
-  gstNumber            String?              @map("gst_number")
-  legalName            String               @map("legal_name")
-  address              String
-  status               Status
-  registrationDate     DateTime             @map("registration_date")
-  brandName            String?              @map("brand_name")
-  ieCode               String?              @map("ie_code")
-  companyCode          String               @unique @map("company_code")
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
-  companyMappings      CompanyMapping[]
-  orgHistories         OrgHistory[]         @relation("CompanyOrgHistoryRel")
-  orgStructures        OrgStructure[]
-  orgStructureReqs     OrgStructureReq[]
-  userAccesses         UserAccess[]
-  userHistories        UserHistory[]        @relation("CompanyUserHistoryRel")
-  userMappings         UserMapping[]
-  userOnboardings      UserOnboarding[]     @relation("UserOnboardingRel")
-  workflows            Workflow[]
-  workflowReqs         WorkflowReq[]
-  workflowReqHistories WorkflowReqHistory[] @relation("CompanyWorkflowHistoryRel")
-  apiTraces            ApiTrace[]           @relation("CompanyApiTraceRel")
-  apiSpans             ApiSpan[]            @relation("CompanyApiSpanRel")
+  id                         String                       @id @default(uuid())
+  gstNumber                  String?                      @map("gst_number")
+  legalName                  String                       @map("legal_name")
+  address                    String
+  status                     Status
+  registrationDate           DateTime                     @map("registration_date")
+  brandName                  String?                      @map("brand_name")
+  ieCode                     String?                      @map("ie_code")
+  companyCode                String                       @unique @map("company_code")
+  apiSpans                   ApiSpan[]                    @relation("CompanyApiSpanRel")
+  createdAt                  DateTime                     @default(now()) @map("created_at")
+  updatedAt                  DateTime                     @updatedAt @map("updated_at")
+  companyMappings            CompanyMapping[]
+  notificationSettings       NotificationSetting[]        @relation("CompanyNotificationSettingRel")
+  notificationSettingHistory NotificationSettingHistory[] @relation("CompanyNotificationSettingHistoryRel")
+  notificationUsers          NotificationUser[]
+  notifications              Notification[]
+  orgHistories               OrgHistory[]                 @relation("CompanyOrgHistoryRel")
+  orgStructures              OrgStructure[]
+  orgStructureReqs           OrgStructureReq[]
+  userWorkflowPreferenceHistories UserWorkflowPreferenceHistory[] @relation("CompanyUserWorkflowPreferenceHistoryRel")
+  userWorkflowPreferences    UserWorkflowPreference[]     @relation("CompanyUserWorkflowPreferenceRel")
+  userAccesses               UserAccess[]
+  userHistories              UserHistory[]                @relation("CompanyUserHistoryRel")
+  userMappings               UserMapping[]
+  userOnboardings            UserOnboarding[]             @relation("UserOnboardingRel")
+  workflows                  Workflow[]
+  workflowReqs               WorkflowReq[]
+  workflowReqHistories       WorkflowReqHistory[]         @relation("CompanyWorkflowHistoryRel")
 
   @@map("company")
 }
@@ -85,6 +98,10 @@ model UserHistory {
   company     Company   @relation("CompanyUserHistoryRel", fields: [companyId], references: [id])
   user        User      @relation("UserHistoryRel", fields: [eventUserId], references: [id])
 
+  @@index([companyId])
+  @@index([companyId, email, createdAt])
+  @@index([reqId])
+  @@index([eventUserId])
   @@map("user_history")
 }
 
@@ -96,6 +113,7 @@ model CompanyHistory {
   createdAt   DateTime  @default(now()) @map("created_at")
   user        User      @relation("UserCompanyHistoryRel", fields: [eventUserId], references: [id])
 
+  @@index([companyCode])
   @@map("company_history")
 }
 
@@ -114,6 +132,8 @@ model UserMapping {
   user             User     @relation("UserMappings", fields: [userId], references: [id])
 
   @@unique([userId, companyId])
+  @@index([companyId, status])
+  @@index([reportingManager])
   @@map("user_mapping")
 }
 
@@ -145,6 +165,7 @@ model UserActivity {
   user          User      @relation(fields: [userId], references: [id])
 
   @@unique([userId, companyId])
+  @@index([companyId, userId])
   @@map("user_activity")
 }
 
@@ -153,7 +174,12 @@ model UserOnboarding {
   groupId           String?          @map("group_id")
   companyId         String           @map("company_id")
   workflowId        String?          @map("workflow_id")
+  type              String           @default("INITIATE")
+  impact            String           @default("NO_ISSUES")
   data              Json
+  oldData           Json?            @map("old_data")
+  initiatorId       String?          @map("initiator_id")
+  remarks           String?
   status            OnboardingStatus @default(PENDING)
   createdAt         DateTime         @default(now()) @map("created_at")
   updatedAt         DateTime         @updatedAt @map("updated_at")
@@ -162,6 +188,12 @@ model UserOnboarding {
   company           Company          @relation("UserOnboardingRel", fields: [companyId], references: [id])
   group             GroupCompany?    @relation("UserOnboardingRel", fields: [groupId], references: [id])
 
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([companyId, status, createdAt, id])
+  @@index([companyId, createdAt, id])
+  @@index([workflowId])
+  @@index([initiatorId])
   @@map("user_onboarding")
 }
 
@@ -180,11 +212,151 @@ model CompanyOnboarding {
   @@map("company_onboarding")
 }
 
+model Notification {
+  id                String             @id @default(uuid())
+  companyId         String             @map("company_id")
+  name              String
+  message           String
+  type              String
+  referenceType     String?            @map("reference_type")
+  referenceId       String?            @map("reference_id")
+  isPending         Boolean            @default(false) @map("is_pending")
+  createdBy         String             @map("created_by")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  company           Company            @relation(fields: [companyId], references: [id])
+  createdByUser     User               @relation("NotificationCreatedBy", fields: [createdBy], references: [id])
+  notificationUsers NotificationUser[]
+
+  @@index([companyId])
+  @@index([companyId, referenceType, referenceId, isPending])
+  @@index([companyId, type, referenceType, referenceId, createdBy, createdAt])
+  @@map("notifications")
+}
+
+model NotificationUser {
+  id             String   @id @default(uuid())
+  companyId      String   @map("company_id")
+  userId         String   @map("user_id")
+  notificationId String   @map("notification_id")
+  status         String   @default("UNREAD")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  company      Company      @relation(fields: [companyId], references: [id])
+  notification Notification @relation(fields: [notificationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([userId, notificationId])
+  @@index([companyId])
+  @@index([userId])
+  @@index([notificationId])
+  @@index([companyId, userId])
+  @@index([companyId, userId, status])
+  @@index([userId, status, createdAt, id])
+  @@index([userId, companyId, status, createdAt, id])
+  @@map("notification_users")
+}
+
+model NotificationSetting {
+  id        String             @id @default(uuid())
+  companyId String             @map("company_id")
+  userId    String             @map("user_id")
+  nodeId    String             @map("node_id")
+  module    NotificationModule
+  isEnabled Boolean            @default(true) @map("is_enabled")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company   Company                      @relation("CompanyNotificationSettingRel", fields: [companyId], references: [id])
+  node      OrgStructure                 @relation("OrgNotificationSettingRel", fields: [nodeId], references: [id])
+  user      User                         @relation("UserNotificationSettingRel", fields: [userId], references: [id])
+  histories NotificationSettingHistory[]
+
+  @@unique([companyId, userId, nodeId, module])
+  @@index([companyId])
+  @@index([userId])
+  @@index([nodeId])
+  @@index([companyId, userId])
+  @@index([companyId, userId, nodeId])
+  @@map("notification_settings")
+}
+
+model NotificationSettingHistory {
+  id                    String   @id @default(uuid())
+  notificationSettingId String   @map("notification_setting_id")
+  companyId             String   @map("company_id")
+  eventUserId           String   @map("event_user_id")
+  oldData               Json?    @map("old_data")
+  newData               Json?    @map("new_data")
+  remarks               String?
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  company             Company             @relation("CompanyNotificationSettingHistoryRel", fields: [companyId], references: [id])
+  eventUser           User                @relation("UserNotificationSettingHistoryRel", fields: [eventUserId], references: [id])
+  notificationSetting NotificationSetting @relation(fields: [notificationSettingId], references: [id])
+
+  @@index([notificationSettingId])
+  @@index([companyId])
+  @@index([eventUserId])
+  @@map("notification_setting_history")
+}
+
+model UserWorkflowPreference {
+  id         String   @id @default(uuid())
+  companyId  String   @map("company_id")
+  userId     String   @map("user_id")
+  module     String
+  nodeId     String   @map("node_id")
+  workflowId String   @map("workflow_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  company   Company                        @relation("CompanyUserWorkflowPreferenceRel", fields: [companyId], references: [id])
+  user      User                           @relation("UserWorkflowPreferenceRel", fields: [userId], references: [id])
+  node      OrgStructure                   @relation("OrgUserWorkflowPreferenceRel", fields: [nodeId], references: [id])
+  workflow  Workflow                       @relation("WorkflowUserWorkflowPreferenceRel", fields: [workflowId], references: [id])
+  histories UserWorkflowPreferenceHistory[]
+
+  @@unique([userId, module, nodeId])
+  @@index([companyId])
+  @@index([userId])
+  @@index([module])
+  @@index([nodeId])
+  @@index([workflowId])
+  @@map("user_workflow_preference")
+}
+
+model UserWorkflowPreferenceHistory {
+  id           String   @id @default(uuid())
+  preferenceId String?  @map("preference_id")
+  companyId    String   @map("company_id")
+  eventUserId  String   @map("event_user_id")
+  oldData      Json?    @map("old_data")
+  newData      Json?    @map("new_data")
+  remarks      String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  preference UserWorkflowPreference? @relation(fields: [preferenceId], references: [id])
+  company    Company                 @relation("CompanyUserWorkflowPreferenceHistoryRel", fields: [companyId], references: [id])
+  eventUser  User                    @relation("UserWorkflowPreferenceHistoryRel", fields: [eventUserId], references: [id])
+
+  @@index([preferenceId])
+  @@index([companyId])
+  @@index([eventUserId])
+  @@map("user_workflow_preference_history")
+}
+
 model OrgStructureReq {
   id                String           @id @default(uuid())
   data              Json
+  oldData           Json?            @map("old_data")
   companyId         String           @map("company_id")
   workflowId        String?          @map("workflow_id")
+  type              RequestType      @default(INITIATE)
+  impact            String           @default("NO_ISSUES")
+  initiatorId       String?          @map("initiator_id")
   status            OnboardingStatus @default(PENDING)
   createdAt         DateTime         @default(now()) @map("created_at")
   remarks           String?
@@ -193,6 +365,8 @@ model OrgStructureReq {
   orgHistories      OrgHistory[]     @relation("OrgRequestHistory")
   company           Company          @relation(fields: [companyId], references: [id])
 
+  @@index([companyId])
+  @@index([companyId, status])
   @@map("org_structure_req")
 }
 
@@ -209,23 +383,33 @@ model OrgHistory {
   user        User            @relation("UserOrgHistoryRel", fields: [eventUserId], references: [id])
   orgReq      OrgStructureReq @relation("OrgRequestHistory", fields: [orgReqId], references: [id])
 
+  @@index([orgReqId])
   @@map("org_history")
 }
 
 model OrgStructure {
-  id         String         @id @default(uuid())
-  companyId  String         @map("company_id")
-  nodePath   String         @unique @map("node_path")
-  nodeName   String         @map("node_name")
-  nodeType   NodeType       @map("node_type")
-  parentId   String?        @map("parent_id")
-  createdAt  DateTime       @default(now()) @map("created_at")
-  company    Company        @relation(fields: [companyId], references: [id])
-  parent     OrgStructure?  @relation("ParentChild", fields: [parentId], references: [id])
-  children   OrgStructure[] @relation("ParentChild")
-  userAccess UserAccess[]
-  workflows  Workflow[]
+  id                   String                @id @default(uuid())
+  companyId            String                @map("company_id")
+  nodePath             String                @unique @map("node_path")
+  nodeName             String                @map("node_name")
+  nodeType             NodeType              @map("node_type")
+  parentId             String?               @map("parent_id")
+  status               Status                @default(ACTIVE)
+  editLockedBy         String?               @map("edit_locked_by")
+  editLockedAt         DateTime?             @map("edit_locked_at")
+  editLockExpiresAt    DateTime?             @map("edit_lock_expires_at")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  company              Company               @relation(fields: [companyId], references: [id])
+  parent               OrgStructure?         @relation("ParentChild", fields: [parentId], references: [id])
+  children             OrgStructure[]        @relation("ParentChild")
+  userAccess           UserAccess[]
+  notificationSettings NotificationSetting[] @relation("OrgNotificationSettingRel")
+  userWorkflowPreferences UserWorkflowPreference[] @relation("OrgUserWorkflowPreferenceRel")
+  workflows            Workflow[]
 
+  @@index([companyId])
+  @@index([companyId, parentId])
+  @@index([companyId, status, nodePath])
   @@map("org_structure")
 }
 
@@ -254,6 +438,7 @@ model UserAccess {
   nodeId         String       @map("node_id")
   accessType     AccessType?  @map("access_type")
   accessCategory UserCategory @default(NODE) @map("user_category")
+  source         AccessSource @default(USER)
   companyId      String       @map("company_id")
   isGlobalAccess Boolean      @default(false) @map("is_global_access")
   createdAt      DateTime     @default(now()) @map("created_at")
@@ -264,27 +449,43 @@ model UserAccess {
   user           User         @relation(fields: [userId], references: [id])
 
   @@unique([userId, roleCode, companyId, nodeId])
+  @@index([companyId])
+  @@index([userId])
+  @@index([companyId, userId])
+  @@index([companyId, userId, isGlobalAccess])
+  @@index([companyId, roleCode])
+  @@index([companyId, nodeId])
   @@map("user_access")
 }
 
 model Workflow {
-  id             String          @id @default(uuid())
-  name           String
-  alias          String
-  nodeId         String          @map("node_id")
-  module         String
-  subModule      String          @map("sub_module")
-  roleCode       String?         @map("role_code")
-  companyId      String          @map("company_id")
-  levelsHash     String          @map("levels_hash")
-  workflowReqIds String[]        @default([]) @map("workflow_req_ids")
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @updatedAt @map("updated_at")
-  company        Company         @relation(fields: [companyId], references: [id])
-  orgStructure   OrgStructure    @relation(fields: [nodeId], references: [id])
-  levels         WorkflowLevel[]
+  id                String          @id @default(uuid())
+  name              String
+  alias             String
+  nodeId            String          @map("node_id")
+  module            String
+  subModule         String          @map("sub_module")
+  type              WorkflowType    @default(NODE)
+  roleCode          String?         @map("role_code")
+  companyId         String          @map("company_id")
+  levelsHash        String          @map("levels_hash")
+  workflowReqIds    String[]        @default([]) @map("workflow_req_ids")
+  status            Status          @default(ACTIVE)
+  editLockedBy      String?         @map("edit_locked_by")
+  editLockedAt      DateTime?       @map("edit_locked_at")
+  editLockExpiresAt DateTime?       @map("edit_lock_expires_at")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  company           Company         @relation(fields: [companyId], references: [id])
+  orgStructure      OrgStructure    @relation(fields: [nodeId], references: [id])
+  userWorkflowPreferences UserWorkflowPreference[] @relation("WorkflowUserWorkflowPreferenceRel")
+  levels            WorkflowLevel[]
 
-  @@unique([companyId, nodeId, module, subModule, levelsHash])
+  // Partial unique index for non-archived workflows is managed in SQL migration.
+  @@index([companyId, nodeId, module, subModule, levelsHash])
+  @@index([nodeId])
+  @@index([companyId])
+  @@index([roleCode])
   @@map("workflow")
 }
 
@@ -300,6 +501,9 @@ model WorkflowApprover {
   createdAt      DateTime         @default(now()) @map("created_at")
   updatedAt      DateTime         @updatedAt @map("updated_at")
 
+  @@index([workflowId])
+  @@index([reqId, level])
+  @@index([reqTable, reqId, status])
   @@map("workflow_approver")
 }
 
@@ -313,28 +517,38 @@ model WorkflowLevel {
   workflow     Workflow      @relation(fields: [workflowId], references: [id])
 
   @@unique([workflowId, level])
+  @@index([workflowId])
   @@map("workflow_level")
 }
 
 model WorkflowReq {
-  id                String               @id @default(uuid())
-  companyId         String               @map("company_id")
-  nodeId            String               @map("node_id")
-  module            String
-  subModule         String               @map("sub_module")
-  levelsHash        String               @map("levels_hash")
-  workflowId        String?              @map("workflow_id")
-  alias             String?              @map("alias")
-  data              Json
-  status            OnboardingStatus     @default(PENDING)
-  approvalRemark    String?              @map("approval_remark")
-  eligibleApprovers String[]             @default([]) @map("eligible_approvers")
-  createdAt         DateTime             @default(now()) @map("created_at")
-  updatedAt         DateTime             @updatedAt @map("updated_at")
-  company           Company              @relation(fields: [companyId], references: [id])
-  workflowHistories WorkflowReqHistory[] @relation("WorkflowRequestHistory")
+  id                 String               @id @default(uuid())
+  companyId          String               @map("company_id")
+  nodeId             String               @map("node_id")
+  module             String
+  type               RequestType          @default(INITIATE)
+  impact             String               @default("NO_ISSUES")
+  subModule          String               @map("sub_module")
+  levelsHash         String               @map("levels_hash")
+  workflowId         String?              @map("workflow_id")
+  approvalWorkflowId String?              @map("approval_workflow_id")
+  alias              String?              @map("alias")
+  data               Json
+  oldData            Json?                @map("old_data")
+  initiatorId        String?              @map("initiator_id")
+  status             OnboardingStatus     @default(PENDING)
+  approvalRemark     String?              @map("approval_remark")
+  eligibleApprovers  String[]             @default([]) @map("eligible_approvers")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  company            Company              @relation(fields: [companyId], references: [id])
+  workflowHistories  WorkflowReqHistory[] @relation("WorkflowRequestHistory")
 
   @@index([levelsHash, companyId])
+  @@index([approvalWorkflowId])
+  @@index([companyId, status, createdAt, id])
+  @@index([companyId, nodeId, module, subModule, status])
+  @@index([companyId, levelsHash])
   @@map("workflow_req")
 }
 
@@ -351,62 +565,47 @@ model WorkflowReqHistory {
   user          User        @relation("UserWorkflowHistoryRel", fields: [eventUserId], references: [id])
   workflowReq   WorkflowReq @relation("WorkflowRequestHistory", fields: [workflowReqId], references: [id])
 
+  @@index([companyId])
   @@map("workflow_req_history")
 }
 
-model ApiTrace {
-  id           String    @id @default(uuid())
-  trackingId   String    @unique @map("tracking_id")
-  companyId    String?   @map("company_id")
-  userId       String?   @map("user_id")
-  entryMethod  String    @map("entry_method")
-  entryUrl     String    @map("entry_url")
-  statusCode   Int?      @map("status_code")
-  totalLatency Int?      @map("total_latency")
-  startedAt    DateTime  @default(now()) @map("started_at")
-  endedAt      DateTime? @map("ended_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-
-  company   Company? @relation("CompanyApiTraceRel", fields: [companyId], references: [id])
-  user      User?    @relation("UserApiTraceRel", fields: [userId], references: [id])
-  spans     ApiSpan[]
-
-  @@map("api_trace")
-}
-
 model ApiSpan {
-  id             String      @id @default(uuid())
-  trackingId     String      @map("tracking_id")
-  parentSpanId   String?     @map("parent_span_id")
-
-  type           ApiSpanType
-
-  method     String
-  url        String
-  statusCode Int?   @map("status_code")
-
-  headers Json?
-  reqBody Json? @map("req_body")
-  resBody Json? @map("res_body")
-  resHeaders Json? @map("res_headers")
-  latency   Int?
-  companyId String? @map("company_id")
-  userId    String? @map("user_id")
-
-  startedAt DateTime  @default(now()) @map("started_at")
-  endedAt   DateTime? @map("ended_at")
-  createdAt DateTime  @default(now()) @map("created_at")
-
-  company Company? @relation("CompanyApiSpanRel", fields: [companyId], references: [id])
-  user    User?    @relation("UserApiSpanRel", fields: [userId], references: [id])
-  trace   ApiTrace @relation(fields: [trackingId], references: [trackingId])
+  id           String      @id @default(uuid())
+  trackingId   String      @map("tracking_id")
+  subCount     String?     @map("sub_count")
+  type         ApiSpanType
+  method       String
+  url          String
+  statusCode   Int?        @map("status_code")
+  headers      Json?
+  reqBody      Json?       @map("req_body")
+  resBody      Json?       @map("res_body")
+  responseSize Int?        @map("response_size")
+  resHeaders   Json?       @map("res_headers")
+  latency      Int?
+  ipAddress    String?     @map("ip_address")
+  companyId    String?     @map("company_id")
+  userId       String?     @map("user_id")
+  startedAt    DateTime    @default(now()) @map("started_at")
+  endedAt      DateTime?   @map("ended_at")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  company      Company?    @relation("CompanyApiSpanRel", fields: [companyId], references: [id])
+  user         User?       @relation("UserApiSpanRel", fields: [userId], references: [id])
 
   @@index([trackingId])
   @@index([companyId])
   @@index([userId])
   @@index([type])
   @@index([createdAt])
+  @@index([statusCode])
+  @@index([subCount])
   @@map("api_span")
+}
+
+enum ApiSpanType {
+  MIDDLELAYER
+  BACKEND
+  EXTERNAL
 }
 
 enum NodeType {
@@ -423,10 +622,13 @@ enum EventType {
   APPROVED
   REJECTED
   MODIFY
+  AUTO_GENERATE
+  AUTO_DELETE
 }
 
 enum Status {
   ACTIVE
+  ARCHIVE
   INACTIVE
 }
 
@@ -434,6 +636,20 @@ enum OnboardingStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum RequestType {
+  INITIATE
+  UPDATE
+  INACTIVE
+  ARCHIVE
+  AUTO_GENERATE
+}
+
+enum WorkflowType {
+  NODE
+  IMMEDIATE_CHILD
+  ALL_CHILD
 }
 
 enum OnboardedType {
@@ -446,6 +662,7 @@ enum ApproverType {
   REPORTING_MANAGER
   NODE_APPROVER
   HIERARCHY_APPROVER
+  NO_APPROVER
 }
 
 enum ApprovalType {
@@ -464,8 +681,14 @@ enum UserCategory {
   NODE
 }
 
-enum ApiSpanType {
-  MIDDLELAYER
-  BACKEND
-  EXTERNAL
+enum AccessSource {
+  USER
+  AUTO_GENERATED
+}
+
+enum NotificationModule {
+  USER
+  WORKFLOW
+  ORG
+  COMPANY
 }

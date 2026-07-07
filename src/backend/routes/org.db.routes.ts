@@ -18,5 +18,6 @@ router.post(
 );
 router.post('/fetch', OrgStructureDbController.fetchStructure);
 router.post('/fetch-history', OrgStructureDbController.fetchOrgHistory);
+router.post('/history-detail', OrgStructureDbController.getOrgHistoryDetail);
 
 export default router;

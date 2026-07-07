@@ -1,0 +1,206 @@
+import { z } from 'zod';
+import { optionalUuidSchema, paginationSchema } from './common.validation';
+
+const normalizedFetchStatusSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const normalizeItem = (item: unknown) =>
+      typeof item === 'string' ? item.trim().toUpperCase() : item;
+
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeItem(item)).filter(Boolean);
+    }
+
+    return normalizeItem(value);
+  },
+  z
+    .union([
+      z.enum(['READ', 'UNREAD', 'HIDDEN', 'ALL']),
+      z.array(z.enum(['READ', 'UNREAD', 'HIDDEN', 'ALL'])),
+    ])
+    .optional()
+    .default('ALL'),
+);
+
+const normalizedReferenceTypeSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const normalizeItem = (item: unknown) => {
+      if (typeof item !== 'string') return item;
+      const normalized = item.trim().toUpperCase();
+      return normalized === 'ALL' ? undefined : normalized;
+    };
+
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeItem(item)).filter(Boolean);
+    }
+
+    if (typeof value === 'string') {
+      const normalized = value.trim().toUpperCase();
+      return normalized === 'ALL' ? undefined : normalized;
+    }
+
+    return value;
+  },
+  z
+    .union([
+      z.enum(['USER', 'ORG', 'WORKFLOW', 'COMPANY']),
+      z.array(z.enum(['USER', 'ORG', 'WORKFLOW', 'COMPANY'])),
+    ])
+    .optional(),
+);
+
+const normalizedNotificationTypeFilterSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const normalizeItem = (item: unknown) =>
+      typeof item === 'string' ? item.trim().toUpperCase() : item;
+
+    if (Array.isArray(value)) {
+      return value.map((item) => normalizeItem(item)).filter(Boolean);
+    }
+
+    return normalizeItem(value);
+  },
+  z.union([z.string().min(1), z.array(z.string().min(1))]).optional(),
+);
+
+const normalizedDateRangeSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (normalized === '7DAYS') return '7_DAYS';
+    if (normalized === '15DAYS') return '15_DAYS';
+    if (normalized === '1MONTH') return '1_MONTH';
+    return normalized;
+  },
+  z.enum(['ALL', '7_DAYS', '15_DAYS', '1_MONTH', 'CUSTOM']).optional().default('ALL'),
+);
+
+const normalizedDateStringSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    return typeof value === 'string' ? value.trim() : value;
+  },
+  z.string().min(1).optional(),
+);
+
+const normalizedReadStatusSchema = z.preprocess(
+  (value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    return typeof value === 'string' ? value.trim().toUpperCase() : value;
+  },
+  z.enum(['READ', 'UNREAD', 'ARCHIVED']).optional(),
+);
+
+export const notificationFetchSchema = z
+  .object({
+    status: normalizedFetchStatusSchema,
+    refType: normalizedReferenceTypeSchema,
+    module: normalizedReferenceTypeSchema,
+    type: normalizedNotificationTypeFilterSchema,
+    filters: z
+      .object({
+        status: normalizedFetchStatusSchema,
+        refType: normalizedReferenceTypeSchema,
+        module: normalizedReferenceTypeSchema,
+        type: normalizedNotificationTypeFilterSchema,
+      })
+      .strict()
+      .optional(),
+    dateRange: normalizedDateRangeSchema,
+    fromDate: normalizedDateStringSchema,
+    toDate: normalizedDateStringSchema,
+    cursorId: optionalUuidSchema('cursor ID'),
+    cursor: optionalUuidSchema('cursor ID'),
+    ...paginationSchema,
+  })
+  .strict()
+  .refine(
+    (data) =>
+      data.dateRange !== 'CUSTOM' ||
+      (Boolean(data.fromDate) && Boolean(data.toDate)),
+    {
+      message: 'fromDate and toDate are required when dateRange is CUSTOM',
+      path: ['fromDate'],
+    },
+  )
+  .refine(
+    (data) => {
+      if (data.dateRange !== 'CUSTOM' || !data.fromDate || !data.toDate) {
+        return true;
+      }
+
+      const fromDate = new Date(data.fromDate);
+      const toDate = new Date(data.toDate);
+
+      return (
+        !Number.isNaN(fromDate.getTime()) &&
+        !Number.isNaN(toDate.getTime()) &&
+        fromDate.getTime() <= toDate.getTime()
+      );
+    },
+    {
+      message: 'fromDate must be earlier than or equal to toDate',
+      path: ['toDate'],
+    },
+  );
+
+export const notificationReadSchema = z
+  .object({
+    notificationUserId: optionalUuidSchema('notification user ID'),
+    notificationId: optionalUuidSchema('notification ID'),
+    id: optionalUuidSchema('notification user ID'),
+    status: normalizedReadStatusSchema,
+  })
+  .strict()
+  .refine((data) => data.notificationUserId || data.id || data.notificationId, {
+    message: 'notificationUserId or notificationId is required',
+    path: ['notificationUserId'],
+  });
+
+export const notificationSettingsFetchSchema = z.object({}).strict();
+
+export const notificationSettingsUpdateSchema = z
+  .array(
+    z
+      .object({
+        companyCode: z.string().trim().min(1, 'Company code is required'),
+        settings: z
+          .array(
+            z
+              .object({
+                nodePath: z.string().trim().min(1, 'Node path is required'),
+                module: z.enum(['USER', 'WORKFLOW', 'ORG', 'COMPANY']),
+                isEnabled: z.boolean(),
+                remarks: z.string().trim().min(1).nullable().optional(),
+              })
+              .strict(),
+          )
+          .min(1, 'At least one setting is required'),
+      })
+      .strict(),
+  )
+  .min(1, 'At least one company settings payload is required');

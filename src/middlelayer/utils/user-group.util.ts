@@ -15,6 +15,7 @@ interface CompanyInfo {
 }
 
 interface UserMappingInfo {
+  companyId: string;
   company: CompanyInfo;
 }
 
@@ -27,7 +28,10 @@ interface UserMappingInfo {
  * - To handle companies that don't belong to any group by categorizing them as 'Independent'.
  * - It provides a clean, hierarchical view of user access for the UI.
  */
-export const formatUserGroups = (userMappings: UserMappingInfo[]) => {
+export const formatUserGroups = (
+  userMappings: UserMappingInfo[],
+  reporteeCountByCompanyId: Record<string, number> = {},
+) => {
   const groupsMap = new Map<string, Record<string, any>>();
 
   userMappings.forEach((um) => {
@@ -35,6 +39,7 @@ export const formatUserGroups = (userMappings: UserMappingInfo[]) => {
       legalName: um.company.legalName,
       brandName: um.company.brandName,
       companyCode: um.company.companyCode,
+      reporteeCount: reporteeCountByCompanyId[um.companyId] ?? 0,
     };
 
     const mappings = um.company.companyMappings;

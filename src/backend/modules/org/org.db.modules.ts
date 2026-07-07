@@ -2,21 +2,4284 @@ import type { Request, Response, NextFunction } from 'express';
 import { prisma, ltree } from '../../lib/prisma';
 import { AppError } from '../../middlewares/error.middleware';
 import { WorkflowApproverUtil } from '../../utils/workflow-approver.util';
+import { NotificationService } from '../notifications/notification.db.modules';
+import { HistoryUserUtil } from '../../utils/history-user.util';
+import { cloneJson, mergeJsonData } from '../../utils/json-patch.util';
+
+type OrgNodeStatus = 'ACTIVE' | 'INACTIVE';
+
+type OrgNodeSnapshot = {
+  newNodeName: string;
+  nodeType: string;
+  nodePath: string;
+  parentNode: {
+    nodeName: string;
+    nodePath: string;
+  };
+  status: OrgNodeStatus;
+};
+
+type OrgInactivationNotification = {
+  nodeName: string;
+  nodePath: string;
+  accessUserIds: string[];
+  userNames: string[];
+  users: Array<{
+    name: string;
+    email: string | null;
+    access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
+  }>;
+  workflowCount: number;
+  workflowNames: string[];
+  workflows: Array<{
+    workflowName: string;
+    alias: string | null;
+  }>;
+};
+
+type OrgImpactSummary = {
+  userAccess: Array<{
+    name: string;
+    email: string | null;
+    access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
+  }>;
+  workflow: Array<{
+    workflowName: string;
+    alias: string | null;
+  }>;
+};
+
+type OrgAutoDeletedWorkflowNotification = {
+  workflowName: string;
+  nodeName: string;
+  nodePath: string;
+  workflowReqIds?: string[];
+};
+
+type PendingUserAccessRemovalNotification = {
+  requestId: string;
+  initiatorId: string | null;
+  eligibleApprovers: string[];
+  targetUserName: string;
+  targetUserEmail: string | null;
+  removedPermissions: Array<{
+    nodeName: string;
+    nodePath: string;
+    roleName: string;
+  }>;
+};
+
+type PendingUserAccessAdditionNotification = {
+  requestId: string;
+  initiatorId: string | null;
+  eligibleApprovers: string[];
+  targetUserName: string;
+  targetUserEmail: string | null;
+  addedPermissions: Array<{
+    nodeName: string;
+    nodePath: string;
+    roleName: string;
+  }>;
+};
+
+type PendingWorkflowDeletionNotification = {
+  requestId: string;
+  initiatorId: string | null;
+  eligibleApprovers: string[];
+  workflowName: string;
+  targetNodePath: string;
+};
+
+type OrgUserAccessChangeNotification = {
+  userId: string;
+  userName?: string | null;
+  userEmail?: string | null;
+  roleName?: string | null;
+  roleCode: string;
+  nodeName: string;
+  nodePath: string;
+};
+
+type AutoUserAccessAuditEntry = {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  roleCode: string;
+  roleName: string;
+  roleCategory: string;
+  roleSubCategory: string;
+  nodeId: string;
+  nodeName: string;
+  nodePath: string;
+  accessType: 'PRIMARY' | 'SECONDARY';
+  accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
+  companyId: string;
+  isGlobalAccess: boolean;
+};
+
+type PendingUserPermissionSnapshot = {
+  accessType: 'PRIMARY' | 'SECONDARY';
+  roleName: string;
+  roleCategory: string;
+  roleSubCategory: string;
+  nodeName: string;
+  nodePath: string;
+  accessCategory: 'ALL_CHILD' | 'IMMEDIATE_CHILD' | 'NODE' | null;
+};
+
+type OrgLinkedStructureNode = {
+  nodePath: string;
+  nodeName: string;
+  nodeType: string;
+  levelCount: number;
+  status: OrgNodeStatus;
+  isPending: boolean;
+  isAutoDeleted: boolean;
+  linkedOrgStructure?: OrgLinkedStructureNode[];
+};
 
 /**
  * Controller for managing the organizational hierarchy (nodes) for companies.
  * Handles the creation, approval, and retrieval of organization units (Roots, Groups, Locations, etc.)
  */
 export class OrgStructureDbController {
+  private static getNodeLevelCount(nodePath: string | null | undefined) {
+    const segments = String(nodePath || '')
+      .split('.')
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    return Math.max(segments.length, 1);
+  }
+
+  private static getOrgHistoryDisplayEvent(
+    event: string | null | undefined,
+    requestType: string | null | undefined,
+  ) {
+    const normalizedEvent = String(event || '').toUpperCase();
+    if (normalizedEvent !== 'INITIATE') return normalizedEvent || event;
+
+    const normalizedType = String(requestType || 'INITIATE').toUpperCase();
+    if (normalizedType === 'UPDATE') return 'MODIFY';
+    if (normalizedType === 'ACTIVE') return 'ACTIVE';
+    if (normalizedType === 'INACTIVE') return 'INACTIVE';
+    if (normalizedType === 'ARCHIVE') return 'ARCHIVE';
+
+    return 'INITIATE';
+  }
+
+  private static resolveOrgHistoryRequestType(
+    request:
+      | {
+          type?: string | null;
+          impact?: string | null;
+          data?: unknown;
+        }
+      | null
+      | undefined,
+  ) {
+    const normalizedImpact = String(request?.impact || '').toUpperCase();
+    if (
+      normalizedImpact === 'ACTIVE' ||
+      normalizedImpact === 'INACTIVE' ||
+      normalizedImpact === 'ARCHIVE'
+    ) {
+      return normalizedImpact;
+    }
+
+    const requestData = request?.data as any;
+    const normalizedStatus = String(requestData?.status || '').toUpperCase();
+    const normalizedType = String(request?.type || 'INITIATE').toUpperCase();
+    if (
+      normalizedType === 'UPDATE' &&
+      (normalizedStatus === 'ACTIVE' ||
+        normalizedStatus === 'INACTIVE' ||
+        normalizedStatus === 'ARCHIVE')
+    ) {
+      return normalizedStatus;
+    }
+
+    return normalizedType || 'INITIATE';
+  }
+
+  private static getEmptyOrgHistoryApprovalSummary() {
+    return {
+      currentStatus: null,
+      totalLevels: 0,
+      completedLevels: 0,
+      rejectedAtLevel: null,
+      currentPendingLevel: null,
+    };
+  }
+
+  private static getOrgHistoryLevelCount(
+    displayEvent: string,
+    options: {
+      approvalLevel?: number | null;
+      approvalStep?: number | null;
+      isChangeRequestStart?: boolean;
+      modificationSequence?: number | null;
+    } = {},
+  ) {
+    if (options.isChangeRequestStart) {
+      return `M${options.modificationSequence || 1}`;
+    }
+
+    if (displayEvent === 'INITIATE') return 'I';
+    if (displayEvent === 'APPROVED') {
+      const step = options.approvalStep ?? options.approvalLevel;
+      if (step) return `A${step}`;
+    }
+    if (displayEvent === 'REJECTED') {
+      const step = options.approvalStep ?? options.approvalLevel;
+      if (step) return `R${step}`;
+    }
+    if (displayEvent === 'ACTIVE') return 'AC';
+    if (displayEvent === 'INACTIVE') return 'IN';
+    if (displayEvent === 'ARCHIVE') return 'AR';
+
+    return null;
+  }
+
+  private static formatConflictDate(value: Date | string | null | undefined) {
+    if (!value) return 'N/A';
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? 'N/A' : date.toISOString();
+  }
+
+  private static buildSyntheticOrgHistoryId(
+    sourceHistoryId: string,
+    orgReqId: string,
+    event: string,
+    suffix?: string | number | null,
+  ) {
+    const normalizedSuffix =
+      suffix === null || suffix === undefined || suffix === ''
+        ? 'base'
+        : String(suffix);
+    return [
+      'synthetic-org-history',
+      sourceHistoryId,
+      orgReqId,
+      event,
+      normalizedSuffix,
+    ].join('::');
+  }
+
+  private static resolveBaseOrgHistoryId(historyId: string) {
+    if (!historyId.startsWith('synthetic-org-history::')) {
+      return historyId;
+    }
+
+    const parts = historyId.split('::');
+    return parts[1] || historyId;
+  }
+
+  private static normalizeOrgNodeType(value: unknown) {
+    return typeof value === 'string' && value.trim()
+      ? value.trim().toUpperCase()
+      : null;
+  }
+
+  private static buildOrgHistoryNodeIdentity(data: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const nodeName =
+      typeof source?.newNodeName === 'string' && source.newNodeName.trim()
+        ? source.newNodeName.trim().toLowerCase()
+        : typeof source?.nodeName === 'string' && source.nodeName.trim()
+          ? source.nodeName.trim().toLowerCase()
+          : typeof source?.currentData?.nodeName === 'string' &&
+              source.currentData.nodeName.trim()
+            ? source.currentData.nodeName.trim().toLowerCase()
+            : null;
+    const nodeType = OrgStructureDbController.normalizeOrgNodeType(
+      source?.nodeType || source?._nodeType || source?.currentData?.nodeType,
+    );
+    const nodePath =
+      typeof source?.nodePath === 'string' && source.nodePath.trim()
+        ? source.nodePath.trim()
+        : typeof source?.currentData?.nodePath === 'string' &&
+            source.currentData.nodePath.trim()
+          ? source.currentData.nodePath.trim()
+          : typeof source?.targetNodePath === 'string' &&
+              source.targetNodePath.trim()
+            ? source.targetNodePath.trim()
+            : null;
+    const parentNodePath =
+      typeof source?.parentNode?.nodePath === 'string' &&
+      source.parentNode.nodePath.trim()
+        ? source.parentNode.nodePath.trim()
+        : typeof source?.parentNodePath === 'string' &&
+            source.parentNodePath.trim()
+          ? source.parentNodePath.trim()
+          : null;
+
+    return {
+      nodeName,
+      nodeType,
+      nodePath,
+      parentNodePath,
+    };
+  }
+
+  private static orgHistoryNodeIdentityMatches(left: any, right: any) {
+    const leftIdentity =
+      OrgStructureDbController.buildOrgHistoryNodeIdentity(left);
+    const rightIdentity =
+      OrgStructureDbController.buildOrgHistoryNodeIdentity(right);
+
+    if (leftIdentity.nodePath || rightIdentity.nodePath) {
+      if (
+        !leftIdentity.nodePath ||
+        !rightIdentity.nodePath ||
+        leftIdentity.nodePath !== rightIdentity.nodePath
+      ) {
+        return false;
+      }
+      if (
+        leftIdentity.nodeType &&
+        rightIdentity.nodeType &&
+        leftIdentity.nodeType !== rightIdentity.nodeType
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    return (
+      leftIdentity.nodeName === rightIdentity.nodeName &&
+      leftIdentity.nodeType === rightIdentity.nodeType &&
+      leftIdentity.parentNodePath === rightIdentity.parentNodePath
+    );
+  }
+
+  private static normalizePendingUserPermission(
+    permission: any,
+  ): PendingUserPermissionSnapshot {
+    return {
+      accessType:
+        permission?.accessType === 'PRIMARY' ? 'PRIMARY' : 'SECONDARY',
+      roleName:
+        typeof permission?.roleName === 'string' ? permission.roleName : '',
+      roleCategory:
+        typeof permission?.roleCategory === 'string'
+          ? permission.roleCategory
+          : '',
+      roleSubCategory:
+        typeof permission?.roleSubCategory === 'string'
+          ? permission.roleSubCategory
+          : '',
+      nodeName:
+        typeof permission?.nodeName === 'string' ? permission.nodeName : '',
+      nodePath:
+        typeof permission?.nodePath === 'string' ? permission.nodePath : '',
+      accessCategory:
+        permission?.accessCategory === 'ALL_CHILD' ||
+        permission?.accessCategory === 'IMMEDIATE_CHILD' ||
+        permission?.accessCategory === 'NODE'
+          ? permission.accessCategory
+          : null,
+    };
+  }
+
+  private static pendingUserPermissionsEqual(
+    left: PendingUserPermissionSnapshot,
+    right: PendingUserPermissionSnapshot,
+  ) {
+    return (
+      left.accessType === right.accessType &&
+      left.roleName === right.roleName &&
+      left.roleCategory === right.roleCategory &&
+      left.roleSubCategory === right.roleSubCategory &&
+      left.nodeName === right.nodeName &&
+      left.nodePath === right.nodePath &&
+      left.accessCategory === right.accessCategory
+    );
+  }
+
+  private static pendingUserPermissionReplacementKey(
+    permission: PendingUserPermissionSnapshot,
+  ) {
+    if (permission.accessType === 'PRIMARY') return 'PRIMARY';
+
+    return [
+      permission.accessType,
+      permission.roleName,
+      permission.nodePath,
+    ].join('|');
+  }
+
+  private static mergePendingUserPermissionMutations(
+    existing: PendingUserPermissionSnapshot[],
+    requested: any[],
+  ): PendingUserPermissionSnapshot[] {
+    const proposed = existing.map((permission) => ({ ...permission }));
+
+    for (const request of requested) {
+      const permission =
+        OrgStructureDbController.normalizePendingUserPermission(request);
+      const operation =
+        request?.remove === true
+          ? 'REMOVE'
+          : typeof request?.operation === 'string'
+            ? request.operation.trim().toUpperCase()
+            : null;
+      const exactIndex = proposed.findIndex((stored) =>
+        OrgStructureDbController.pendingUserPermissionsEqual(
+          stored,
+          permission,
+        ),
+      );
+      const replacementIndex = proposed.findIndex(
+        (stored) =>
+          OrgStructureDbController.pendingUserPermissionReplacementKey(
+            stored,
+          ) ===
+          OrgStructureDbController.pendingUserPermissionReplacementKey(
+            permission,
+          ),
+      );
+
+      if (operation === 'REMOVE') {
+        if (permission.accessType === 'PRIMARY') continue;
+        const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+        if (index >= 0) proposed.splice(index, 1);
+        continue;
+      }
+
+      if (permission.accessType === 'PRIMARY') {
+        for (let index = proposed.length - 1; index >= 0; index--) {
+          if (proposed[index]?.accessType === 'PRIMARY') {
+            proposed.splice(index, 1);
+          }
+        }
+        proposed.push(permission);
+        continue;
+      }
+
+      const index = exactIndex >= 0 ? exactIndex : replacementIndex;
+      if (index >= 0) {
+        proposed[index] = permission;
+      } else {
+        proposed.push(permission);
+      }
+    }
+
+    return proposed;
+  }
+
+  private static getPendingWorkflowTargetNodePath(request: any) {
+    const requestData = request?.data as any;
+    const target = requestData?.target;
+
+    return (
+      (typeof target?.nodePath === 'string' && target.nodePath) ||
+      (typeof requestData?.nodePath === 'string' && requestData.nodePath) ||
+      (typeof request?.orgStructure?.nodePath === 'string' &&
+        request.orgStructure.nodePath) ||
+      null
+    );
+  }
+
+  private static async resolvePendingUserPermissions(tx: any, request: any) {
+    const requestData = (request?.data || {}) as any;
+    const requestedPermissions = Array.isArray(requestData.permissions)
+      ? requestData.permissions
+      : [];
+    const requestType = String(request?.type || 'INITIATE').toUpperCase();
+
+    if (requestType === 'INITIATE') {
+      return OrgStructureDbController.mergePendingUserPermissionMutations(
+        [],
+        requestedPermissions,
+      );
+    }
+
+    const targetEmail =
+      (typeof requestData?.targetUserEmail === 'string' &&
+        requestData.targetUserEmail) ||
+      (typeof requestData?.basicDetails?.email === 'string' &&
+        requestData.basicDetails.email) ||
+      null;
+    if (!targetEmail) {
+      return OrgStructureDbController.mergePendingUserPermissionMutations(
+        [],
+        requestedPermissions,
+      );
+    }
+
+    const targetUser = await tx.user.findUnique({
+      where: { email: targetEmail },
+      select: { id: true },
+    });
+    if (!targetUser) {
+      return OrgStructureDbController.mergePendingUserPermissionMutations(
+        [],
+        requestedPermissions,
+      );
+    }
+
+    const currentPermissions = await tx.userAccess.findMany({
+      where: {
+        companyId: request.companyId,
+        userId: targetUser.id,
+      },
+      select: {
+        accessType: true,
+        accessCategory: true,
+        role: {
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+          },
+        },
+        orgStructure: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+          },
+        },
+      },
+    });
+
+    return OrgStructureDbController.mergePendingUserPermissionMutations(
+      currentPermissions.map((permission: any) => ({
+        accessType: permission.accessType,
+        roleName: permission.role?.roleName || '',
+        roleCategory: permission.role?.category || '',
+        roleSubCategory: permission.role?.subCategory || '',
+        nodeName: permission.orgStructure?.nodeName || '',
+        nodePath: permission.orgStructure?.nodePath || '',
+        accessCategory: permission.accessCategory || null,
+      })),
+      requestedPermissions,
+    );
+  }
+
+  private static async rejectPendingUserRequestsForOrgInactivation(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+      nodeName: string;
+      actorId?: string;
+    },
+  ) {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: { in: ['INITIATE', 'UPDATE'] },
+      },
+      select: {
+        id: true,
+        type: true,
+        companyId: true,
+        data: true,
+      },
+    });
+
+    for (const request of pendingRequests) {
+      const resolvedPermissions =
+        await OrgStructureDbController.resolvePendingUserPermissions(
+          tx,
+          request,
+        );
+      const primaryPermission = resolvedPermissions.find(
+        (permission) =>
+          permission.accessType === 'PRIMARY' &&
+          typeof permission.nodePath === 'string' &&
+          permission.nodePath &&
+          OrgStructureDbController.pathWithinSubtree(
+            permission.nodePath,
+            params.nodePath,
+          ),
+      );
+      if (!primaryPermission) continue;
+
+      const currentPendingLevel = await tx.workflowApprover.findFirst({
+        where: {
+          reqId: request.id,
+          reqTable: 'user_onboarding',
+          status: 'PENDING',
+        },
+        orderBy: { level: 'asc' },
+        select: { level: true },
+      });
+      const remark = `Auto-rejected because organization ${params.nodeName} (${params.nodePath}) was inactivated and this request includes PRIMARY access for node ${primaryPermission.nodePath}.`;
+
+      await WorkflowApproverUtil.rejectAllLevels(
+        tx,
+        request.id,
+        'user_onboarding',
+      );
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          status: 'REJECTED',
+          approvalRemark: remark,
+        },
+      });
+
+      const requestData = request.data as any;
+      const historyEmail =
+        request.type === 'INITIATE'
+          ? requestData?.basicDetails?.email
+          : requestData?.targetUserEmail || requestData?.basicDetails?.email;
+      if (params.actorId && typeof historyEmail === 'string' && historyEmail) {
+        await tx.userHistory.create({
+          data: {
+            email: historyEmail,
+            event: 'REJECTED',
+            eventUserId: params.actorId,
+            companyId: params.companyId,
+            reqId: request.id,
+            level: currentPendingLevel?.level || null,
+            remarks: remark,
+          },
+        });
+      }
+    }
+  }
+
+  private static getPendingUserTargetName(requestData: any) {
+    const name =
+      (typeof requestData?.basicDetails?.name === 'string' &&
+        requestData.basicDetails.name.trim()) ||
+      (typeof requestData?.targetUserName === 'string' &&
+        requestData.targetUserName.trim()) ||
+      '';
+    const email =
+      (typeof requestData?.basicDetails?.email === 'string' &&
+        requestData.basicDetails.email.trim()) ||
+      (typeof requestData?.targetUserEmail === 'string' &&
+        requestData.targetUserEmail.trim()) ||
+      null;
+
+    return {
+      targetUserName: name || email || 'user',
+      targetUserEmail: email,
+    };
+  }
+
+  private static async assertNoPendingPrimaryAccessRequestsInSubtree(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+      nodeName: string;
+    },
+  ) {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: { in: ['INITIATE', 'UPDATE'] },
+      },
+      select: {
+        id: true,
+        type: true,
+        data: true,
+      },
+    });
+    const conflicts: string[] = [];
+
+    for (const request of pendingRequests) {
+      const requestData = request.data as any;
+      const requestedPermissions = Array.isArray(requestData?.permissions)
+        ? requestData.permissions
+        : [];
+      const primaryPermission = requestedPermissions.find((permission: any) => {
+        const operation =
+          permission?.remove === true
+            ? 'REMOVE'
+            : typeof permission?.operation === 'string'
+              ? permission.operation.trim().toUpperCase()
+              : null;
+
+        return (
+          operation !== 'REMOVE' &&
+          permission?.accessType === 'PRIMARY' &&
+          typeof permission.nodePath === 'string' &&
+          permission.nodePath &&
+          OrgStructureDbController.pathWithinSubtree(
+            permission.nodePath,
+            params.nodePath,
+          )
+        );
+      });
+      if (!primaryPermission) continue;
+
+      const target =
+        OrgStructureDbController.getPendingUserTargetName(requestData);
+      conflicts.push(
+        `${target.targetUserEmail || target.targetUserName} (${primaryPermission.nodePath})`,
+      );
+    }
+
+    if (conflicts.length > 0) {
+      throw new AppError(
+        `Cannot inactivate node '${params.nodeName || params.nodePath}' because it has ${conflicts.length} pending primary user assignment(s). Please approve, reject, or change these pending users before deactivating.`,
+        400,
+      );
+    }
+  }
+
+  private static async removePendingSecondaryAccessRequestsForOrgInactivation(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+    },
+  ): Promise<PendingUserAccessRemovalNotification[]> {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: { in: ['INITIATE', 'UPDATE'] },
+      },
+      select: {
+        id: true,
+        type: true,
+        data: true,
+        initiatorId: true,
+        eligibleApprovers: true,
+      },
+    });
+    const notifications: PendingUserAccessRemovalNotification[] = [];
+
+    for (const request of pendingRequests) {
+      const requestData = (request.data || {}) as any;
+      const requestedPermissions = Array.isArray(requestData.permissions)
+        ? requestData.permissions
+        : [];
+      if (requestedPermissions.length === 0) continue;
+
+      const removedPermissions: PendingUserAccessRemovalNotification['removedPermissions'] =
+        [];
+      const nextPermissions = requestedPermissions.filter((permission: any) => {
+        const operation =
+          permission?.remove === true
+            ? 'REMOVE'
+            : typeof permission?.operation === 'string'
+              ? permission.operation.trim().toUpperCase()
+              : null;
+        const shouldRemove =
+          operation !== 'REMOVE' &&
+          permission?.accessType !== 'PRIMARY' &&
+          typeof permission?.nodePath === 'string' &&
+          permission.nodePath &&
+          OrgStructureDbController.pathWithinSubtree(
+            permission.nodePath,
+            params.nodePath,
+          );
+
+        if (shouldRemove) {
+          removedPermissions.push({
+            nodeName:
+              typeof permission?.nodeName === 'string' && permission.nodeName
+                ? permission.nodeName
+                : permission.nodePath,
+            nodePath: permission.nodePath,
+            roleName:
+              typeof permission?.roleName === 'string' && permission.roleName
+                ? permission.roleName
+                : 'role access',
+          });
+        }
+
+        return !shouldRemove;
+      });
+
+      if (removedPermissions.length === 0) continue;
+
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          data: {
+            ...requestData,
+            permissions: nextPermissions,
+          } as any,
+          approvalRemark:
+            'Secondary access under an inactivated organization node was removed from this pending request.',
+        },
+      });
+
+      notifications.push({
+        requestId: request.id,
+        initiatorId: request.initiatorId || null,
+        eligibleApprovers: Array.isArray(request.eligibleApprovers)
+          ? request.eligibleApprovers
+          : [],
+        ...OrgStructureDbController.getPendingUserTargetName(requestData),
+        removedPermissions,
+      });
+    }
+
+    return notifications;
+  }
+
+  private static async addInheritedAccessToPendingUserRequests(
+    tx: any,
+    params: {
+      companyId: string;
+      nodeName: string;
+      nodePath: string;
+      nodeType: string;
+      parentNodePath: string | null;
+    },
+  ): Promise<PendingUserAccessAdditionNotification[]> {
+    const pendingRequests = await tx.userOnboarding.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+        type: 'INITIATE',
+      },
+      select: {
+        id: true,
+        data: true,
+        initiatorId: true,
+        eligibleApprovers: true,
+      },
+    });
+    const notifications: PendingUserAccessAdditionNotification[] = [];
+
+    for (const request of pendingRequests) {
+      const requestData = (request.data || {}) as any;
+      const permissions = Array.isArray(requestData.permissions)
+        ? requestData.permissions
+        : [];
+      const existingKeys = new Set(
+        permissions.map((permission: any) =>
+          [permission?.roleName || '', permission?.nodePath || ''].join('|'),
+        ),
+      );
+      const addedPermissions: PendingUserAccessAdditionNotification['addedPermissions'] =
+        [];
+      const generatedPermissions: any[] = [];
+
+      for (const permission of permissions) {
+        const operation =
+          permission?.remove === true
+            ? 'REMOVE'
+            : String(permission?.operation || '').trim().toUpperCase();
+        const sourceNodePath = String(permission?.nodePath || '').trim();
+        const accessCategory = String(
+          permission?.accessCategory || '',
+        ).toUpperCase();
+        const appliesToNewNode =
+          operation !== 'REMOVE' &&
+          permission?.roleName !== 'Corp Admin' &&
+          ((accessCategory === 'ALL_CHILD' &&
+            sourceNodePath &&
+            params.nodePath.startsWith(`${sourceNodePath}.`)) ||
+            (accessCategory === 'IMMEDIATE_CHILD' &&
+              sourceNodePath === params.parentNodePath));
+        const permissionKey = [
+          permission?.roleName || '',
+          params.nodePath,
+        ].join('|');
+
+        if (!appliesToNewNode || existingKeys.has(permissionKey)) continue;
+        existingKeys.add(permissionKey);
+        generatedPermissions.push({
+          ...permission,
+          accessType: 'SECONDARY',
+          nodeName: params.nodeName,
+          nodePath: params.nodePath,
+          nodeType: params.nodeType,
+          sourceTag: 'AUTO_GENERATED',
+          accessCategory:
+            accessCategory === 'IMMEDIATE_CHILD' ? 'NODE' : 'ALL_CHILD',
+        });
+        addedPermissions.push({
+          nodeName: params.nodeName,
+          nodePath: params.nodePath,
+          roleName: permission?.roleName || 'role access',
+        });
+      }
+
+      if (generatedPermissions.length === 0) continue;
+
+      await tx.userOnboarding.update({
+        where: { id: request.id },
+        data: {
+          data: {
+            ...requestData,
+            permissions: [...permissions, ...generatedPermissions],
+          } as any,
+        },
+      });
+      notifications.push({
+        requestId: request.id,
+        initiatorId: request.initiatorId || null,
+        eligibleApprovers: Array.isArray(request.eligibleApprovers)
+          ? request.eligibleApprovers
+          : [],
+        ...OrgStructureDbController.getPendingUserTargetName(requestData),
+        addedPermissions,
+      });
+    }
+
+    return notifications;
+  }
+
+  private static async rejectPendingWorkflowRequestsForOrgInactivation(
+    tx: any,
+    params: {
+      companyId: string;
+      nodePath: string;
+      nodeName: string;
+      actorId?: string;
+    },
+  ): Promise<PendingWorkflowDeletionNotification[]> {
+    const pendingRequests = await tx.workflowReq.findMany({
+      where: {
+        companyId: params.companyId,
+        status: 'PENDING',
+      },
+      select: {
+        id: true,
+        companyId: true,
+        data: true,
+        alias: true,
+        module: true,
+        subModule: true,
+        initiatorId: true,
+        eligibleApprovers: true,
+      },
+    });
+    const notifications: PendingWorkflowDeletionNotification[] = [];
+
+    for (const request of pendingRequests) {
+      const targetNodePath =
+        OrgStructureDbController.getPendingWorkflowTargetNodePath(request);
+      if (
+        !targetNodePath ||
+        !OrgStructureDbController.pathWithinSubtree(
+          targetNodePath,
+          params.nodePath,
+        )
+      ) {
+        continue;
+      }
+
+      const currentPendingLevel = await tx.workflowApprover.findFirst({
+        where: {
+          reqId: request.id,
+          reqTable: 'workflow_req',
+          status: 'PENDING',
+        },
+        orderBy: { level: 'asc' },
+        select: { level: true },
+      });
+      const remark = `Auto-rejected because organization ${params.nodeName} (${params.nodePath}) was inactivated and this workflow request targets node ${targetNodePath}.`;
+
+      await WorkflowApproverUtil.rejectAllLevels(
+        tx,
+        request.id,
+        'workflow_req',
+      );
+      await tx.workflowReq.update({
+        where: { id: request.id },
+        data: {
+          status: 'REJECTED',
+          approvalRemark: remark,
+        },
+      });
+
+      if (params.actorId) {
+        await tx.workflowReqHistory.create({
+          data: {
+            workflowReqId: request.id,
+            companyId: params.companyId,
+            event: 'REJECTED',
+            eventUserId: params.actorId,
+            level: currentPendingLevel?.level || null,
+            remarks: remark,
+          },
+        });
+      }
+
+      const requestData = request.data as any;
+      notifications.push({
+        requestId: request.id,
+        initiatorId: request.initiatorId || null,
+        eligibleApprovers: Array.isArray(request.eligibleApprovers)
+          ? request.eligibleApprovers
+          : [],
+        workflowName:
+          (typeof requestData?.name === 'string' && requestData.name.trim()) ||
+          (typeof request.alias === 'string' && request.alias.trim()) ||
+          [request.module, request.subModule].filter(Boolean).join(' / ') ||
+          'workflow',
+        targetNodePath,
+      });
+    }
+
+    return notifications;
+  }
+
+  private static async notifyConflict(
+    companyId: string,
+    initiatorId: string,
+    message: string,
+    referenceName: string,
+    approverUserIds: string[] = [],
+  ) {
+    let cleanMessage = message;
+    if (cleanMessage.includes('invocation in')) {
+      const lines = cleanMessage.split('\n');
+      const lastLine = lines[lines.length - 1]?.trim();
+      cleanMessage = lastLine ? `System Error: ${lastLine}` : 'A system validation error occurred while processing the request.';
+    }
+
+    const corpAdminUserIds =
+      await NotificationService.getCorpAdminUserIds(companyId);
+    const recipients = NotificationService.mergeRecipientUserIds(
+      initiatorId,
+      approverUserIds,
+      corpAdminUserIds,
+    );
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'FAILED',
+      name: 'Organization modification failed',
+      message: `Organization modification failed: ${cleanMessage}`,
+      referenceType: 'ORG',
+      referenceName,
+      createdBy: initiatorId,
+      recipientUserIds: recipients,
+      requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+        initiatorId,
+        approverUserIds,
+      ),
+      includeCreatedBy: true,
+      isPending: false,
+    });
+  }
+
+  private static buildLinkedOrgStructure(
+    orgNodes: Array<{
+      nodePath: string;
+      nodeName: string;
+      nodeType: string;
+      status: OrgNodeStatus;
+    }>,
+    rootNodePath?: string | null,
+    pendingNodePaths?: Set<string>,
+  ): OrgLinkedStructureNode[] {
+    if (!rootNodePath) return [];
+
+    return orgNodes
+      .filter(
+        (node) =>
+          node.nodePath !== rootNodePath &&
+          node.nodePath.startsWith(`${rootNodePath}.`),
+      )
+      .sort((left, right) => left.nodePath.localeCompare(right.nodePath))
+      .map((node) => ({
+        nodePath: node.nodePath,
+        nodeName: node.nodeName,
+        nodeType: node.nodeType,
+        levelCount: OrgStructureDbController.getNodeLevelCount(node.nodePath),
+        status: node.status,
+        isPending: pendingNodePaths?.has(node.nodePath) ?? false,
+        isAutoDeleted: node.status !== 'ACTIVE',
+      }));
+  }
+
+  private static pathSegment(value: string) {
+    return value
+      .trim()
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .toUpperCase();
+  }
+
+  private static buildImpactSummary(
+    userAccess: Array<{
+      name: string;
+      email: string | null;
+      access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
+    }>,
+    workflow: Array<{
+      workflowName: string;
+      alias: string | null;
+    }>,
+  ): OrgImpactSummary {
+    return {
+      userAccess,
+      workflow,
+    };
+  }
+
+  private static normalizeImpactSummary(data: any): OrgImpactSummary {
+    const summary = data?.impactSummary;
+    return {
+      userAccess: Array.isArray(summary?.userAccess)
+        ? summary.userAccess
+            .map((entry: any) => {
+              if (typeof entry === 'string' && entry.trim()) {
+                return { name: entry.trim(), email: null };
+              }
+              if (typeof entry?.name === 'string' && entry.name.trim()) {
+                const normalizedAccess =
+                  OrgStructureDbController.normalizeImpactAccess(entry?.access);
+                return {
+                  name: entry.name.trim(),
+                  email:
+                    typeof entry?.email === 'string' && entry.email.trim()
+                      ? entry.email.trim()
+                      : null,
+                  ...(normalizedAccess ? { access: normalizedAccess } : {}),
+                };
+              }
+              return null;
+            })
+            .filter(Boolean)
+        : [],
+      workflow: Array.isArray(summary?.workflow)
+        ? summary.workflow
+            .map((entry: any) => {
+              if (typeof entry === 'string' && entry.trim()) {
+                return { workflowName: entry.trim(), alias: null };
+              }
+              if (
+                typeof entry?.workflowName === 'string' &&
+                entry.workflowName.trim()
+              ) {
+                return {
+                  workflowName: entry.workflowName.trim(),
+                  alias:
+                    typeof entry?.alias === 'string' && entry.alias.trim()
+                      ? entry.alias.trim()
+                      : null,
+                };
+              }
+              return null;
+            })
+            .filter(Boolean)
+        : [],
+    };
+  }
+
+  private static normalizeImpactAccess(access: any) {
+    if (!access || typeof access !== 'object') return null;
+
+    const normalized: Partial<Record<'user' | 'workflow' | 'org', string[]>> =
+      {};
+
+    for (const moduleName of ['user', 'workflow', 'org'] as const) {
+      const values = Array.isArray(access?.[moduleName])
+        ? access[moduleName]
+            .map((value: any) =>
+              typeof value === 'string' ? value.trim().toLowerCase() : '',
+            )
+            .filter(Boolean)
+        : [];
+      const uniqueValues = OrgStructureDbController.sortImpactAccessLevels(
+        Array.from(new Set(values)),
+      );
+      if (uniqueValues.length > 0) {
+        normalized[moduleName] = uniqueValues;
+      }
+    }
+
+    return Object.keys(normalized).length > 0 ? normalized : null;
+  }
+
+  private static sortImpactAccessLevels(levels: string[]) {
+    const order = new Map<string, number>([
+      ['maker', 0],
+      ['checker', 1],
+      ['viewer', 2],
+    ]);
+
+    return [...levels].sort((left, right) => {
+      const leftOrder = order.get(left) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = order.get(right) ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return left.localeCompare(right);
+    });
+  }
+
+  private static mapImpactAccessModule(subCategory: string | null | undefined) {
+    const normalized = String(subCategory || '').trim().toUpperCase();
+    if (normalized === 'USER_ACC') return 'user' as const;
+    if (normalized === 'WORK_FLOW') return 'workflow' as const;
+    if (normalized === 'ORG_STR') return 'org' as const;
+    return null;
+  }
+
+  private static resolveImpactAccessLevel(access: any) {
+    const permissionLevel = String(
+      access?.role?.permissionLevel ?? '',
+    ).toUpperCase();
+    const canView = Boolean(access?.role?.view);
+    const canModify = Boolean(access?.role?.modify);
+    const canApprove = Boolean(access?.role?.approve);
+    const canInitiate = Boolean(access?.role?.initiate);
+
+    if (
+      permissionLevel === 'MANAGER' ||
+      (canApprove && !canModify && !canInitiate)
+    ) {
+      return 'checker' as const;
+    }
+
+    if (
+      permissionLevel === 'VIEWER' ||
+      (canView && !canModify && !canApprove && !canInitiate)
+    ) {
+      return 'viewer' as const;
+    }
+
+    if (
+      permissionLevel === 'USER' ||
+      ((canInitiate || canModify) && !canApprove)
+    ) {
+      return 'maker' as const;
+    }
+
+    return null;
+  }
+
+  private static buildImpactUsersFromAccessRows(
+    accessRows: Array<{
+      user?: { name?: string | null; email?: string | null } | null;
+      role?: {
+        subCategory?: string | null;
+        permissionLevel?: string | null;
+        view?: boolean | null;
+        modify?: boolean | null;
+        approve?: boolean | null;
+        initiate?: boolean | null;
+      } | null;
+    }>,
+  ) {
+    const groupedUsers = accessRows.reduce(
+      (
+        map: Map<
+          string,
+          {
+            name: string;
+            email: string | null;
+            access: {
+              user: Set<string>;
+              workflow: Set<string>;
+              org: Set<string>;
+            };
+          }
+        >,
+        row,
+      ) => {
+        const name =
+          typeof row.user?.name === 'string' ? row.user.name.trim() : '';
+        if (!name) return map;
+
+        const email =
+          typeof row.user?.email === 'string' && row.user.email.trim()
+            ? row.user.email.trim()
+            : null;
+        const key = `${name.toLowerCase()}::${(email || '').toLowerCase()}`;
+        const current = map.get(key) || {
+          name,
+          email,
+          access: {
+            user: new Set<string>(),
+            workflow: new Set<string>(),
+            org: new Set<string>(),
+          },
+        };
+
+        const moduleName = OrgStructureDbController.mapImpactAccessModule(
+          row.role?.subCategory,
+        );
+        const accessLevel =
+          OrgStructureDbController.resolveImpactAccessLevel(row);
+
+        if (moduleName && accessLevel) {
+          current.access[moduleName].add(accessLevel);
+        }
+
+        map.set(key, current);
+        return map;
+      },
+      new Map<
+        string,
+        {
+          name: string;
+          email: string | null;
+          access: {
+            user: Set<string>;
+            workflow: Set<string>;
+            org: Set<string>;
+          };
+        }
+      >(),
+    );
+
+    return Array.from(groupedUsers.values())
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((user) => {
+        const access = {
+          user: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.user),
+          ),
+          workflow: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.workflow),
+          ),
+          org: OrgStructureDbController.sortImpactAccessLevels(
+            Array.from(user.access.org),
+          ),
+        };
+
+        return {
+          name: user.name,
+          email: user.email,
+          ...(access.user.length > 0 ||
+          access.workflow.length > 0 ||
+          access.org.length > 0
+            ? {
+                access: {
+                  ...(access.user.length > 0 ? { user: access.user } : {}),
+                  ...(access.workflow.length > 0
+                    ? { workflow: access.workflow }
+                    : {}),
+                  ...(access.org.length > 0 ? { org: access.org } : {}),
+                },
+              }
+            : {}),
+        };
+      });
+  }
+
+  private static async resolveImpactSummary(
+    client: any,
+    companyId: string,
+    reqType: string,
+    reqData: any,
+  ): Promise<OrgImpactSummary> {
+    const summary = reqData?.impactSummary;
+    const normalizedSummary = OrgStructureDbController.normalizeImpactSummary(
+      reqData,
+    );
+    const hasImpactSummary =
+      Array.isArray(summary?.userAccess) && Array.isArray(summary?.workflow);
+
+    if (reqType === 'INITIATE') {
+      const requestedNodePath =
+        OrgStructureDbController.resolveRequestedNodePath(reqData);
+      const userAccess =
+        await OrgStructureDbController.getPropagatedUserAccessSummaries(
+          client,
+          companyId,
+          requestedNodePath,
+        );
+      const workflow =
+        await OrgStructureDbController.getAutoGeneratedWorkflowTemplateSummaries(
+          client,
+          companyId,
+          reqData.parentNode?.nodePath,
+        );
+      return {
+        userAccess,
+        workflow: hasImpactSummary ? normalizedSummary.workflow : workflow,
+      };
+    }
+
+    if (
+      reqType === 'UPDATE' &&
+      String(reqData?.status || '').trim().toUpperCase() === 'INACTIVE'
+    ) {
+      const nodePath = reqData?.targetNodePath || reqData?.nodePath || null;
+      if (!nodePath) {
+        return { userAccess: [], workflow: [] };
+      }
+
+      const notification =
+        await OrgStructureDbController.getOrgInactivationNotification(
+          client,
+          companyId,
+          nodePath,
+        );
+      return {
+        userAccess: notification.users,
+        workflow: notification.workflows,
+      };
+    }
+
+    if (hasImpactSummary) {
+      return normalizedSummary;
+    } else {
+      const nodePath = reqData?.targetNodePath || reqData?.nodePath || null;
+      if (!nodePath) {
+        return { userAccess: [], workflow: [] };
+      }
+      const notification =
+        await OrgStructureDbController.getOrgInactivationNotification(
+          client,
+          companyId,
+          nodePath,
+        );
+      return {
+        userAccess: notification.users,
+        workflow: notification.workflows,
+      };
+    }
+  }
+
+  private static getOrgNotificationContent(
+    type: string | null | undefined,
+    phase: 'initiated' | 'approved' | 'rejected',
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Organization modification'
+        : 'Organization onboarding';
+
+    return {
+      name: `${label} ${phase}`,
+      message:
+        phase === 'approved'
+          ? `${label} approved for ${referenceName}`
+          : phase === 'rejected'
+            ? `${label} request rejected for ${referenceName}`
+            : `${label} request initiated for ${referenceName}`,
+    };
+  }
+
+  private static getOrgPendingApprovalNotificationContent(
+    type: string | null | undefined,
+    referenceName: string,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Organization modification'
+        : 'Organization onboarding';
+
+    return {
+      name: `${label} approval pending`,
+      message: `${label} request is pending for your approval for ${referenceName}`,
+    };
+  }
+
+  private static getOrgLevelApprovalNotificationContent(
+    type: string | null | undefined,
+    referenceName: string,
+    level: number | null | undefined,
+  ) {
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+    const label =
+      normalizedType === 'UPDATE'
+        ? 'Organization modification'
+        : 'Organization onboarding';
+    const levelLabel =
+      typeof level === 'number' && Number.isFinite(level)
+        ? ` at Level ${level}`
+        : '';
+
+    return {
+      name: `${label} approved${levelLabel}`,
+      message: `${label} request approved${levelLabel} for ${referenceName}`,
+    };
+  }
+
+  private static getOrgNotificationType(
+    type: string | null | undefined,
+    status: string | null | undefined,
+  ) {
+    const normalizedStatus = String(status || '').toUpperCase();
+    const normalizedType = String(type || 'INITIATE').toUpperCase();
+
+    if (normalizedStatus === 'REJECTED') {
+      return 'REJECTED' as const;
+    }
+    if (normalizedStatus === 'PARTIAL_APPROVED') return 'APPROVED' as const;
+    if (normalizedStatus === 'APPROVED') {
+      if (normalizedType === 'UPDATE') return 'Modified' as const;
+      if (normalizedType === 'ACTIVE') return 'ACTIVATED' as const;
+      if (normalizedType === 'INACTIVE') return 'INACTIVED' as const;
+      if (normalizedType === 'ARCHIVE') return 'ARCHIVED' as const;
+      return 'ONBOARDED' as const;
+    }
+
+    if (normalizedType === 'INITIATE') return 'Pending Approval - INITIATE' as const;
+    if (normalizedType === 'UPDATE' || normalizedType === 'MODIFICATION')
+      return 'Pending Approval - MODIFICATION' as const;
+    if (normalizedType === 'ACTIVE') return 'PENDING APPROVAL - ACTIVATION' as const;
+    if (normalizedType === 'INACTIVE')
+      return 'Pending Approval - INACTIVE' as const;
+    if (normalizedType === 'ARCHIVE' || normalizedType === 'ARCHIVED')
+      return 'Pending Approval - ARCHIVED' as const;
+
+    return 'PENDING APPROVAL' as const;
+  }
+
+  private static normalizeOrgSnapshotSource(data: any) {
+    return data?.newData ?? data?.data ?? data ?? {};
+  }
+
+  private static extractOrgTargetPath(data: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const targetPath =
+      source?.targetNodePath ||
+      source?.nodePath ||
+      source?.currentData?.nodePath ||
+      source?.parentNode?.nodePath ||
+      null;
+
+    return typeof targetPath === 'string' && targetPath.trim()
+      ? targetPath.trim()
+      : null;
+  }
+
+  private static extractOrgNotificationNodePaths(data: any): string[] {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const candidatePaths = [
+      source?.targetNodePath,
+      source?.nodePath,
+      source?.currentData?.nodePath,
+      source?.parentNode?.nodePath && source?.newNodeName
+        ? `${source.parentNode.nodePath}.${OrgStructureDbController.pathSegment(source.newNodeName)}`
+        : null,
+    ];
+
+    return Array.from(
+      new Set(
+        candidatePaths
+          .map((nodePath) =>
+            typeof nodePath === 'string' ? nodePath.trim() : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private static doesAccessCoverNode(
+    access: {
+      isGlobalAccess?: boolean | null;
+      accessCategory?: string | null;
+      orgStructure?: { nodePath?: string | null } | null;
+    },
+    targetNodePath: string,
+  ) {
+    if (access.isGlobalAccess) return true;
+
+    const accessNodePath =
+      typeof access.orgStructure?.nodePath === 'string'
+        ? access.orgStructure.nodePath.trim()
+        : '';
+    if (!accessNodePath) return false;
+
+    const normalizedCategory = String(access.accessCategory || 'NODE')
+      .trim()
+      .toUpperCase();
+
+    if (targetNodePath === accessNodePath) return true;
+    if (normalizedCategory === 'ALL_CHILD') {
+      return targetNodePath.startsWith(`${accessNodePath}.`);
+    }
+    if (normalizedCategory === 'IMMEDIATE_CHILD') {
+      const parentPath = targetNodePath.split('.').slice(0, -1).join('.');
+      return parentPath === accessNodePath;
+    }
+
+    return false;
+  }
+
+  private static async getNodeAccessNotificationRecipientIds(
+    companyId: string,
+    nodePaths: string[],
+  ) {
+    const normalizedNodePaths = Array.from(
+      new Set(
+        nodePaths
+          .map((nodePath) =>
+            typeof nodePath === 'string' ? nodePath.trim() : '',
+          )
+          .filter(Boolean),
+      ),
+    );
+
+    if (normalizedNodePaths.length === 0) return [];
+
+    const mappedUsers = await prisma.userMapping.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+      },
+      select: { userId: true },
+    });
+    const mappedUserIds = Array.from(
+      new Set(
+        mappedUsers
+          .map((mapping) => String(mapping.userId || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (mappedUserIds.length === 0) return [];
+
+    const userAccesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        userId: { in: mappedUserIds },
+      },
+      include: {
+        role: {
+          select: { isActive: true },
+        },
+        orgStructure: {
+          select: {
+            nodePath: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    return Array.from(
+      new Set(
+        userAccesses
+          .filter((access) => {
+            if (access.role?.isActive === false) return false;
+            if (
+              !access.isGlobalAccess &&
+              access.orgStructure?.status !== 'ACTIVE'
+            ) {
+              return false;
+            }
+
+            return normalizedNodePaths.some((nodePath) =>
+              OrgStructureDbController.doesAccessCoverNode(access, nodePath),
+            );
+          })
+          .map((access) => access.userId),
+      ),
+    );
+  }
+
+  private static extractOrgSnapshot(data: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(data);
+    const targetPath = OrgStructureDbController.extractOrgTargetPath(source);
+    if (!targetPath) return null;
+
+    return {
+      newNodeName: source?.newNodeName || source?.nodeName || '',
+      nodeType: source?.nodeType || source?._nodeType || 'DEPARTMENT',
+      nodePath: source?.nodePath || targetPath,
+      parentNode: source?.parentNode || {
+        nodeName: source?.parentNodeName || 'ROOT',
+        nodePath: source?.parentNodePath || 'ROOT',
+      },
+      status: source?.status || 'ACTIVE',
+    };
+  }
+
+  private static applyOrgRequestSnapshot(current: any, request: any) {
+    const source = OrgStructureDbController.normalizeOrgSnapshotSource(
+      request?.data,
+    );
+    if (request.type === 'INITIATE' || !current) {
+      return OrgStructureDbController.extractOrgSnapshot(source);
+    }
+
+    return mergeJsonData(cloneJson(current), source);
+  }
+
+  private static resolveRequestedNodePath(data: any, fallback?: string | null) {
+    if (typeof fallback === 'string' && fallback.trim()) {
+      return fallback.trim();
+    }
+    if (typeof data?.nodePath === 'string' && data.nodePath.trim()) {
+      return data.nodePath.trim();
+    }
+    if (
+      typeof data?.parentNode?.nodePath === 'string' &&
+      data.parentNode.nodePath.trim() &&
+      typeof data?.newNodeName === 'string' &&
+      data.newNodeName.trim()
+    ) {
+      return `${data.parentNode.nodePath.trim()}.${OrgStructureDbController.pathSegment(data.newNodeName)}`;
+    }
+
+    return null;
+  }
+
+  private static async resolveUniqueNodePath(
+    client: any,
+    companyId: string,
+    baseNodePath: string,
+    reservedPaths: string[] = [],
+  ) {
+    const trimmedBaseNodePath = baseNodePath.trim();
+    const existingNodes = await client.orgStructure.findMany({
+      where: {
+        companyId,
+        OR: [
+          { nodePath: trimmedBaseNodePath },
+          { nodePath: { startsWith: `${trimmedBaseNodePath}` } },
+        ],
+      },
+      select: { nodePath: true },
+    });
+
+    const existingPaths = new Set(
+      existingNodes
+        .map((node: any) => node.nodePath)
+        .filter(
+          (nodePath: unknown): nodePath is string =>
+            typeof nodePath === 'string' && nodePath.length > 0,
+        ),
+    );
+    reservedPaths
+      .filter(
+        (nodePath): nodePath is string =>
+          typeof nodePath === 'string' && nodePath.trim().length > 0,
+      )
+      .forEach((nodePath) => existingPaths.add(nodePath.trim()));
+    if (!existingPaths.has(trimmedBaseNodePath)) {
+      return trimmedBaseNodePath;
+    }
+
+    let suffix = 1;
+    while (existingPaths.has(`${trimmedBaseNodePath}${suffix}`)) {
+      suffix += 1;
+    }
+
+    return `${trimmedBaseNodePath}${suffix}`;
+  }
+
+  private static async resolveUniqueRequestedNodePath(
+    client: any,
+    companyId: string,
+    requestData: any,
+  ) {
+    const requestedNodePath =
+      OrgStructureDbController.resolveRequestedNodePath(requestData);
+    if (!requestedNodePath) return null;
+
+    const existingRequests = await client.orgStructureReq.findMany({
+      where: {
+        companyId,
+      },
+      select: {
+        id: true,
+        status: true,
+        data: true,
+      },
+    });
+    const effectivePendingIds =
+      await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+        'org_structure_req',
+        existingRequests
+          .filter((request: any) => request.status === 'PENDING')
+          .map((request: any) => request.id),
+      );
+    const reservedRequestPaths = existingRequests
+      .filter(
+        (request: any) =>
+          request.status !== 'PENDING' || effectivePendingIds.has(request.id),
+      )
+      .map((request: any) =>
+        OrgStructureDbController.resolveRequestedNodePath(
+          request.data as any,
+          OrgStructureDbController.extractOrgTargetPath(request.data as any),
+        ),
+      )
+      .filter(
+        (nodePath: unknown): nodePath is string =>
+          typeof nodePath === 'string' && nodePath.trim().length > 0,
+      );
+
+    return OrgStructureDbController.resolveUniqueNodePath(
+      client,
+      companyId,
+      requestedNodePath,
+      reservedRequestPaths,
+    );
+  }
+
+  private static normalizeLogicalNodeName(value: unknown) {
+    return typeof value === 'string'
+      ? value.trim().replace(/\d+$/, '').toUpperCase()
+      : '';
+  }
+
+  private static normalizeLogicalNodePath(value: unknown) {
+    if (typeof value !== 'string' || !value.trim()) return '';
+
+    const trimmedPath = value.trim();
+    const lastPathSeparator = trimmedPath.lastIndexOf('.');
+    const parentPath =
+      lastPathSeparator >= 0
+        ? trimmedPath.slice(0, lastPathSeparator + 1)
+        : '';
+    const nodeSegment =
+      lastPathSeparator >= 0
+        ? trimmedPath.slice(lastPathSeparator + 1)
+        : trimmedPath;
+
+    return `${parentPath}${OrgStructureDbController.normalizeLogicalNodeName(
+      nodeSegment,
+    )}`.toUpperCase();
+  }
+
+  private static async assertNoActiveNodePathConflict(
+    client: any,
+    companyId: string,
+    nodePath: unknown,
+    nodeName: unknown,
+  ) {
+    const trimmedNodePath =
+      typeof nodePath === 'string' ? nodePath.trim() : '';
+    const trimmedNodeName =
+      typeof nodeName === 'string' ? nodeName.trim() : '';
+    if (!trimmedNodePath || !trimmedNodeName) return;
+
+    const normalizedNodePath =
+      OrgStructureDbController.normalizeLogicalNodePath(trimmedNodePath);
+    const normalizedNodeName =
+      OrgStructureDbController.normalizeLogicalNodeName(trimmedNodeName);
+
+    const activeCandidates = await client.orgStructure.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        nodePath: {
+          startsWith: normalizedNodePath,
+          mode: 'insensitive',
+        },
+      },
+      select: {
+        id: true,
+        nodeName: true,
+        nodePath: true,
+      },
+    });
+    const duplicateNode = activeCandidates.find((node: any) => {
+      return (
+        OrgStructureDbController.normalizeLogicalNodePath(node.nodePath) ===
+          normalizedNodePath &&
+        OrgStructureDbController.normalizeLogicalNodeName(node.nodeName) ===
+          normalizedNodeName
+      );
+    });
+
+    if (!duplicateNode) return;
+
+    throw new AppError(
+      `Cannot create organization '${trimmedNodeName}'. An active node with the same name and base path already exists at '${duplicateNode.nodePath}'. Please inactivate the existing node or choose a different name.`,
+      400,
+    );
+  }
+
+  private static async assertNoPendingNodeConflict(
+    client: any,
+    companyId: string,
+    requestData: any,
+  ) {
+    const requestedNodePath =
+      OrgStructureDbController.resolveRequestedNodePath(requestData);
+    const requestedNodeName =
+      requestData?.newNodeName || requestData?.nodeName;
+    const normalizedRequestedPath =
+      OrgStructureDbController.normalizeLogicalNodePath(requestedNodePath);
+    const normalizedRequestedName =
+      OrgStructureDbController.normalizeLogicalNodeName(requestedNodeName);
+    if (!normalizedRequestedPath || !normalizedRequestedName) return;
+
+    const pendingRequests = await client.orgStructureReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        data: true,
+        orgHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+          select: {
+            createdAt: true,
+            user: {
+              select: {
+                name: true,
+                email: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (pendingRequests.length === 0) return;
+
+    const pendingApproverRows = await client.workflowApprover.findMany({
+      where: {
+        reqTable: 'org_structure_req',
+        status: 'PENDING',
+        reqId: {
+          in: pendingRequests.map((request: any) => request.id),
+        },
+      },
+      select: { reqId: true },
+    });
+    const pendingApproverRequestIds = new Set(
+      pendingApproverRows.map((row: any) => row.reqId),
+    );
+    if (pendingApproverRequestIds.size === 0) return;
+
+    for (const request of pendingRequests) {
+      if (!pendingApproverRequestIds.has(request.id)) continue;
+
+      const pendingData = request.data as any;
+      const pendingNodePath = OrgStructureDbController.resolveRequestedNodePath(
+        pendingData,
+        OrgStructureDbController.extractOrgTargetPath(pendingData),
+      );
+      const pendingNodeName =
+        pendingData?.newNodeName || pendingData?.nodeName;
+      if (
+        OrgStructureDbController.normalizeLogicalNodePath(pendingNodePath) !==
+          normalizedRequestedPath ||
+        OrgStructureDbController.normalizeLogicalNodeName(pendingNodeName) !==
+          normalizedRequestedName
+      ) {
+        continue;
+      }
+
+      const initiator = request.orgHistories?.[0]?.user;
+      const initiatedAt =
+        request.orgHistories?.[0]?.createdAt || request.createdAt;
+      const pendingTitle =
+        pendingData?.newNodeName || pendingData?.nodeName || pendingNodePath;
+
+      throw new AppError(
+        `Cannot initiate organization '${pendingTitle}'. A pending approver request already exists for the same node name and base path at '${pendingNodePath}', initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
+        400,
+      );
+    }
+  }
+
+  private static formatUserAccessImpact(count: number) {
+    return count > 0 ? `${count} USER_ACCESS_ADDED` : 'NO_ISSUES';
+  }
+
+  private static toWorkflowLevelsPayload(levels: any[]) {
+    return levels.reduce(
+      (payload, level) => {
+        payload[`l${level.level}`] = {
+          approver1: level.approver1,
+          approver2: level.approver2 || null,
+          type: level.approverType || 'OR',
+        };
+        return payload;
+      },
+      {} as Record<string, any>,
+    );
+  }
+
+  private static async autoGenerateChildWorkflows(
+    tx: any,
+    params: {
+      companyId: string;
+      parentNodeId?: string | null;
+      newNode: {
+        id: string;
+        nodePath: string;
+        nodeName: string;
+        nodeType: string;
+      };
+      orgReqId: string;
+      actorId: string;
+    },
+  ) {
+    const { companyId, parentNodeId, newNode, orgReqId, actorId } = params;
+    if (!parentNodeId) return [];
+
+    const parentNode = await tx.orgStructure.findFirst({
+      where: { id: parentNodeId, companyId },
+      select: { id: true, nodePath: true, nodeName: true, nodeType: true },
+    });
+    if (!parentNode) return [];
+
+    const parentWorkflows = await tx.workflow.findMany({
+      where: {
+        companyId,
+        nodeId: parentNodeId,
+        status: 'ACTIVE',
+        type: { in: ['ALL_CHILD', 'IMMEDIATE_CHILD'] },
+      },
+      include: {
+        levels: { orderBy: { level: 'asc' } },
+      },
+    });
+
+    const generated = [];
+    for (const source of parentWorkflows) {
+      const targetType =
+        source.type === 'IMMEDIATE_CHILD' ? 'NODE' : source.type;
+      const duplicate = await tx.workflow.findFirst({
+        where: {
+          companyId,
+          nodeId: newNode.id,
+          module: source.module,
+          subModule: source.subModule,
+          levelsHash: source.levelsHash,
+          status: { not: 'ARCHIVE' },
+        },
+        select: { id: true },
+      });
+      if (duplicate) continue;
+
+      const levelsPayload = OrgStructureDbController.toWorkflowLevelsPayload(
+        source.levels,
+      );
+      const autoData = {
+        name: source.name,
+        alias: source.alias,
+        workflowType: targetType,
+        module: source.module,
+        subModule: source.subModule,
+        nodePath: newNode.nodePath,
+        nodeName: newNode.nodeName,
+        nodeType: newNode.nodeType,
+        levels: levelsPayload,
+        levelsHash: source.levelsHash,
+        roleCode: source.roleCode || null,
+        sourceWorkflowId: source.id,
+        sourceWorkflowName: source.name,
+        sourceWorkflowType: source.type,
+        sourceNodeId: parentNode.id,
+        sourceNodeName: parentNode.nodeName,
+        sourceNodePath: parentNode.nodePath,
+        targetNodeId: newNode.id,
+        targetNodePath: newNode.nodePath,
+        parentOrgReqId: orgReqId,
+      };
+
+      const workflowReq = await tx.workflowReq.create({
+        data: {
+          companyId,
+          nodeId: newNode.id,
+          module: source.module,
+          subModule: source.subModule,
+          levelsHash: source.levelsHash,
+          workflowId: source.id,
+          type: 'AUTO_GENERATE',
+          impact: 'AUTO_GENERATE',
+          initiatorId: actorId,
+          status: 'APPROVED',
+          data: autoData,
+          alias: source.alias,
+          approvalRemark: `Auto-generated from parent workflow ${source.name} for node ${newNode.nodeName} (${newNode.nodePath})`,
+          eligibleApprovers: [],
+        },
+      });
+
+      const workflow = await tx.workflow.create({
+        data: {
+          name: source.name,
+          alias: source.alias,
+          module: source.module,
+          subModule: source.subModule,
+          type: targetType,
+          roleCode: source.roleCode || null,
+          companyId,
+          nodeId: newNode.id,
+          levelsHash: source.levelsHash,
+          workflowReqIds: [workflowReq.id],
+        },
+      });
+
+      if (source.levels.length > 0) {
+        await tx.workflowLevel.createMany({
+          data: source.levels.map((level: any) => ({
+            workflowId: workflow.id,
+            level: level.level,
+            approver1: level.approver1,
+            approver2: level.approver2 || null,
+            approverType: level.approverType || 'OR',
+          })),
+        });
+      }
+
+      await tx.workflowReq.update({
+        where: { id: workflowReq.id },
+        data: { workflowId: workflow.id },
+      });
+
+      await tx.workflowReqHistory.create({
+        data: {
+          workflowReqId: workflowReq.id,
+          companyId,
+          event: 'AUTO_GENERATE',
+          eventUserId: actorId,
+          remarks: `Auto-generated workflow ${source.name} for node ${newNode.nodeName} (${newNode.nodePath}) from parent workflow ${source.name} on ${parentNode.nodeName} (${parentNode.nodePath})`,
+        },
+      });
+
+      generated.push({
+        workflowName: workflow.name,
+        alias: workflow.alias,
+        module: workflow.module,
+        subModule: workflow.subModule,
+        workflowType: targetType,
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
+        sourceWorkflowName: source.name,
+        sourceNodeName: parentNode.nodeName,
+        sourceNodePath: parentNode.nodePath,
+      });
+    }
+
+    return generated;
+  }
+
+  private static async notifyAutoGeneratedWorkflows(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    generatedWorkflows: Array<{
+      workflowName: string;
+      alias: string;
+      module: string;
+      subModule: string;
+      workflowType: string;
+      nodeName: string;
+      nodePath: string;
+      sourceWorkflowName: string;
+      sourceNodeName: string;
+      sourceNodePath: string;
+    }>;
+  }) {
+    const { companyId, generatedWorkflows } = params;
+    if (generatedWorkflows.length === 0) return;
+
+    const corpAdminAccesses = await prisma.userAccess.findMany({
+      where: {
+        companyId,
+        roleCode: 'CORP_ADMIN',
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+      },
+      select: { userId: true },
+    });
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      corpAdminAccesses.map((access) => access.userId),
+    );
+    const generatedSummary = generatedWorkflows
+      .map(
+        (workflow) =>
+          `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`,
+      )
+      .join(', ');
+
+    await NotificationService.createRequestNotification({
+      companyId,
+      type: 'ONBOARDED',
+      name: 'Active workflow auto-generated',
+      message: `System auto-generated ${generatedWorkflows.length} active workflow(s): ${generatedSummary}.`,
+      referenceType: 'WORKFLOW',
+      referenceId: params.orgReqId,
+      referenceName: generatedWorkflows[0]?.nodeName || 'workflow',
+      createdBy: params.createdBy,
+      recipientUserIds,
+      isPending: false,
+    });
+  }
+
+  private static async notifyAutoDeletedWorkflows(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    deletedWorkflows: Array<{
+      workflowName: string;
+      nodeName: string;
+      nodePath: string;
+      workflowReqIds?: string[];
+    }>;
+  }) {
+    if (params.deletedWorkflows.length === 0) return;
+
+    const workflowReqIds = Array.from(
+      new Set(
+        params.deletedWorkflows.flatMap((workflow) =>
+          Array.isArray(workflow.workflowReqIds) ? workflow.workflowReqIds : [],
+        ),
+      ),
+    );
+    const workflowInitiators =
+      workflowReqIds.length > 0
+        ? await prisma.workflowReqHistory.findMany({
+            where: {
+              workflowReqId: { in: workflowReqIds },
+              event: 'INITIATE',
+            },
+            select: { eventUserId: true },
+          })
+        : [];
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      await NotificationService.getRequestInitiatorId(
+        params.orgReqId,
+        'org_structure_req',
+      ),
+      workflowInitiators.map((history) => history.eventUserId),
+      await NotificationService.getCorpAdminUserIds(params.companyId),
+    );
+    const deletedSummary = params.deletedWorkflows
+      .slice(0, 5)
+      .map(
+        (workflow) =>
+          `${workflow.workflowName} for ${workflow.nodeName} (${workflow.nodePath})`,
+      )
+      .join(', ');
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'AUTO_DELETE',
+      name: 'Active workflow deleted',
+      message: `Active workflow(s) were deleted because the related organization node was inactivated: ${deletedSummary || 'workflow'}.`,
+      referenceType: 'WORKFLOW',
+      referenceId: params.orgReqId,
+      referenceName: deletedSummary || 'workflow',
+      createdBy: params.createdBy,
+      recipientUserIds,
+      includeCreatedBy: true,
+    });
+  }
+
+  private static async getPropagatingParentAccesses(
+    client: any,
+    companyId: string,
+    newNodePath: string,
+  ) {
+    const parentPaths = ltree.getAncestors(newNodePath);
+    if (parentPaths.length === 0) {
+      return [];
+    }
+
+    const parentNodes = await client.orgStructure.findMany({
+      where: {
+        companyId,
+        nodePath: { in: parentPaths },
+      },
+      select: { id: true, nodePath: true },
+    });
+    const parentNodeIds = parentNodes.map((node: any) => node.id);
+    if (parentNodeIds.length === 0) {
+      return [];
+    }
+
+    const directParentPath = ltree.getParent(newNodePath);
+    const directParentId = parentNodes.find(
+      (node: any) => node.nodePath === directParentPath,
+    )?.id;
+
+    return client.userAccess.findMany({
+      where: {
+        companyId,
+        nodeId: { in: parentNodeIds },
+        isGlobalAccess: false,
+        OR: [
+          { accessCategory: 'ALL_CHILD' },
+          directParentId
+            ? {
+                nodeId: directParentId,
+                accessCategory: 'IMMEDIATE_CHILD',
+              }
+            : undefined,
+        ].filter(Boolean) as any,
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        role: {
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+            permissionLevel: true,
+            view: true,
+            modify: true,
+            approve: true,
+            initiate: true,
+          },
+        },
+      },
+    });
+  }
+
+  private static async syncNotificationSettingsForGlobalAccessUsers(
+    tx: any,
+    params: {
+      companyId: string;
+      eventUserId: string;
+      removeReason: string;
+      excludeUserIds?: string[];
+    },
+  ) {
+    const excludedUserIds = new Set<string>(
+      (params.excludeUserIds || []).map((userId: string) =>
+        String(userId || '').trim(),
+      ),
+    );
+    const globalAccessRows = await tx.userAccess.findMany({
+      where: {
+        companyId: params.companyId,
+        isGlobalAccess: true,
+        user: {
+          userMappings: {
+            some: {
+              companyId: params.companyId,
+              status: 'ACTIVE',
+            },
+          },
+        },
+      },
+      select: { userId: true },
+    });
+
+    const userIds: string[] = Array.from(
+      new Set(
+        globalAccessRows
+          .map((row: any) => String(row.userId || '').trim())
+          .filter((userId: string) => userId && !excludedUserIds.has(userId)),
+      ),
+    );
+
+    for (const userId of userIds) {
+      await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+        companyId: params.companyId,
+        userId,
+        eventUserId: params.eventUserId,
+        createReason:
+          'Default notification setting created because access was granted.',
+        removeReason: params.removeReason,
+      });
+    }
+  }
+
+  private static buildPropagatedAccesses(
+    parentAccesses: any[],
+    newNodeId: string,
+    newNode: { nodeName: string; nodePath: string },
+  ) {
+    const newAccessesMap = new Map<string, any>();
+
+    for (const access of parentAccesses) {
+      const uniqueKey = `${access.userId}_${access.roleCode}`;
+      if (newAccessesMap.has(uniqueKey)) continue;
+
+      newAccessesMap.set(uniqueKey, {
+        userId: access.userId,
+        userName: access.user?.name || null,
+        userEmail: access.user?.email || null,
+        roleCode: access.roleCode,
+        roleName: access.role?.roleName || access.roleCode,
+        roleCategory: access.role?.category || 'SYSTEM_ACCESS',
+        roleSubCategory: access.role?.subCategory || 'USER_ACC',
+        nodeId: newNodeId,
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
+        accessType: 'SECONDARY',
+        accessCategory:
+          access.accessCategory === 'IMMEDIATE_CHILD'
+            ? 'NODE'
+            : access.accessCategory,
+        companyId: access.companyId,
+        isGlobalAccess: false,
+        source: 'AUTO_GENERATED',
+      });
+    }
+
+    return Array.from(newAccessesMap.values());
+  }
+
+  private static async resolveDefaultUserAccessWorkflowId(
+    tx: any,
+    companyId: string,
+  ) {
+    const defaultWorkflow = await tx.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'USER_ACC',
+        name: { contains: 'DEFAULT' },
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    if (defaultWorkflow?.id) {
+      return defaultWorkflow.id;
+    }
+
+    const latestWorkflow = await tx.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'USER_ACC',
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    return latestWorkflow?.id || null;
+  }
+
+  private static groupAutoUserAccessAuditEntries(
+    entries: AutoUserAccessAuditEntry[],
+    isRemoval: boolean,
+  ) {
+    const grouped = new Map<
+      string,
+      {
+        userName: string | null;
+        userEmail: string;
+        permissions: any[];
+      }
+    >();
+
+    entries.forEach((entry) => {
+      const userEmail =
+        typeof entry.userEmail === 'string' ? entry.userEmail.trim() : '';
+      if (!userEmail) return;
+
+      const key = entry.userId || userEmail.toLowerCase();
+      const current = grouped.get(key) || {
+        userName: entry.userName || null,
+        userEmail,
+        permissions: [],
+      };
+
+      current.permissions.push({
+        ...(isRemoval ? { remove: true } : {}),
+        nodeName: entry.nodeName,
+        nodePath: entry.nodePath,
+        roleName: entry.roleName || entry.roleCode,
+        accessType: entry.accessType || 'SECONDARY',
+        roleCategory: entry.roleCategory || 'SYSTEM_ACCESS',
+        accessCategory: entry.accessCategory || 'NODE',
+        roleSubCategory: entry.roleSubCategory || 'USER_ACC',
+      });
+
+      grouped.set(key, current);
+    });
+
+    return Array.from(grouped.values());
+  }
+
+  private static async createAutoApprovedUserAccessAuditRows(
+    tx: any,
+    params: {
+      companyId: string;
+      actorId?: string | null;
+      type: 'AUTO_GENERATE' | 'AUTO_DELETE';
+      impact: 'UPGRADE' | 'DOWNGRADE';
+      remarks: string;
+      entries: AutoUserAccessAuditEntry[];
+    },
+  ) {
+    if (!params.actorId || params.entries.length === 0) {
+      return;
+    }
+
+    const workflowId =
+      await OrgStructureDbController.resolveDefaultUserAccessWorkflowId(
+        tx,
+        params.companyId,
+      );
+    const groupedEntries =
+      OrgStructureDbController.groupAutoUserAccessAuditEntries(
+        params.entries,
+        params.type === 'AUTO_DELETE',
+      );
+
+    for (const entry of groupedEntries) {
+      const data = {
+        permissions: cloneJson(entry.permissions),
+        targetUserEmail: entry.userEmail,
+      };
+      const oldData =
+        params.type === 'AUTO_DELETE'
+          ? {
+              permissions: {
+                added: [],
+                removed: cloneJson(
+                  entry.permissions.map(
+                    ({ remove, ...permission }) => permission,
+                  ),
+                ),
+                updated: [],
+              },
+              ...(entry.userName
+                ? {
+                    basicDetails: {
+                      name: entry.userName,
+                    },
+                  }
+                : {}),
+            }
+          : {
+              permissions: {
+                added: [],
+                removed: [],
+                updated: [],
+              },
+            };
+
+      const request = await tx.userOnboarding.create({
+        data: {
+          companyId: params.companyId,
+          workflowId,
+          type: params.type,
+          impact: params.impact,
+          data: data as any,
+          oldData: oldData as any,
+          initiatorId: params.actorId,
+          remarks: params.remarks,
+          status: 'APPROVED',
+          approvalRemark: params.remarks,
+          eligibleApprovers: [],
+        },
+      });
+
+      await tx.userHistory.create({
+        data: {
+          email: entry.userEmail,
+          event: 'INITIATE',
+          eventUserId: params.actorId,
+          companyId: params.companyId,
+          reqId: request.id,
+          remarks: params.remarks,
+        },
+      });
+
+      await tx.userHistory.create({
+        data: {
+          email: entry.userEmail,
+          event: 'APPROVED',
+          eventUserId: params.actorId,
+          companyId: params.companyId,
+          reqId: request.id,
+          remarks: params.remarks,
+        },
+      });
+    }
+  }
+
+  private static async countPropagatedUserAccesses(
+    client: any,
+    companyId: string,
+    newNodePath: string | null,
+  ) {
+    if (!newNodePath) return 0;
+
+    const parentAccesses =
+      await OrgStructureDbController.getPropagatingParentAccesses(
+        client,
+        companyId,
+        newNodePath,
+      );
+
+    return new Set(
+      parentAccesses.map(
+        (access: any) => `${access.userId}_${access.roleCode}`,
+      ),
+    ).size;
+  }
+
+  private static async countAutoGeneratedWorkflowTemplates(
+    client: any,
+    companyId: string,
+    parentNodePath: string | null | undefined,
+  ) {
+    if (!parentNodePath) return 0;
+
+    const parentNode = await client.orgStructure.findFirst({
+      where: {
+        companyId,
+        nodePath: parentNodePath,
+      },
+      select: { id: true },
+    });
+    if (!parentNode?.id) return 0;
+
+    return client.workflow.count({
+      where: {
+        companyId,
+        nodeId: parentNode.id,
+        status: 'ACTIVE',
+        type: { in: ['ALL_CHILD', 'IMMEDIATE_CHILD'] },
+      },
+    });
+  }
+
+  private static async getPropagatedUserAccessSummaries(
+    client: any,
+    companyId: string,
+    newNodePath: string | null,
+  ): Promise<
+    Array<{
+      name: string;
+      email: string | null;
+      access?: Partial<Record<'user' | 'workflow' | 'org', string[]>>;
+    }>
+  > {
+    if (!newNodePath) return [];
+
+    const parentAccesses =
+      await OrgStructureDbController.getPropagatingParentAccesses(
+        client,
+        companyId,
+        newNodePath,
+      );
+
+    return OrgStructureDbController.buildImpactUsersFromAccessRows(
+      parentAccesses,
+    );
+  }
+
+  private static async getAutoGeneratedWorkflowTemplateSummaries(
+    client: any,
+    companyId: string,
+    parentNodePath: string | null | undefined,
+  ): Promise<Array<{ workflowName: string; alias: string | null }>> {
+    if (!parentNodePath) return [];
+
+    const parentNode = await client.orgStructure.findFirst({
+      where: {
+        companyId,
+        nodePath: parentNodePath,
+      },
+      select: { id: true },
+    });
+    if (!parentNode?.id) return [];
+
+    const workflows = await client.workflow.findMany({
+      where: {
+        companyId,
+        nodeId: parentNode.id,
+        status: 'ACTIVE',
+        type: { in: ['ALL_CHILD', 'IMMEDIATE_CHILD'] },
+      },
+      select: { name: true, alias: true },
+    });
+
+    const uniqueWorkflows = new Map<
+      string,
+      { workflowName: string; alias: string | null }
+    >();
+    workflows.forEach((workflow: any) => {
+      const workflowName =
+        typeof workflow.name === 'string' ? workflow.name.trim() : '';
+      if (!workflowName) return;
+
+      const alias =
+        typeof workflow.alias === 'string' && workflow.alias.trim()
+          ? workflow.alias.trim()
+          : null;
+      const key = `${workflowName.toLowerCase()}::${(alias || '').toLowerCase()}`;
+      if (!uniqueWorkflows.has(key)) {
+        uniqueWorkflows.set(key, { workflowName, alias });
+      }
+    });
+
+    return Array.from(uniqueWorkflows.values()).sort((left, right) =>
+      left.workflowName.localeCompare(right.workflowName),
+    );
+  }
+
+  private static async notifyUserAccessImpact(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    accessChanges: OrgUserAccessChangeNotification[];
+    changeAction: 'ADDED' | 'REMOVED';
+  }) {
+    const { companyId, accessChanges } = params;
+    if (accessChanges.length === 0) return;
+
+    const impactedUserIds = accessChanges.map((change) => change.userId);
+    const [
+      impactedMappings,
+      corpAdminAccesses,
+      requestInitiatorId,
+      requestInitiatorReportingManagerIds,
+      requestApproverIds,
+    ] = await Promise.all([
+      prisma.userMapping.findMany({
+        where: {
+          companyId,
+          userId: { in: impactedUserIds },
+          status: 'ACTIVE',
+        },
+        select: { userId: true, reportingManager: true },
+      }),
+      prisma.userAccess.findMany({
+        where: {
+          companyId,
+          roleCode: 'CORP_ADMIN',
+          user: {
+            userMappings: {
+              some: { companyId, status: 'ACTIVE' },
+            },
+          },
+        },
+        select: { userId: true },
+      }),
+      NotificationService.getRequestInitiatorId(params.orgReqId, 'org_structure_req'),
+      NotificationService.getRequestInitiatorReportingManagerIds(
+        companyId,
+        params.orgReqId,
+        'org_structure_req',
+      ),
+      NotificationService.getRequestApproverIds(
+        params.orgReqId,
+        'org_structure_req',
+      ),
+    ]);
+
+    const impactedManagerIds = impactedMappings.map(
+      (mapping) => mapping.reportingManager,
+    );
+    const stakeholderUserIds = NotificationService.mergeRecipientUserIds(
+      requestInitiatorId,
+      requestInitiatorReportingManagerIds,
+      impactedManagerIds,
+      requestApproverIds,
+      corpAdminAccesses.map((access) => access.userId),
+    );
+    const groupedUserChanges = accessChanges.reduce(
+      (
+        map: Map<
+          string,
+          {
+            userId: string;
+            userName: string;
+            userEmail: string | null;
+            nodeName: string;
+            nodePath: string;
+            roles: Set<string>;
+          }
+        >,
+        change,
+      ) => {
+        const key = `${change.userId}::${change.nodePath}`;
+        const current = map.get(key) || {
+          userId: change.userId,
+          userName:
+            (typeof change.userName === 'string' && change.userName.trim()) ||
+            (typeof change.userEmail === 'string' && change.userEmail.trim()) ||
+            change.userId,
+          userEmail:
+            typeof change.userEmail === 'string' && change.userEmail.trim()
+              ? change.userEmail.trim()
+              : null,
+          nodeName: change.nodeName || change.nodePath,
+          nodePath: change.nodePath,
+          roles: new Set<string>(),
+        };
+
+        current.roles.add(change.roleName || change.roleCode);
+        map.set(key, current);
+        return map;
+      },
+      new Map<
+        string,
+        {
+          userId: string;
+          userName: string;
+          userEmail: string | null;
+          nodeName: string;
+          nodePath: string;
+          roles: Set<string>;
+        }
+      >(),
+    );
+
+    const groupedChanges = Array.from(groupedUserChanges.values());
+    const stakeholderLines = groupedChanges.map((change) => {
+      const emailPart = change.userEmail ? ` (${change.userEmail})` : '';
+      const roles = Array.from(change.roles).sort().join(', ');
+      return `${change.userName}${emailPart} Role ${roles}.`;
+    });
+    const stakeholderReference =
+      groupedChanges[0]?.nodePath || accessChanges[0]?.nodePath || 'organization';
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      stakeholderUserIds,
+      impactedUserIds,
+    );
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      requestInitiatorId,
+      requestApproverIds,
+      impactedUserIds,
+    );
+
+    if (recipientUserIds.length > 0) {
+      await NotificationService.createRequestNotification({
+        companyId,
+        type: params.changeAction === 'REMOVED' ? 'AUTO_DELETE' : 'MODIFICATION',
+        name:
+          params.changeAction === 'REMOVED'
+            ? 'Active user access removed'
+            : 'Active user access added',
+        message: `${params.changeAction === 'REMOVED' ? 'Active user access removed' : 'Active user access added'} for organization changes:\n${stakeholderLines.join('\n')}`,
+        referenceType: 'ORG',
+        referenceId: params.orgReqId,
+        referenceName: stakeholderReference,
+        createdBy: params.createdBy,
+        recipientUserIds,
+        requiredRecipientUserIds,
+        includeCreatedBy: true,
+        isPending: false,
+      });
+    }
+  }
+
+  private static async notifyPendingUserAccessRemoved(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    nodeName: string;
+    nodePath: string;
+    changes: PendingUserAccessRemovalNotification[];
+  }) {
+    if (params.changes.length === 0) return;
+
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      params.companyId,
+    );
+
+    const lines = params.changes.map((change) => {
+      const roleNames = Array.from(
+        new Set(change.removedPermissions.map((permission) => permission.roleName)),
+      ).sort();
+      const emailPart = change.targetUserEmail ? ` (${change.targetUserEmail})` : '';
+      return `${change.targetUserName}${emailPart} Role ${roleNames.join(', ')}.`;
+    });
+
+    const allInitiators = params.changes.map((c) => c.initiatorId);
+    const allApprovers = params.changes.flatMap((c) => c.eligibleApprovers);
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+      corpAdminUserIds,
+    );
+
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+    );
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'MODIFICATION',
+      name: 'Pending user access removed',
+      message: `Pending user access removed for organization changes:\n${lines.join('\n')}`,
+      referenceType: 'USER',
+      referenceId: params.changes[0]?.requestId,
+      referenceName: params.changes[0]?.targetUserEmail || params.changes[0]?.targetUserName,
+      createdBy: params.createdBy,
+      recipientUserIds,
+      requiredRecipientUserIds,
+      includeCreatedBy: true,
+      isPending: false,
+    });
+  }
+
+  private static async notifyPendingUserAccessAdded(params: {
+    companyId: string;
+    orgReqId: string;
+    createdBy: string;
+    changes: PendingUserAccessAdditionNotification[];
+  }) {
+    if (params.changes.length === 0) return;
+
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      params.companyId,
+    );
+
+    const lines = params.changes.map((change) => {
+      const roleNames = Array.from(
+        new Set(change.addedPermissions.map((permission) => permission.roleName)),
+      ).sort();
+      const emailPart = change.targetUserEmail ? ` (${change.targetUserEmail})` : '';
+      return `${change.targetUserName}${emailPart} Role ${roleNames.join(', ')}.`;
+    });
+
+    const allInitiators = params.changes.map((c) => c.initiatorId);
+    const allApprovers = params.changes.flatMap((c) => c.eligibleApprovers);
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+      corpAdminUserIds,
+    );
+
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+    );
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'MODIFICATION',
+      name: 'Pending user access added',
+      message: `Pending user access added for organization changes:\n${lines.join('\n')}`,
+      referenceType: 'USER',
+      referenceId: params.changes[0]?.requestId,
+      referenceName: params.changes[0]?.targetUserEmail || params.changes[0]?.targetUserName,
+      createdBy: params.createdBy,
+      recipientUserIds,
+      requiredRecipientUserIds,
+      includeCreatedBy: true,
+      isPending: false,
+    });
+  }
+
+  private static async notifyPendingWorkflowDeleted(params: {
+    companyId: string;
+    createdBy: string;
+    nodeName: string;
+    nodePath: string;
+    changes: PendingWorkflowDeletionNotification[];
+  }) {
+    if (params.changes.length === 0) return;
+
+    const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+      params.companyId,
+    );
+
+    const deletedSummary = params.changes
+      .slice(0, 5)
+      .map((change) => `${change.workflowName} at ${change.targetNodePath}`)
+      .join(', ');
+
+    const allInitiators = params.changes.map((c) => c.initiatorId);
+    const allApprovers = params.changes.flatMap((c) => c.eligibleApprovers);
+
+    const recipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+      corpAdminUserIds,
+    );
+
+    const requiredRecipientUserIds = NotificationService.mergeRecipientUserIds(
+      ...allInitiators,
+      ...allApprovers,
+    );
+
+    await NotificationService.createRequestNotification({
+      companyId: params.companyId,
+      type: 'AUTO_DELETE',
+      name: 'Pending workflow request deleted',
+      message: `Pending workflow request(s) were removed because the organization ${params.nodeName} (${params.nodePath}) was inactivated: ${deletedSummary || 'workflow'}.`,
+      referenceType: 'WORKFLOW',
+      referenceId: params.changes[0]?.requestId,
+      referenceName: deletedSummary || 'workflow',
+      createdBy: params.createdBy,
+      recipientUserIds,
+      requiredRecipientUserIds,
+      includeCreatedBy: true,
+      isPending: false,
+    });
+  }
+
+  private static pathsOverlap(left: string, right: string) {
+    return (
+      left === right ||
+      left.startsWith(`${right}.`) ||
+      right.startsWith(`${left}.`)
+    );
+  }
+
+  private static pathWithinSubtree(candidatePath: string, subtreePath: string) {
+    return (
+      candidatePath === subtreePath ||
+      candidatePath.startsWith(`${subtreePath}.`)
+    );
+  }
+
+  private static async getCurrentApproverRequestIds(
+    reqTable: string,
+    userId?: string | null,
+    companyId?: string | null,
+  ) {
+    if (!userId) return [];
+    if (companyId) {
+      const activeCompanyUserIds =
+        await WorkflowApproverUtil.filterUsersToActiveCompanyMembers(
+          prisma as any,
+          companyId,
+          [userId],
+        );
+      if (!activeCompanyUserIds.includes(userId)) {
+        return [];
+      }
+    }
+
+    const approverRows = await prisma.workflowApprover.findMany({
+      where: { reqTable, status: 'PENDING' },
+      select: { reqId: true, approversList: true },
+    });
+
+    const approverReqIds = approverRows
+      .filter(
+        (row) =>
+          Array.isArray(row.approversList) &&
+          row.approversList.includes(userId),
+      )
+      .map((row) => row.reqId);
+
+    if (!companyId || reqTable !== 'org_structure_req') {
+      return approverReqIds;
+    }
+
+    const initiatedReqIds = (
+      await prisma.orgStructureReq.findMany({
+        where: {
+          companyId,
+          status: 'PENDING',
+          initiatorId: userId,
+        },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    return Array.from(new Set([...approverReqIds, ...initiatedReqIds]));
+  }
+
+  private static async filterEffectivelyPendingRequestIds(
+    reqTable: string,
+    requestIds: string[],
+  ) {
+    if (requestIds.length === 0) return new Set<string>();
+    const approverRows = await prisma.workflowApprover.findMany({
+      where: { reqTable, reqId: { in: requestIds } },
+      select: { reqId: true, status: true },
+    });
+    const summary = new Map<string, { total: number; pending: number }>();
+    requestIds.forEach((id) => summary.set(id, { total: 0, pending: 0 }));
+    approverRows.forEach((row) => {
+      const current = summary.get(row.reqId) || { total: 0, pending: 0 };
+      current.total += 1;
+      if (row.status === 'PENDING') current.pending += 1;
+      summary.set(row.reqId, current);
+    });
+
+    const noApproverIds = Array.from(summary.entries())
+      .filter(([, value]) => value.total === 0)
+      .map(([id]) => id);
+    const latestHistoryByReqId = new Map<string, string>();
+    if (noApproverIds.length > 0) {
+      const historyRows =
+        reqTable === 'workflow_req'
+          ? await prisma.workflowReqHistory.findMany({
+              where: { workflowReqId: { in: noApproverIds } },
+              orderBy: [{ createdAt: 'desc' }],
+              select: { workflowReqId: true, event: true },
+            })
+          : reqTable === 'org_structure_req'
+            ? await prisma.orgHistory.findMany({
+                where: { orgReqId: { in: noApproverIds } },
+                orderBy: [{ createdAt: 'desc' }],
+                select: { orgReqId: true, event: true },
+              })
+            : await prisma.userHistory.findMany({
+                where: { reqId: { in: noApproverIds } },
+                orderBy: [{ createdAt: 'desc' }],
+                select: { reqId: true, event: true },
+              });
+
+      historyRows.forEach((row: any) => {
+        const reqId = row.workflowReqId || row.orgReqId || row.reqId;
+        if (reqId && !latestHistoryByReqId.has(reqId)) {
+          latestHistoryByReqId.set(reqId, row.event);
+        }
+      });
+    }
+
+    const effective = new Set<string>();
+    summary.forEach((value, id) => {
+      const latestEvent = latestHistoryByReqId.get(id);
+      const noApproverButStillOpen =
+        value.total === 0 &&
+        latestEvent !== 'APPROVED' &&
+        latestEvent !== 'REJECTED';
+      if (noApproverButStillOpen || value.pending > 0) {
+        effective.add(id);
+      }
+    });
+    return effective;
+  }
+
+  private static toNodeSnapshot(node: any): OrgNodeSnapshot {
+    return {
+      newNodeName: node.nodeName,
+      nodeType: node.nodeType,
+      nodePath: node.nodePath,
+      parentNode: node.parent
+        ? {
+            nodeName: node.parent.nodeName,
+            nodePath: node.parent.nodePath,
+          }
+        : {
+            nodeName: 'ROOT',
+            nodePath: 'ROOT',
+          },
+      status: node.status || 'ACTIVE',
+    };
+  }
+
+  private static async validateModificationPermission(
+    initiatorId: string,
+    companyId: string,
+  ) {
+    const access = await prisma.userAccess.findFirst({
+      where: {
+        userId: initiatorId,
+        companyId,
+        user: {
+          userMappings: {
+            some: { companyId, status: 'ACTIVE' },
+          },
+        },
+        OR: [
+          { roleCode: 'SAAS_ADMIN' },
+          { isGlobalAccess: true },
+          { role: { subCategory: 'ORG_STR', modify: true } },
+        ],
+      },
+    });
+
+    if (!access) {
+      throw new AppError(
+        'Access Denied: UPDATE permission is required for organization modifications',
+        403,
+      );
+    }
+  }
+
+  private static async assertNoPendingHierarchyConflict(
+    companyId: string,
+    node: { nodePath: string; nodeName?: string },
+  ) {
+    const pendingRequests = await prisma.orgStructureReq.findMany({
+      where: { companyId, status: 'PENDING' },
+      include: {
+        orgHistories: { where: { event: 'INITIATE' }, include: { user: true } },
+      },
+    });
+
+    for (const request of pendingRequests) {
+      const data = request.data as any;
+      const targetNodePath =
+        data?.targetNodePath || data?.currentData?.nodePath;
+      const pendingNodePath =
+        data?.nodePath ||
+        (data?.parentNode?.nodePath && data?.newNodeName
+          ? `${data.parentNode.nodePath}.${OrgStructureDbController.pathSegment(data.newNodeName)}`
+          : null);
+      const affectedPaths = [targetNodePath, pendingNodePath].filter(
+        (path): path is string => typeof path === 'string',
+      );
+
+      if (
+        affectedPaths.some((path) =>
+          OrgStructureDbController.pathsOverlap(path, node.nodePath),
+        )
+      ) {
+        const initiator = request.orgHistories?.[0]?.user;
+        const initiatedAt =
+          request.orgHistories?.[0]?.createdAt || request.createdAt;
+        const pendingTitle =
+          data?.newNodeName || data?.targetNodePath || request.id;
+        throw new AppError(
+          `Cannot inactivate node '${node.nodeName || node.nodePath}'. There is an active pending approval request '${pendingTitle}' initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
+          400,
+        );
+      }
+    }
+  }
+
+  private static async assertNoPendingInitiationConflict(
+    companyId: string,
+    node: { nodePath: string; nodeName?: string },
+  ) {
+    if (!node.nodePath) return;
+
+    const pendingRequests = await prisma.orgStructureReq.findMany({
+      where: { companyId, status: 'PENDING' },
+      include: {
+        orgHistories: { where: { event: 'INITIATE' }, include: { user: true } },
+      },
+    });
+    const effectivePendingIds =
+      await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+        'org_structure_req',
+        pendingRequests.map((request) => request.id),
+      );
+
+    for (const request of pendingRequests) {
+      if (!effectivePendingIds.has(request.id)) continue;
+
+      const data = request.data as any;
+      const pendingNodePath = OrgStructureDbController.resolveRequestedNodePath(
+        data,
+        OrgStructureDbController.extractOrgTargetPath(data),
+      );
+
+      if (pendingNodePath !== node.nodePath) continue;
+
+      const initiator = request.orgHistories?.[0]?.user;
+      const initiatedAt =
+        request.orgHistories?.[0]?.createdAt || request.createdAt;
+      const pendingTitle =
+        data?.newNodeName || data?.nodeName || pendingNodePath;
+
+      throw new AppError(
+        `Cannot initiate organization '${node.nodeName || node.nodePath}'. A pending request for the same organization already exists as '${pendingTitle}', initiated by ${initiator?.name || 'Unknown'} - ${initiator?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(initiatedAt)}. Please resolve or reject the pending request first.`,
+        400,
+      );
+    }
+  }
+
+  private static async assertSelectedApprovalWorkflowNotPendingModification(
+    companyId: string,
+    levelsHash?: string | null,
+  ) {
+    const selectedWorkflow = await prisma.workflow.findFirst({
+      where: {
+        companyId,
+        module: 'SYSTEM_ACCESS',
+        subModule: 'ORG_STR',
+        status: 'ACTIVE',
+        ...(levelsHash ? { levelsHash } : { name: { contains: 'DEFAULT' } }),
+      },
+      orderBy: levelsHash ? undefined : { createdAt: 'desc' },
+      include: { orgStructure: { select: { nodePath: true } } },
+    });
+    if (!selectedWorkflow) return;
+
+    const pendingRequests = await prisma.workflowReq.findMany({
+      where: {
+        companyId,
+        status: 'PENDING',
+        type: { in: ['UPDATE', 'INACTIVE'] },
+      },
+      include: {
+        workflowHistories: {
+          where: { event: 'INITIATE' },
+          orderBy: { createdAt: 'asc' },
+          include: { user: true },
+        },
+      },
+    });
+    const effectiveIds =
+      await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+        'workflow_req',
+        pendingRequests.map((request) => request.id),
+      );
+    const blocking = pendingRequests.find((request: any) => {
+      if (!effectiveIds.has(request.id)) return false;
+      const target = (request.data as any)?.target || {};
+      return (
+        target?.module === selectedWorkflow.module &&
+        target?.subModule === selectedWorkflow.subModule &&
+        target?.nodePath === selectedWorkflow.orgStructure?.nodePath &&
+        target?.levelsHash === selectedWorkflow.levelsHash
+      );
+    });
+    if (!blocking) return;
+
+    const h = blocking.workflowHistories?.[0];
+    throw new AppError(
+      `Selected approval workflow '${selectedWorkflow.name}' has a pending ${blocking.type} request initiated by ${h?.user?.name || 'Unknown'} - ${h?.user?.email || 'unknown'} on ${OrgStructureDbController.formatConflictDate(h?.createdAt || blocking.createdAt)}. Please resolve that workflow request first.`,
+      409,
+    );
+  }
+
+  private static async getSubtreeNodes(
+    client: any,
+    companyId: string,
+    nodePath: string,
+  ) {
+    return client.orgStructure.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        OR: [{ nodePath }, { nodePath: { startsWith: `${nodePath}.` } }],
+      },
+      orderBy: { nodePath: 'asc' },
+    });
+  }
+
+  private static async getOrgInactivationNotification(
+    client: any,
+    companyId: string,
+    nodePath: string,
+  ): Promise<OrgInactivationNotification> {
+    const subtreeNodes = await OrgStructureDbController.getSubtreeNodes(
+      client,
+      companyId,
+      nodePath,
+    );
+    const subtreeIds = subtreeNodes.map((node: any) => node.id);
+
+    if (subtreeIds.length === 0) {
+      return {
+        nodeName: nodePath,
+        nodePath,
+        accessUserIds: [],
+        userNames: [],
+        users: [],
+        workflowCount: 0,
+        workflowNames: [],
+        workflows: [],
+      };
+    }
+
+    const workflowWhere = {
+      companyId,
+      nodeId: { in: subtreeIds },
+      status: 'ACTIVE',
+    };
+
+    const [accessRows, workflows] = await Promise.all([
+      client.userAccess.findMany({
+        where: {
+          companyId,
+          nodeId: { in: subtreeIds },
+        },
+        select: {
+          userId: true,
+          user: {
+            select: { name: true, email: true },
+          },
+          role: {
+            select: {
+              subCategory: true,
+              permissionLevel: true,
+              view: true,
+              modify: true,
+              approve: true,
+              initiate: true,
+            },
+          },
+        },
+      }),
+      client.workflow.findMany({
+        where: workflowWhere,
+        select: { name: true, alias: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
+
+    const accessUserIds = Array.from(
+      new Set(
+        accessRows
+          .map((row: any) => row.userId)
+          .filter(
+            (userId: unknown): userId is string =>
+              typeof userId === 'string' && userId.trim().length > 0,
+          )
+          .map((userId: string) => userId.trim()),
+      ),
+    ) as string[];
+
+    const userNames = Array.from(
+      new Set(
+        accessRows
+          .map((row: any) => row.user?.name)
+          .filter(
+            (name: unknown): name is string =>
+              typeof name === 'string' && name.trim().length > 0,
+          )
+          .map((name: string) => name.trim()),
+      ),
+    ).sort() as string[];
+
+    const users =
+      OrgStructureDbController.buildImpactUsersFromAccessRows(accessRows);
+
+    const workflowNames = Array.from(
+      new Set(
+        workflows
+          .map((workflow: any) => workflow.name)
+          .filter(
+            (name: unknown): name is string =>
+              typeof name === 'string' && name.trim().length > 0,
+          )
+          .map((name: string) => name.trim()),
+      ),
+    ).sort() as string[];
+
+    const workflowSummaries = Array.from(
+      new Map(
+        workflows
+          .map((workflow: any) => {
+            const workflowName =
+              typeof workflow.name === 'string' ? workflow.name.trim() : '';
+            if (!workflowName) return null;
+            const alias =
+              typeof workflow.alias === 'string' && workflow.alias.trim()
+                ? workflow.alias.trim()
+                : null;
+            return [
+              `${workflowName.toLowerCase()}::${(alias || '').toLowerCase()}`,
+              { workflowName, alias },
+            ];
+          })
+          .filter(Boolean) as Array<
+          [string, { workflowName: string; alias: string | null }]
+        >,
+      ).values(),
+    ).sort((left, right) =>
+      left.workflowName.localeCompare(right.workflowName),
+    );
+
+    return {
+      nodeName: subtreeNodes[0]?.nodeName || nodePath,
+      nodePath,
+      accessUserIds,
+      userNames,
+      users,
+      workflowCount: workflowNames.length,
+      workflowNames,
+      workflows: workflowSummaries,
+    };
+  }
+
+  private static async assertNoPrimaryAccessInSubtree(
+    client: any,
+    companyId: string,
+    nodePath: string,
+    nodeName?: string,
+  ) {
+    const nodes = await OrgStructureDbController.getSubtreeNodes(
+      client,
+      companyId,
+      nodePath,
+    );
+    const primaryAccesses = await client.userAccess.findMany({
+      where: {
+        companyId,
+        nodeId: { in: nodes.map((node: any) => node.id) },
+        accessType: 'PRIMARY',
+      },
+      include: { user: { select: { email: true } } },
+    });
+
+    if (primaryAccesses.length > 0) {
+      throw new AppError(
+        `Cannot inactivate node '${nodeName || nodePath}' because it (or its sub-departments) currently has ${primaryAccesses.length} active primary user(s). Please reassign them to a different primary node before deactivating.`,
+        400,
+      );
+    }
+  }
+
+  private static async assertNoActiveChildNodes(
+    client: any,
+    companyId: string,
+    nodePath: string,
+    nodeName?: string,
+  ) {
+    const children = await client.orgStructure.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        nodePath: { startsWith: `${nodePath}.` },
+      },
+      select: { nodeName: true },
+      take: 6,
+    });
+    if (children.length > 0) {
+      const childCount = await client.orgStructure.count({
+        where: {
+          companyId,
+          status: 'ACTIVE',
+          nodePath: { startsWith: `${nodePath}.` },
+        },
+      });
+      throw new AppError(
+        `Cannot inactivate node '${nodeName || nodePath}' because it contains ${childCount} active sub-department(s). You must first inactivate the child nodes.`,
+        400,
+      );
+    }
+  }
+
+  private static async createModificationRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const {
+        initiatorId,
+        companyId,
+        targetNodePath,
+        levelsHash,
+        remarks,
+        data = {},
+      } = req.body;
+
+      if (!initiatorId || !companyId) {
+        throw new AppError('initiatorId and companyId are required', 400);
+      }
+      await OrgStructureDbController.validateModificationPermission(
+        initiatorId,
+        companyId,
+      );
+      await OrgStructureDbController.assertSelectedApprovalWorkflowNotPendingModification(
+        companyId,
+        levelsHash || null,
+      );
+
+      if (!targetNodePath) {
+        throw new AppError('Target node path is required', 400);
+      }
+      if (data.status !== 'INACTIVE') {
+        throw new AppError(
+          'Only inactive organization requests are supported; inactive nodes cannot be reactivated',
+          400,
+        );
+      }
+
+      const node = await prisma.orgStructure.findUnique({
+        where: { nodePath: targetNodePath },
+        include: { parent: true },
+      });
+      if (!node || node.companyId !== companyId) {
+        throw new AppError('Organization node not found', 404);
+      }
+      if (node.nodeType === 'ROOT') {
+        throw new AppError('Root organization node cannot be modified', 400);
+      }
+      if (node.status !== 'ACTIVE') {
+        throw new AppError(
+          'Inactive organization nodes cannot be modified or reactivated',
+          400,
+        );
+      }
+
+      await OrgStructureDbController.assertNoPendingHierarchyConflict(
+        companyId,
+        node,
+      );
+      await OrgStructureDbController.assertNoActiveChildNodes(
+        prisma as any,
+        companyId,
+        node.nodePath,
+        node.nodeName,
+      );
+      const oldData = {
+        status: node.status || 'ACTIVE',
+      };
+      const impact = 'INACTIVE';
+      await OrgStructureDbController.assertNoPrimaryAccessInSubtree(
+        prisma as any,
+        companyId,
+        node.nodePath,
+        node.nodeName,
+      );
+      await OrgStructureDbController.assertNoPendingPrimaryAccessRequestsInSubtree(
+        prisma as any,
+        {
+          companyId,
+          nodePath: node.nodePath,
+          nodeName: node.nodeName,
+        },
+      );
+
+      const impactSummaryNotification =
+        await OrgStructureDbController.getOrgInactivationNotification(
+          prisma as any,
+          companyId,
+          node.nodePath,
+        );
+
+      const requestData = {
+        targetNodePath,
+        ...data,
+        impactSummary: OrgStructureDbController.buildImpactSummary(
+          impactSummaryNotification.users,
+          impactSummaryNotification.workflows,
+        ),
+      };
+      let notificationRecipients: string[] = [];
+      const request = await prisma.$transaction(async (tx) => {
+        const requestRecord = await tx.orgStructureReq.create({
+          data: {
+            companyId,
+            type: 'UPDATE',
+            impact,
+            initiatorId,
+            data: requestData as any,
+            oldData: oldData as any,
+            remarks: remarks || null,
+          },
+        });
+        const workflow = await WorkflowApproverUtil.resolveAndCreateApprovers(
+          tx,
+          {
+            levelsHash: levelsHash || null,
+            module: 'SYSTEM_ACCESS',
+            subModule: 'ORG_STR',
+            companyId,
+            nodeId: node.id,
+            initiatorId,
+            reqId: requestRecord.id,
+            reqTable: 'org_structure_req',
+          },
+        );
+        await tx.orgHistory.create({
+          data: {
+            companyId,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+            orgReqId: requestRecord.id,
+            remarks: remarks || null,
+          },
+        });
+        if (workflow.autoApprove) {
+          notificationRecipients = [];
+          await OrgStructureDbController.applyApprovedModification(
+            tx,
+            requestRecord,
+            {
+              inactivation: impactSummaryNotification,
+            },
+            initiatorId,
+          );
+          await tx.orgHistory.create({
+            data: {
+              companyId,
+              event: 'APPROVED',
+              eventUserId: initiatorId,
+              orgReqId: requestRecord.id,
+              remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+            },
+          });
+          return await tx.orgStructureReq.update({
+            where: { id: requestRecord.id },
+            data: {
+              workflowId: workflow.workflowId,
+              status: 'APPROVED',
+              remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+            },
+          });
+        }
+
+        notificationRecipients = workflow.currentLevelApprovers;
+        await tx.orgStructureReq.update({
+          where: { id: requestRecord.id },
+          data: {
+            workflowId: workflow.workflowId,
+          },
+        });
+        return requestRecord;
+      });
+
+      const isAutoApproved = request?.status === 'APPROVED';
+      const modificationNotification =
+        OrgStructureDbController.getOrgNotificationContent(
+          'UPDATE',
+          isAutoApproved ? 'approved' : 'initiated',
+          targetNodePath,
+        );
+      const corpAdminUserIds =
+        await NotificationService.getCorpAdminUserIds(companyId);
+      const initiatorReportingManagerUserIds =
+        await NotificationService.getReportingManagerUserIds(
+          companyId,
+          initiatorId,
+          'ORG_STR',
+        );
+      await NotificationService.createRequestNotification({
+        companyId,
+        type: OrgStructureDbController.getOrgNotificationType(
+          'UPDATE',
+          isAutoApproved ? 'APPROVED' : 'PENDING',
+        ),
+        name: modificationNotification.name,
+        message: modificationNotification.message,
+        referenceType: 'ORG',
+        referenceId: request.id,
+        referenceName: targetNodePath,
+        createdBy: initiatorId,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+          initiatorReportingManagerUserIds,
+          corpAdminUserIds,
+        ),
+        includeCreatedBy: true,
+        isPending: isAutoApproved ? false : undefined,
+      });
+      res.status(201).json(request);
+    } catch (error) {
+      const initiatorId = req.body?.initiatorId;
+      const companyId = req.body?.companyId;
+      const targetNodePath = req.body?.targetNodePath;
+      if (typeof initiatorId === 'string' && typeof companyId === 'string') {
+        await OrgStructureDbController.notifyConflict(
+          companyId,
+          initiatorId,
+          error instanceof Error ? error.message : 'Unexpected error',
+          String(targetNodePath || 'organization node'),
+          NotificationService.mergeRecipientUserIds(
+            req.body?.eligibleApprovers,
+          ),
+        );
+      }
+      next(error);
+    }
+  }
+
+  private static async applyApprovedModification(
+    tx: any,
+    request: any,
+    notificationState?: {
+      inactivation: OrgInactivationNotification | null;
+      autoDeletedWorkflows?: OrgAutoDeletedWorkflowNotification[];
+      pendingUserAccessRemovals?: PendingUserAccessRemovalNotification[];
+      pendingWorkflowDeletions?: PendingWorkflowDeletionNotification[];
+      removedActiveAccessChanges?: OrgUserAccessChangeNotification[];
+    },
+    actorId?: string,
+  ) {
+    const requestData = request.data as any;
+    const oldData = (request.oldData || requestData.oldData) as {
+      status?: OrgNodeStatus;
+    };
+    const targetNodePath = requestData.targetNodePath || requestData.nodePath;
+    const proposedStatus = requestData.status;
+    if (
+      request.impact !== 'INACTIVE' ||
+      oldData?.status !== 'ACTIVE' ||
+      proposedStatus !== 'INACTIVE'
+    ) {
+      throw new AppError(
+        'Only one-way organization deactivation requests can be approved',
+        400,
+      );
+    }
+
+    const node = await tx.orgStructure.findUnique({
+      where: { nodePath: targetNodePath },
+    });
+
+    if (!node || node.companyId !== request.companyId) {
+      throw new AppError('Organization node not found', 404);
+    }
+    if (node.status !== 'ACTIVE') {
+      throw new AppError(
+        'Inactive organization nodes cannot be modified or reactivated',
+        400,
+      );
+    }
+    await OrgStructureDbController.assertNoPrimaryAccessInSubtree(
+      tx,
+      request.companyId,
+      targetNodePath,
+    );
+    await OrgStructureDbController.assertNoPendingPrimaryAccessRequestsInSubtree(
+      tx,
+      {
+        companyId: request.companyId,
+        nodePath: targetNodePath,
+        nodeName: node.nodeName,
+      },
+    );
+    const pendingWorkflowDeletions =
+      await OrgStructureDbController.rejectPendingWorkflowRequestsForOrgInactivation(
+        tx,
+        {
+          companyId: request.companyId,
+          nodePath: targetNodePath,
+          nodeName: node.nodeName,
+          actorId: actorId || undefined,
+        },
+      );
+
+    const subtree = await OrgStructureDbController.getSubtreeNodes(
+      tx,
+      request.companyId,
+      targetNodePath,
+    );
+    const subtreeIds = subtree.map((subtreeNode: any) => subtreeNode.id);
+    const autoDeletedWorkflowRows = await tx.workflow.findMany({
+      where: {
+        companyId: request.companyId,
+        nodeId: { in: subtreeIds },
+        status: { not: 'ARCHIVE' },
+      },
+      select: {
+        id: true,
+        name: true,
+        alias: true,
+        module: true,
+        subModule: true,
+        type: true,
+        workflowReqIds: true,
+        orgStructure: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+            nodeType: true,
+          },
+        },
+      },
+    });
+    const pendingUserAccessRemovals =
+      await OrgStructureDbController.removePendingSecondaryAccessRequestsForOrgInactivation(
+        tx,
+        {
+          companyId: request.companyId,
+          nodePath: targetNodePath,
+        },
+      );
+    if (notificationState) {
+      notificationState.inactivation =
+        await OrgStructureDbController.getOrgInactivationNotification(
+          tx,
+          request.companyId,
+          targetNodePath,
+        );
+      notificationState.autoDeletedWorkflows = autoDeletedWorkflowRows.map(
+        (workflow: any) => ({
+          workflowName: workflow.name,
+          nodeName: workflow.orgStructure?.nodeName || targetNodePath,
+          nodePath: workflow.orgStructure?.nodePath || targetNodePath,
+          workflowReqIds: Array.isArray(workflow.workflowReqIds)
+            ? workflow.workflowReqIds
+            : [],
+        }),
+      );
+      notificationState.pendingUserAccessRemovals = pendingUserAccessRemovals;
+      notificationState.pendingWorkflowDeletions = pendingWorkflowDeletions;
+    }
+    const removedUserAccessRows = await tx.userAccess.findMany({
+      where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
+      select: {
+        userId: true,
+        roleCode: true,
+        nodeId: true,
+        accessType: true,
+        accessCategory: true,
+        companyId: true,
+        isGlobalAccess: true,
+        user: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
+        role: {
+          select: {
+            roleName: true,
+            category: true,
+            subCategory: true,
+          },
+        },
+        orgStructure: {
+          select: {
+            nodeName: true,
+            nodePath: true,
+          },
+        },
+      },
+    });
+    if (notificationState) {
+      notificationState.removedActiveAccessChanges = removedUserAccessRows.map(
+        (access: any) => ({
+          userId: access.userId,
+          userName: access.user?.name || null,
+          userEmail: access.user?.email || null,
+          roleName: access.role?.roleName || access.roleCode,
+          roleCode: access.roleCode,
+          nodeName: access.orgStructure?.nodeName || targetNodePath,
+          nodePath: access.orgStructure?.nodePath || targetNodePath,
+        }),
+      );
+    }
+    await OrgStructureDbController.createAutoApprovedUserAccessAuditRows(tx, {
+      companyId: request.companyId,
+      actorId,
+      type: 'AUTO_DELETE',
+      impact: 'DOWNGRADE',
+      remarks: `Auto deleted because organization node ${node.nodeName} (${targetNodePath}) was inactivated.`,
+      entries: removedUserAccessRows.map((access: any) => ({
+        userId: access.userId,
+        userName: access.user?.name || null,
+        userEmail: access.user?.email || null,
+        roleCode: access.roleCode,
+        roleName: access.role?.roleName || access.roleCode,
+        roleCategory: access.role?.category || 'SYSTEM_ACCESS',
+        roleSubCategory: access.role?.subCategory || 'USER_ACC',
+        nodeId: access.nodeId,
+        nodeName: access.orgStructure?.nodeName || targetNodePath,
+        nodePath: access.orgStructure?.nodePath || targetNodePath,
+        accessType: access.accessType || 'SECONDARY',
+        accessCategory: access.accessCategory || 'NODE',
+        companyId: access.companyId,
+        isGlobalAccess: Boolean(access.isGlobalAccess),
+      })),
+    });
+    await tx.userAccess.deleteMany({
+      where: { companyId: request.companyId, nodeId: { in: subtreeIds } },
+    });
+    if (actorId) {
+      const impactedUserIds: string[] = Array.from(
+        new Set(
+          removedUserAccessRows
+            .map((access: any) => String(access.userId || '').trim())
+            .filter(Boolean),
+        ),
+      );
+      for (const userId of impactedUserIds) {
+        await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+          companyId: request.companyId,
+          userId,
+          eventUserId: actorId,
+          createReason:
+            'Default notification setting created because access was granted.',
+          removeReason:
+            'Notification setting removed because node was inactivated.',
+        });
+      }
+      await OrgStructureDbController.syncNotificationSettingsForGlobalAccessUsers(
+        tx,
+        {
+          companyId: request.companyId,
+          eventUserId: actorId,
+          removeReason:
+            'Notification setting removed because node was inactivated.',
+          excludeUserIds: impactedUserIds,
+        },
+      );
+    }
+    await tx.workflow.updateMany({
+      where: {
+        companyId: request.companyId,
+        nodeId: { in: subtreeIds },
+        status: { not: 'ARCHIVE' },
+      },
+      data: {
+        status: 'ARCHIVE',
+      },
+    });
+    if (actorId) {
+      await Promise.all(
+        autoDeletedWorkflowRows.map(async (workflow: any) => {
+          const candidateRequestIds = Array.isArray(workflow.workflowReqIds)
+            ? workflow.workflowReqIds.filter(
+                (id: unknown): id is string => typeof id === 'string' && !!id,
+              )
+            : [];
+          if (candidateRequestIds.length === 0) return;
+
+          const workflowRequests = await tx.workflowReq.findMany({
+            where: {
+              companyId: request.companyId,
+              id: { in: candidateRequestIds },
+            },
+            select: {
+              id: true,
+              type: true,
+              createdAt: true,
+              data: true,
+            },
+          });
+          const requestId =
+            workflowRequests.find(
+              (workflowReq: any) =>
+                workflowReq.type === 'AUTO_GENERATE' &&
+                typeof (workflowReq.data as any)?.sourceWorkflowId === 'string',
+            )?.id ||
+            workflowRequests.sort((left: any, right: any) => {
+              const leftTime = new Date(left.createdAt).getTime();
+              const rightTime = new Date(right.createdAt).getTime();
+              if (leftTime !== rightTime) return rightTime - leftTime;
+              return String(right.id).localeCompare(String(left.id));
+            })[0]?.id;
+          if (!requestId) return;
+
+          const remarks = `Auto deleted workflow ${workflow.name} (${workflow.orgStructure?.nodePath || targetNodePath}) because organization node ${node.nodeName} (${targetNodePath}) was inactivated.`;
+
+          await tx.workflowReqHistory.create({
+            data: {
+              workflowReqId: requestId,
+              companyId: request.companyId,
+              event: 'AUTO_DELETE',
+              eventUserId: actorId,
+              remarks,
+            },
+          });
+        }),
+      );
+    }
+    await tx.orgStructure.updateMany({
+      where: { id: { in: subtreeIds } },
+      data: { status: 'INACTIVE' },
+    });
+  }
+
+  private static async finalizeApprovedInitiation(
+    tx: any,
+    request: any,
+    approverId: string,
+    remark?: string | null,
+  ) {
+    const requestData = (request.data as any) || {};
+    const newNodePath =
+      requestData.nodePath ||
+      requestData.newNodePath ||
+      OrgStructureDbController.resolveRequestedNodePath(requestData);
+    const newNodeName =
+      requestData.newNodeName || requestData.nodeName || requestData.name;
+    const nodeType =
+      requestData.nodeType ||
+      requestData._nodeType ||
+      requestData.currentData?.nodeType;
+    const parentPath = requestData.parentNode?.nodePath || null;
+    let parentId = requestData.parentId || null;
+
+    if (!newNodePath || !newNodeName || !nodeType) {
+      throw new Error('Missing node details for approval');
+    }
+
+    if (!parentId && parentPath) {
+      const parentNode = await tx.orgStructure.findFirst({
+        where: {
+          companyId: request.companyId,
+          nodePath: parentPath,
+          status: 'ACTIVE',
+        },
+        select: { id: true },
+      });
+      parentId = parentNode?.id || null;
+    }
+
+    const resolvedNodePath =
+      await OrgStructureDbController.resolveUniqueNodePath(
+        tx,
+        request.companyId,
+        newNodePath,
+      );
+
+    const newNode = await tx.orgStructure.create({
+      data: {
+        companyId: request.companyId,
+        nodePath: resolvedNodePath,
+        nodeName: newNodeName,
+        nodeType,
+        parentId: parentId || null,
+      },
+    });
+
+    const pendingUserAccessAdditions =
+      await OrgStructureDbController.addInheritedAccessToPendingUserRequests(
+        tx,
+        {
+          companyId: request.companyId,
+          nodeName: newNode.nodeName,
+          nodePath: newNode.nodePath,
+          nodeType: String(newNode.nodeType),
+          parentNodePath: parentPath,
+        },
+      );
+
+    const autoGeneratedWorkflowNotifications =
+      await OrgStructureDbController.autoGenerateChildWorkflows(tx, {
+        companyId: request.companyId,
+        parentNodeId: parentId || null,
+        newNode,
+        orgReqId: request.id,
+        actorId: approverId,
+      });
+
+    const parentAccesses =
+      await OrgStructureDbController.getPropagatingParentAccesses(
+        tx,
+        request.companyId,
+        resolvedNodePath,
+      );
+    const newAccesses = OrgStructureDbController.buildPropagatedAccesses(
+      parentAccesses,
+      newNode.id,
+      {
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
+      },
+    );
+
+    let userAccessImpactNotification: any = null;
+    if (newAccesses.length > 0) {
+      await tx.userAccess.createMany({
+        data: newAccesses.map(
+          ({
+            userName,
+            userEmail,
+            roleName,
+            roleCategory,
+            roleSubCategory,
+            nodeName,
+            nodePath,
+            ...access
+          }: any) => ({
+            ...access,
+            source: 'AUTO_GENERATED',
+          }),
+        ),
+        skipDuplicates: true,
+      });
+      await OrgStructureDbController.createAutoApprovedUserAccessAuditRows(tx, {
+        companyId: request.companyId,
+        actorId: approverId,
+        type: 'AUTO_GENERATE',
+        impact: 'UPGRADE',
+        remarks: `Auto generated because organization node ${newNode.nodeName} (${newNode.nodePath}) was created.`,
+        entries: newAccesses,
+      });
+      const impactedUserIds: string[] = Array.from(
+        new Set(
+          newAccesses
+            .map((access: any) => String(access.userId || '').trim())
+            .filter(Boolean),
+        ),
+      );
+      for (const userId of impactedUserIds) {
+        await NotificationService.syncNotificationSettingsForUserAccess(tx, {
+          companyId: request.companyId,
+          userId,
+          eventUserId: approverId,
+          createReason:
+            'Default notification setting created because access was granted.',
+          removeReason:
+            'Notification setting removed because access was removed.',
+        });
+      }
+      await OrgStructureDbController.syncNotificationSettingsForGlobalAccessUsers(
+        tx,
+        {
+          companyId: request.companyId,
+          eventUserId: approverId,
+          removeReason:
+            'Notification setting removed because access was removed.',
+          excludeUserIds: impactedUserIds,
+        },
+      );
+      userAccessImpactNotification = {
+        nodeName: newNode.nodeName,
+        nodePath: newNode.nodePath,
+        accessChanges: newAccesses.map((access: any) => ({
+          userId: access.userId,
+          userName: access.userName,
+          userEmail: access.userEmail,
+          roleName: access.roleName,
+          roleCode: access.roleCode,
+          nodeName: access.nodeName || newNode.nodeName,
+          nodePath: access.nodePath || newNode.nodePath,
+        })),
+      };
+    }
+
+    const updated = await tx.orgStructureReq.update({
+      where: { id: request.id },
+      data: {
+        status: 'APPROVED',
+        impact: OrgStructureDbController.formatUserAccessImpact(
+          newAccesses.length,
+        ),
+        data: {
+          ...requestData,
+          nodePath: resolvedNodePath,
+          impactSummary: OrgStructureDbController.buildImpactSummary(
+            Array.from(
+              new Map(
+                newAccesses
+                  .map((access: any) => {
+                    const name =
+                      typeof access.userName === 'string'
+                        ? access.userName.trim()
+                        : '';
+                    if (!name) return null;
+                    const email =
+                      typeof access.userEmail === 'string' &&
+                      access.userEmail.trim()
+                        ? access.userEmail.trim()
+                        : null;
+                    return [
+                      `${name.toLowerCase()}::${(email || '').toLowerCase()}`,
+                      { name, email },
+                    ];
+                  })
+                  .filter(Boolean) as Array<
+                  [string, { name: string; email: string | null }]
+                >,
+              ).values(),
+            ).sort((left, right) => left.name.localeCompare(right.name)),
+            Array.from(
+              new Map(
+                autoGeneratedWorkflowNotifications
+                  .map((workflow: any) => {
+                    const workflowName =
+                      typeof workflow.workflowName === 'string'
+                        ? workflow.workflowName.trim()
+                        : '';
+                    if (!workflowName) return null;
+                    const alias =
+                      typeof workflow.alias === 'string' && workflow.alias.trim()
+                        ? workflow.alias.trim()
+                        : null;
+                    return [
+                      `${workflowName.toLowerCase()}::${(alias || '').toLowerCase()}`,
+                      { workflowName, alias },
+                    ];
+                  })
+                  .filter(Boolean) as Array<
+                  [string, { workflowName: string; alias: string | null }]
+                >,
+              ).values(),
+            ).sort((left, right) =>
+              left.workflowName.localeCompare(right.workflowName),
+            ),
+          ),
+        } as any,
+        remarks: remark || null,
+      },
+    });
+
+    return {
+      updated,
+      userAccessImpactNotification,
+      autoGeneratedWorkflowNotifications,
+      pendingUserAccessAdditions,
+    };
+  }
+
   // --- Internal Atomic Operations ---
 
   /**
    * Fetches a specific organization structure request by ID.
    */
   static async getOrgRequestById(req: Request, res: Response) {
-    const { id } = req.body;
-    const request = await prisma.orgStructureReq.findUnique({
-      where: { id },
+    const { id, companyId } = req.body;
+    const request = await prisma.orgStructureReq.findFirst({
+      where: { id, companyId },
       include: { company: true },
     });
     res.json(request);
@@ -27,8 +4290,8 @@ export class OrgStructureDbController {
    */
   static async getOrgNodeByPath(req: Request, res: Response) {
     const { nodePath } = req.body;
-    const node = await prisma.orgStructure.findUnique({
-      where: { nodePath },
+    const node = await prisma.orgStructure.findFirst({
+      where: { nodePath, status: 'ACTIVE' },
     });
     res.json(node);
   }
@@ -40,7 +4303,7 @@ export class OrgStructureDbController {
     const { nodePath, companyId } = req.body;
 
     const node = await prisma.orgStructure.findFirst({
-      where: { nodePath, companyId },
+      where: { nodePath, companyId, status: 'ACTIVE' },
     });
     res.json(node);
   }
@@ -64,18 +4327,46 @@ export class OrgStructureDbController {
     try {
       const {
         id,
+        companyId,
         status, // 'approved' | 'rejected'
         approverId,
         remarks,
-        newNodePath,
-        newNodeName,
-        nodeType,
-        parentId,
       } = req.body;
 
-      if (!id || !status) {
-        throw new Error('id and status are required');
+      if (!id || !companyId || !status) {
+        throw new Error('id, companyId and status are required');
       }
+      let notificationCompanyId = '';
+      let notificationRecipients: string[] = [];
+      let notificationSubject = 'Organization request';
+      let userAccessImpactNotification: any = null;
+      let pendingUserAccessAdditions: PendingUserAccessAdditionNotification[] =
+        [];
+      const orgLifecycleNotification: {
+        inactivation: OrgInactivationNotification | null;
+        autoDeletedWorkflows: OrgAutoDeletedWorkflowNotification[];
+        pendingUserAccessRemovals: PendingUserAccessRemovalNotification[];
+        pendingWorkflowDeletions: PendingWorkflowDeletionNotification[];
+        removedActiveAccessChanges: OrgUserAccessChangeNotification[];
+      } = {
+        inactivation: null,
+        autoDeletedWorkflows: [],
+        pendingUserAccessRemovals: [],
+        pendingWorkflowDeletions: [],
+        removedActiveAccessChanges: [],
+      };
+      let autoGeneratedWorkflowNotifications: Array<{
+        workflowName: string;
+        alias: string;
+        module: string;
+        subModule: string;
+        workflowType: string;
+        nodeName: string;
+        nodePath: string;
+        sourceWorkflowName: string;
+        sourceNodeName: string;
+        sourceNodePath: string;
+      }> = [];
 
       // ── Check WorkflowApprover for level-wise authorization ──────────────
       const currentLevel = await WorkflowApproverUtil.getCurrentPendingLevel(
@@ -98,12 +4389,19 @@ export class OrgStructureDbController {
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        const request = await tx.orgStructureReq.findUnique({
-          where: { id },
+        const request = await tx.orgStructureReq.findFirst({
+          where: { id, companyId },
           include: { company: true },
         });
 
         if (!request) throw new Error('Request not found');
+        if (request.status !== 'PENDING') {
+          throw new AppError('Request is already processed', 400);
+        }
+        notificationCompanyId = request.companyId;
+        notificationRecipients = request.eligibleApprovers || [];
+        notificationSubject =
+          (request.data as any)?.newNodeName || notificationSubject;
 
         // --- Prevent Self-Approval ---
         // Block the initiator from approving their own request.
@@ -115,9 +4413,17 @@ export class OrgStructureDbController {
         }
 
         // --- Prevent Double Approval ---
-        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(tx, id, 'org_structure_req', approverId);
+        const alreadyApproved = await WorkflowApproverUtil.isAlreadyApproved(
+          tx,
+          id,
+          'org_structure_req',
+          approverId,
+        );
         if (alreadyApproved) {
-          throw new AppError('You have already approved this request once', 403);
+          throw new AppError(
+            'You have already approved this request once',
+            403,
+          );
         }
 
         // Fallback: Verify with legacy eligibleApprovers if no WorkflowApprover rows
@@ -181,6 +4487,9 @@ export class OrgStructureDbController {
             );
             if (nextLevel) {
               allLevelsApproved = false;
+              notificationRecipients = Array.isArray(nextLevel.approversList)
+                ? (nextLevel.approversList as string[])
+                : notificationRecipients;
             }
           }
 
@@ -198,108 +4507,324 @@ export class OrgStructureDbController {
 
           // If NOT all levels approved, return early (partial approval)
           if (!allLevelsApproved) {
-            return { id: request.id, status: 'PARTIAL_APPROVED', level: approvedLevel };
+            return {
+              id: request.id,
+              status: 'PARTIAL_APPROVED',
+              level: approvedLevel,
+              type: request.type,
+            };
           }
 
-          // ── All levels approved — proceed with node creation ─────────────
-          if (!newNodePath || !newNodeName || !nodeType) {
-            throw new Error('Missing node details for approval');
-          }
-
-          // 1. Create the actual node in the production organization structure
-          const newNode = await tx.orgStructure.create({
-            data: {
-              companyId: request.companyId,
-              nodePath: newNodePath,
-              nodeName: newNodeName,
-              nodeType: nodeType,
-              parentId: parentId || null,
-            },
-          });
-
-          // Propagate user access from parent nodes using ltree concept
-          const parentPaths = ltree.getAncestors(newNodePath);
-
-          if (parentPaths.length > 0) {
-            const parentNodes = await tx.orgStructure.findMany({
-              where: {
-                companyId: request.companyId,
-                nodePath: { in: parentPaths },
+          if (request.type === 'UPDATE') {
+            await OrgStructureDbController.applyApprovedModification(
+              tx,
+              request,
+              orgLifecycleNotification,
+              approverId,
+            );
+            const updated = await tx.orgStructureReq.update({
+              where: { id },
+              data: {
+                status: 'APPROVED',
+                remarks,
               },
             });
 
-            const parentNodeIds = parentNodes.map((n) => n.id);
-            const directParentPath = ltree.getParent(newNodePath);
-            const directParentId = parentNodes.find(n => n.nodePath === directParentPath)?.id;
-
-            if (parentNodeIds.length > 0) {
-              // Fetch only propagating access: 
-              // - ALL_CHILD from any ancestor 
-              // - IMMEDIATE_CHILD only from the direct parent
-              const parentAccesses = await tx.userAccess.findMany({
-                where: {
-                  companyId: request.companyId,
-                  nodeId: { in: parentNodeIds },
-                  isGlobalAccess: false,
-                  OR: [
-                    { accessCategory: 'ALL_CHILD' },
-                    directParentId ? { nodeId: directParentId, accessCategory: 'IMMEDIATE_CHILD' } : undefined
-                  ].filter(Boolean) as any,
-                },
-              });
-
-              // Prepare new entries, ensuring uniqueness
-              const newAccessesMap = new Map();
-              for (const access of parentAccesses) {
-                const uniqueKey = `${access.userId}_${access.roleCode}`;
-                if (!newAccessesMap.has(uniqueKey)) {
-                  // Rule: IMMEDIATE_CHILD on parent becomes NODE on child
-                  const newCategory = access.accessCategory === 'IMMEDIATE_CHILD' ? 'NODE' : access.accessCategory;
-                  
-                  newAccessesMap.set(uniqueKey, {
-                    userId: access.userId,
-                    roleCode: access.roleCode,
-                    nodeId: newNode.id,
-                    accessType: 'SECONDARY',
-                    accessCategory: newCategory,
-                    companyId: access.companyId,
-                    isGlobalAccess: false,
-                  });
-                }
-              }
-
-              const newAccesses = Array.from(newAccessesMap.values());
-              if (newAccesses.length > 0) {
-                await tx.userAccess.createMany({
-                  data: newAccesses,
-                  skipDuplicates: true,
-                });
-              }
-            }
+            return { ...updated, status: 'APPROVED' };
           }
 
-          // 2. Update the onboarding request status
-          const updated = await tx.orgStructureReq.update({
-            where: { id },
-            data: {
-              status: 'APPROVED',
+          // ── All levels approved — proceed with node creation ─────────────
+          const finalized =
+            await OrgStructureDbController.finalizeApprovedInitiation(
+              tx,
+              request,
+              approverId,
               remarks,
-            },
-          });
+            );
+          userAccessImpactNotification =
+            finalized.userAccessImpactNotification;
+          autoGeneratedWorkflowNotifications =
+            finalized.autoGeneratedWorkflowNotifications;
+          pendingUserAccessAdditions = finalized.pendingUserAccessAdditions;
 
-          return { ...updated, status: 'APPROVED' };
+          return {
+            ...finalized.updated,
+            status: 'APPROVED',
+            data: {
+              ...(((finalized.updated as any).data || {}) as any),
+            },
+          };
         }
 
         throw new Error('Invalid status value');
       });
 
+      const requestType = String(
+        (result as any)?.type || 'INITIATE',
+      ).toUpperCase();
       let message = 'Org structure request processed';
       if (result && result.status === 'PARTIAL_APPROVED') {
         message = `Org structure request approved at Level ${result.level}, pending remaining approval`;
+        notificationRecipients =
+          await NotificationService.getCurrentApproverIds(
+            id,
+            'org_structure_req',
+            notificationRecipients,
+          );
       } else if (result && result.status === 'APPROVED') {
-        message = 'Org structure request approved and node created';
+        message =
+          requestType === 'UPDATE'
+            ? 'Org structure modification approved'
+            : 'Org structure request approved and node created';
       } else if (result && result.status === 'REJECTED') {
-        message = 'Org structure request rejected';
+        message = `Org structure ${requestType.toLowerCase()} request rejected`;
+      }
+      const isPartialApproval = result?.status === 'PARTIAL_APPROVED';
+
+      if (notificationCompanyId) {
+        const requestInitiatorId =
+          await NotificationService.getRequestInitiatorId(
+            id,
+            'org_structure_req',
+          );
+        const requestInitiatorReportingManagerUserIds =
+          await NotificationService.getRequestInitiatorReportingManagerIds(
+            notificationCompanyId,
+            id,
+            'org_structure_req',
+          );
+        const inactivationNotification =
+          orgLifecycleNotification.inactivation || null;
+        const isOrgInactivation = Boolean(
+          result?.status === 'APPROVED' &&
+          requestType === 'UPDATE' &&
+          String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+          inactivationNotification,
+        );
+        const notificationRecipientUserIds = isPartialApproval
+          ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+          : NotificationService.mergeRecipientUserIds(
+              notificationRecipients,
+              requestInitiatorId,
+              requestInitiatorReportingManagerUserIds,
+            );
+        const isFinalApproval = result?.status === 'APPROVED';
+        const requestApproverIds = isFinalApproval
+          ? await NotificationService.getRequestApproverIds(
+              id,
+              'org_structure_req',
+            )
+          : [];
+        const approvedNodeRecipientUserIds = isFinalApproval
+          ? await OrgStructureDbController.getNodeAccessNotificationRecipientIds(
+              notificationCompanyId,
+              NotificationService.mergeRecipientUserIds(
+                inactivationNotification?.nodePath,
+                OrgStructureDbController.extractOrgNotificationNodePaths(
+                  (result as any)?.data,
+                ),
+              ),
+            )
+          : [];
+        const orgNotificationContent = isOrgInactivation
+          ? {
+              name: 'Organization Removed',
+              message: `Organization ${inactivationNotification?.nodeName || notificationSubject} (${inactivationNotification?.nodePath || notificationSubject}) was inactivated.`,
+            }
+          : isPartialApproval
+            ? OrgStructureDbController.getOrgPendingApprovalNotificationContent(
+                result?.type || requestType,
+                notificationSubject,
+              )
+            : requestType === 'UPDATE' && result?.status
+              ? OrgStructureDbController.getOrgNotificationContent(
+                  requestType,
+                  result.status === 'REJECTED' ? 'rejected' : 'approved',
+                  notificationSubject,
+                )
+              : null;
+        const corpAdminUserIds = await NotificationService.getCorpAdminUserIds(
+          notificationCompanyId,
+        );
+        const notificationType = isOrgInactivation
+          ? 'INACTIVE'
+          : OrgStructureDbController.getOrgNotificationType(
+              result?.type || requestType,
+              isPartialApproval ? 'PENDING' : result?.status,
+            );
+
+        if (isPartialApproval && requestInitiatorId) {
+          const levelApprovalNotificationContent =
+            OrgStructureDbController.getOrgLevelApprovalNotificationContent(
+              result?.type || requestType,
+              notificationSubject,
+              result?.level ?? null,
+            );
+
+          await NotificationService.createRequestNotification({
+            companyId: notificationCompanyId,
+            type: OrgStructureDbController.getOrgNotificationType(
+              result?.type || requestType,
+              result?.status,
+            ),
+            ...levelApprovalNotificationContent,
+            referenceType: 'ORG',
+            referenceId: id,
+            referenceName:
+              inactivationNotification?.nodePath || notificationSubject,
+            createdBy: approverId,
+            recipientUserIds: NotificationService.mergeRecipientUserIds(
+              requestInitiatorId,
+            ),
+            requiredRecipientUserIds: NotificationService.mergeRecipientUserIds(
+              requestInitiatorId,
+            ),
+            isPending: false,
+            replacePreviousCompletedNotifications: true,
+          });
+        }
+
+        await NotificationService.createRequestNotification({
+          companyId: notificationCompanyId,
+          type: notificationType,
+          ...(orgNotificationContent || {}),
+          referenceType: 'ORG',
+          referenceId: id,
+          referenceName:
+            inactivationNotification?.nodePath || notificationSubject,
+          createdBy: approverId,
+          recipientUserIds: NotificationService.mergeRecipientUserIds(
+            notificationRecipientUserIds,
+            ...(isPartialApproval
+              ? []
+              : [
+                  requestApproverIds,
+                  approvedNodeRecipientUserIds,
+                  corpAdminUserIds,
+                ]),
+          ),
+          requiredRecipientUserIds: isPartialApproval
+            ? NotificationService.mergeRecipientUserIds(notificationRecipients)
+            : NotificationService.mergeRecipientUserIds(
+                requestInitiatorId,
+                requestApproverIds,
+                approvedNodeRecipientUserIds,
+              ),
+          includeCreatedBy: !isPartialApproval,
+          isPending: isPartialApproval,
+          replacePreviousCompletedNotifications: !isPartialApproval,
+        });
+
+        if (
+          isOrgInactivation &&
+          approverId &&
+          orgLifecycleNotification.removedActiveAccessChanges &&
+          orgLifecycleNotification.removedActiveAccessChanges.length > 0
+        ) {
+          await OrgStructureDbController.notifyUserAccessImpact({
+            companyId: notificationCompanyId,
+            orgReqId: id,
+            createdBy: approverId,
+            accessChanges: orgLifecycleNotification.removedActiveAccessChanges,
+            changeAction: 'REMOVED',
+          });
+        }
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type !== 'UPDATE' &&
+        userAccessImpactNotification
+      ) {
+        await OrgStructureDbController.notifyUserAccessImpact({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          accessChanges: userAccessImpactNotification.accessChanges,
+          changeAction: 'ADDED',
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type !== 'UPDATE' &&
+        pendingUserAccessAdditions.length > 0
+      ) {
+        await OrgStructureDbController.notifyPendingUserAccessAdded({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          changes: pendingUserAccessAdditions,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type !== 'UPDATE' &&
+        autoGeneratedWorkflowNotifications.length > 0
+      ) {
+        await OrgStructureDbController.notifyAutoGeneratedWorkflows({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          generatedWorkflows: autoGeneratedWorkflowNotifications,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type === 'UPDATE' &&
+        String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+        orgLifecycleNotification.autoDeletedWorkflows &&
+        orgLifecycleNotification.autoDeletedWorkflows.length > 0
+      ) {
+        await OrgStructureDbController.notifyAutoDeletedWorkflows({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          deletedWorkflows: orgLifecycleNotification.autoDeletedWorkflows,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type === 'UPDATE' &&
+        String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+        orgLifecycleNotification.pendingUserAccessRemovals.length > 0
+      ) {
+        const inactivationNotification =
+          orgLifecycleNotification.inactivation || null;
+        await OrgStructureDbController.notifyPendingUserAccessRemoved({
+          companyId: notificationCompanyId,
+          orgReqId: id,
+          createdBy: approverId,
+          nodeName: inactivationNotification?.nodeName || notificationSubject,
+          nodePath: inactivationNotification?.nodePath || notificationSubject,
+          changes: orgLifecycleNotification.pendingUserAccessRemovals,
+        });
+      }
+
+      if (
+        notificationCompanyId &&
+        result?.status === 'APPROVED' &&
+        result?.type === 'UPDATE' &&
+        String((result as any)?.impact || '').toUpperCase() === 'INACTIVE' &&
+        orgLifecycleNotification.pendingWorkflowDeletions.length > 0
+      ) {
+        const inactivationNotification =
+          orgLifecycleNotification.inactivation || null;
+        await OrgStructureDbController.notifyPendingWorkflowDeleted({
+          companyId: notificationCompanyId,
+          createdBy: approverId,
+          nodeName: inactivationNotification?.nodeName || notificationSubject,
+          nodePath: inactivationNotification?.nodePath || notificationSubject,
+          changes: orgLifecycleNotification.pendingWorkflowDeletions,
+        });
       }
 
       res.status(200).json({
@@ -308,6 +4833,41 @@ export class OrgStructureDbController {
         data: result,
       });
     } catch (error) {
+      const initiatorId = req.body?.initiatorId;
+      let resolvedCompanyId = req.body?.companyId as string | undefined;
+      if (!resolvedCompanyId && typeof req.body?.companyCode === 'string') {
+        const company = await prisma.company.findUnique({
+          where: { companyCode: req.body.companyCode },
+          select: { id: true },
+        });
+        resolvedCompanyId = company?.id;
+      }
+      if (
+        typeof initiatorId === 'string' &&
+        typeof resolvedCompanyId === 'string'
+      ) {
+        const requestId = req.body?.id;
+        const requestApproverIds =
+          typeof requestId === 'string'
+            ? await NotificationService.getRequestApproverIds(
+                requestId,
+                'org_structure_req',
+              )
+            : NotificationService.mergeRecipientUserIds(
+                req.body?.eligibleApprovers,
+              );
+        await OrgStructureDbController.notifyConflict(
+          resolvedCompanyId,
+          initiatorId,
+          error instanceof Error ? error.message : 'Unexpected error',
+          String(
+            req.body?.targetNodePath ||
+              req.body?.data?.newNodeName ||
+              'organization',
+          ),
+          requestApproverIds,
+        );
+      }
       next(error);
     }
   }
@@ -325,8 +4885,22 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { initiatorId, companyCode, companyId, levelsHash, ...rest } =
-        req.body;
+      if (String(req.body?.type ?? 'INITIATE').toUpperCase() === 'UPDATE') {
+        return OrgStructureDbController.createModificationRequest(
+          req,
+          res,
+          next,
+        );
+      }
+
+      const {
+        initiatorId,
+        companyCode,
+        companyId,
+        levelsHash,
+        type: _type,
+        ...rest
+      } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -341,25 +4915,102 @@ export class OrgStructureDbController {
       }
 
       // Fetch all global access users for this company to ensure they are in the master eligible list
-      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(prisma as any, resolvedCompanyId, 'ORG_STR');
+      const globalUsers = await WorkflowApproverUtil.getGlobalAccessUserIds(
+        prisma as any,
+        resolvedCompanyId,
+        'ORG_STR',
+      );
 
       // Master eligible list includes both configured and global approvers.
       // Initiator is excluded from all active approval lists.
-      const masterEligible = new Set([...(rest.eligibleApprovers || []), ...globalUsers]);
-      rest.eligibleApprovers = Array.from(masterEligible).filter((id) => id !== initiatorId);
+      const masterEligible = new Set([
+        ...(rest.eligibleApprovers || []),
+        ...globalUsers,
+      ]);
+      rest.eligibleApprovers = Array.from(masterEligible).filter(
+        (id) => id !== initiatorId,
+      );
+      let notificationRecipients = rest.eligibleApprovers;
+      let userAccessImpactNotification: any = null;
+      let pendingUserAccessAdditions: PendingUserAccessAdditionNotification[] =
+        [];
+      let autoGeneratedWorkflowNotifications: Array<{
+        workflowName: string;
+        alias: string;
+        module: string;
+        subModule: string;
+        workflowType: string;
+        nodeName: string;
+        nodePath: string;
+        sourceWorkflowName: string;
+        sourceNodeName: string;
+        sourceNodePath: string;
+      }> = [];
 
       const request = await prisma.$transaction(async (tx) => {
+        const reqData = rest.data || {};
+        const rawRequestedNodePath =
+          OrgStructureDbController.resolveRequestedNodePath(reqData);
+        await OrgStructureDbController.assertNoActiveNodePathConflict(
+          tx,
+          resolvedCompanyId,
+          rawRequestedNodePath,
+          reqData.newNodeName || reqData.nodeName,
+        );
+        await OrgStructureDbController.assertNoPendingNodeConflict(
+          tx,
+          resolvedCompanyId,
+          reqData,
+        );
+        const requestedNodePath =
+          await OrgStructureDbController.resolveUniqueRequestedNodePath(
+            tx,
+            resolvedCompanyId,
+            reqData,
+          );
+        const propagatedAccessSummaries =
+          await OrgStructureDbController.getPropagatedUserAccessSummaries(
+            tx,
+            resolvedCompanyId,
+            requestedNodePath,
+          );
+        const autoGeneratedWorkflowSummaries =
+          await OrgStructureDbController.getAutoGeneratedWorkflowTemplateSummaries(
+            tx,
+            resolvedCompanyId,
+            reqData.parentNode?.nodePath,
+          );
         const reqRecord = await tx.orgStructureReq.create({
           data: {
             ...rest,
+            type: 'INITIATE',
+            impact: OrgStructureDbController.formatUserAccessImpact(
+              propagatedAccessSummaries.length,
+            ),
+            data: {
+              ...(reqData || {}),
+              nodePath: requestedNodePath || reqData?.nodePath || null,
+              impactSummary: OrgStructureDbController.buildImpactSummary(
+                propagatedAccessSummaries,
+                autoGeneratedWorkflowSummaries,
+              ),
+            },
+            initiatorId: initiatorId || null,
             companyId: resolvedCompanyId,
           },
           include: { company: true },
         });
+        await tx.orgHistory.create({
+          data: {
+            companyId: resolvedCompanyId,
+            event: 'INITIATE',
+            eventUserId: initiatorId,
+            orgReqId: reqRecord.id,
+          },
+        });
 
         // ── Resolve workflow approvers and create WorkflowApprover rows ──────
         // Determine node for approver resolution from the request data
-        const reqData = rest.data || {};
         let nodeId: string | null = null;
 
         // Use parent node if available, otherwise use root node
@@ -382,7 +5033,11 @@ export class OrgStructureDbController {
         }
 
         if (nodeId && initiatorId) {
-          const { workflowId: resolvedWorkflowId } =
+          const {
+            workflowId: resolvedWorkflowId,
+            currentLevelApprovers,
+            autoApprove,
+          } =
             await WorkflowApproverUtil.resolveAndCreateApprovers(tx, {
               levelsHash: levelsHash || null,
               module: 'SYSTEM_ACCESS',
@@ -393,6 +5048,37 @@ export class OrgStructureDbController {
               reqId: reqRecord.id,
               reqTable: 'org_structure_req',
             });
+          if (autoApprove) {
+            notificationRecipients = [];
+            const finalized =
+              await OrgStructureDbController.finalizeApprovedInitiation(
+                tx,
+                reqRecord,
+                initiatorId,
+                'Auto-approved: selected workflow has NO_APPROVER',
+              );
+            userAccessImpactNotification =
+              finalized.userAccessImpactNotification;
+            autoGeneratedWorkflowNotifications =
+              finalized.autoGeneratedWorkflowNotifications;
+            pendingUserAccessAdditions = finalized.pendingUserAccessAdditions;
+            await tx.orgHistory.create({
+              data: {
+                companyId: resolvedCompanyId,
+                event: 'APPROVED',
+                eventUserId: initiatorId,
+                orgReqId: reqRecord.id,
+                remarks: 'Auto-approved: selected workflow has NO_APPROVER',
+              },
+            });
+            return await tx.orgStructureReq.update({
+              where: { id: reqRecord.id },
+              data: { workflowId: resolvedWorkflowId },
+              include: { company: true },
+            });
+          }
+
+          notificationRecipients = currentLevelApprovers;
 
           // Store the resolved workflowId in the request record
           await tx.orgStructureReq.update({
@@ -400,17 +5086,73 @@ export class OrgStructureDbController {
             data: { workflowId: resolvedWorkflowId },
           });
         }
-
-        await tx.orgHistory.create({
-          data: {
-            companyId: resolvedCompanyId,
-            event: 'INITIATE',
-            eventUserId: initiatorId,
-            orgReqId: reqRecord.id,
-          },
-        });
         return reqRecord;
       });
+      const isAutoApproved = request?.status === 'APPROVED';
+      const initiatorReportingManagerUserIds =
+        await NotificationService.getReportingManagerUserIds(
+          resolvedCompanyId,
+          initiatorId,
+          'ORG_STR',
+        );
+      const nodeAccessRecipientUserIds = isAutoApproved
+        ? await OrgStructureDbController.getNodeAccessNotificationRecipientIds(
+            resolvedCompanyId,
+            OrgStructureDbController.extractOrgNotificationNodePaths(rest.data),
+          )
+        : [];
+      await NotificationService.createRequestNotification({
+        companyId: resolvedCompanyId,
+        type: isAutoApproved ? 'ONBOARDED' : 'INITIATE',
+        ...(isAutoApproved
+          ? {
+              name: 'Organization onboarding approved',
+              message: `Organization onboarding approved for ${rest.data?.newNodeName || rest.data?.nodePath || 'organization node'}`,
+            }
+          : {}),
+        referenceType: 'ORG',
+        referenceId: request.id,
+        referenceName: rest.data?.newNodeName,
+        createdBy: initiatorId,
+        recipientUserIds: NotificationService.mergeRecipientUserIds(
+          notificationRecipients,
+          initiatorReportingManagerUserIds,
+          nodeAccessRecipientUserIds,
+          await NotificationService.getCorpAdminUserIds(resolvedCompanyId),
+        ),
+        requiredRecipientUserIds: isAutoApproved
+          ? NotificationService.mergeRecipientUserIds(
+              nodeAccessRecipientUserIds,
+            )
+          : undefined,
+        includeCreatedBy: true,
+        isPending: isAutoApproved ? false : undefined,
+      });
+      if (isAutoApproved && userAccessImpactNotification) {
+        await OrgStructureDbController.notifyUserAccessImpact({
+          companyId: resolvedCompanyId,
+          orgReqId: request.id,
+          createdBy: initiatorId,
+          accessChanges: userAccessImpactNotification.accessChanges,
+          changeAction: 'ADDED',
+        });
+      }
+      if (isAutoApproved && pendingUserAccessAdditions.length > 0) {
+        await OrgStructureDbController.notifyPendingUserAccessAdded({
+          companyId: resolvedCompanyId,
+          orgReqId: request.id,
+          createdBy: initiatorId,
+          changes: pendingUserAccessAdditions,
+        });
+      }
+      if (isAutoApproved && autoGeneratedWorkflowNotifications.length > 0) {
+        await OrgStructureDbController.notifyAutoGeneratedWorkflows({
+          companyId: resolvedCompanyId,
+          orgReqId: request.id,
+          createdBy: initiatorId,
+          generatedWorkflows: autoGeneratedWorkflowNotifications,
+        });
+      }
       res.status(201).json(request);
     } catch (error) {
       next(error);
@@ -451,9 +5193,10 @@ export class OrgStructureDbController {
       if (parentNode && parentNode.nodePath) {
         const parentRecord = await prisma.orgStructure.findFirst({
           where: {
-            companyId,
+            companyId: resolvedCompanyId,
             nodePath: parentNode.nodePath,
             nodeName: parentNode.nodeName,
+            status: 'ACTIVE',
           },
         });
         if (!parentRecord) {
@@ -464,22 +5207,44 @@ export class OrgStructureDbController {
         }
       }
 
-      // 2. Prevent overlapping pending requests for the same node name
-      const pendingCheck = await prisma.orgStructureReq.findFirst({
-        where: {
-          companyId,
-          status: 'PENDING',
-          data: {
-            path: ['newNodeName'],
-            equals: newNodeName,
+      const requestedNodePath =
+        OrgStructureDbController.resolveRequestedNodePath({
+          parentNode,
+          newNodeName,
+          _nodeType,
+          nodePath: req.body?.nodePath,
+        });
+      if (requestedNodePath) {
+        await OrgStructureDbController.assertNoActiveNodePathConflict(
+          prisma,
+          resolvedCompanyId,
+          requestedNodePath,
+          newNodeName,
+        );
+        await OrgStructureDbController.assertNoPendingNodeConflict(
+          prisma,
+          resolvedCompanyId,
+          {
+            parentNode,
+            newNodeName,
+            _nodeType,
+            nodePath: req.body?.nodePath,
           },
-        },
-      });
-
-      if (pendingCheck) {
-        return res.status(400).json({
-          success: false,
-          message: `A request for node '${newNodeName}' is already pending for this location`,
+        );
+        const resolvedNodePath =
+          await OrgStructureDbController.resolveUniqueRequestedNodePath(
+            prisma,
+            resolvedCompanyId,
+            {
+              parentNode,
+              newNodeName,
+              _nodeType,
+              nodePath: req.body?.nodePath,
+            },
+          );
+        return res.status(200).json({
+          success: true,
+          nodePath: resolvedNodePath,
         });
       }
 
@@ -498,7 +5263,16 @@ export class OrgStructureDbController {
     next: NextFunction,
   ) {
     try {
-      const { companyCode, companyId, nodeName, nodePath } = req.body;
+      const {
+        companyCode,
+        companyId,
+        nodeName,
+        nodePath,
+        nodeType,
+        _nodeType,
+        parentNodePath,
+        userId: viewerUserId,
+      } = req.body;
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
@@ -513,63 +5287,137 @@ export class OrgStructureDbController {
       }
 
       let whereCondition: any = { companyId: resolvedCompanyId };
-
-      if (nodeName || nodePath) {
-        // 1. Resolve parent path if nodePath is likely the node's own path
-        let parentPathForFilter = nodePath;
-        let isRootSearch = false;
-
-        if (nodeName && nodePath) {
-          const safeName = nodeName.trim().replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase();
-          if (nodePath.endsWith(safeName)) {
-            const parts = nodePath.split('.');
-            if (parts.length > 1) {
-              parentPathForFilter = parts.slice(0, -1).join('.');
-            } else {
-              // If it's a single part path and matches safeName, it's a ROOT node request
-              parentPathForFilter = undefined;
-              isRootSearch = true;
-            }
-          }
-        }
-
-        // 2. Find all matching OrgStructureReq IDs first
-        const matchingReqs = await prisma.orgStructureReq.findMany({
-          where: {
-            companyId: resolvedCompanyId,
-            AND: [
-              nodeName
-                ? {
-                    data: {
-                      path: ['newNodeName'],
-                      equals: nodeName,
-                    },
-                  }
-                : {},
-              isRootSearch
-                ? {
-                    data: {
-                      path: ['nodeType'],
-                      equals: 'ROOT',
-                    },
-                  }
-                : (parentPathForFilter
-                  ? {
-                      data: {
-                        path: ['parentNode', 'nodePath'],
-                        equals: parentPathForFilter,
-                      },
-                    }
-                  : {}),
-            ].filter((obj) => Object.keys(obj).length > 0) as any,
+      let applyHistoryFilter = false;
+      const normalizedNodeName = nodeName?.trim().toLowerCase() || null;
+      const orgNodes = await prisma.orgStructure.findMany({
+        where: { companyId: resolvedCompanyId },
+        select: {
+          id: true,
+          nodeName: true,
+          nodeType: true,
+          nodePath: true,
+          parent: {
+            select: {
+              nodeName: true,
+              nodePath: true,
+            },
           },
-          select: { id: true },
+        },
+      });
+      const orgNodeByPath = new Map(
+        orgNodes.map((node) => [node.nodePath, node]),
+      );
+      let selectedNodeType =
+        OrgStructureDbController.normalizeOrgNodeType(nodeType) ||
+        OrgStructureDbController.normalizeOrgNodeType(_nodeType);
+      const normalizedParentNodePath =
+        typeof parentNodePath === 'string' && parentNodePath.trim()
+          ? parentNodePath.trim()
+          : null;
+      if (typeof nodePath === 'string' && nodePath.length > 0) {
+        const selectedNode = await prisma.orgStructure.findFirst({
+          where: { companyId: resolvedCompanyId, nodePath },
+          select: { nodeType: true },
         });
+        selectedNodeType =
+          OrgStructureDbController.normalizeOrgNodeType(
+            selectedNode?.nodeType,
+          ) || selectedNodeType;
+      }
+      const matchesNodeFilter = (data: any) => {
+        if (!data) return false;
+        const identity =
+          OrgStructureDbController.buildOrgHistoryNodeIdentity(data);
+        const exactCandidatePaths = [
+          data?.targetNodePath,
+          data?.currentData?.nodePath,
+          data?.nodePath,
+          identity.nodePath,
+        ].filter((value): value is string => typeof value === 'string');
+        const resolvedRequestedNodePath =
+          OrgStructureDbController.resolveRequestedNodePath(data);
+        const derivedNodePath =
+          typeof data?.parentNode?.nodePath === 'string' &&
+          typeof data?.newNodeName === 'string'
+            ? `${data.parentNode.nodePath}.${OrgStructureDbController.pathSegment(data.newNodeName)}`
+            : null;
+        const candidatePaths =
+          typeof nodePath === 'string' && nodePath.length > 0
+            ? exactCandidatePaths
+            : [
+                ...exactCandidatePaths,
+                resolvedRequestedNodePath,
+                derivedNodePath,
+              ].filter((value): value is string => typeof value === 'string');
+        const matchedOrgNode = candidatePaths
+          .map((path) => orgNodeByPath.get(path))
+          .find(Boolean);
+        const candidateNodeType =
+          identity.nodeType ||
+          OrgStructureDbController.normalizeOrgNodeType(
+            matchedOrgNode?.nodeType,
+          );
+        const candidateNodeNames = [
+          data?.newNodeName,
+          data?.nodeName,
+          data?.currentData?.nodeName,
+          identity.nodeName,
+          matchedOrgNode?.nodeName,
+        ]
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.toLowerCase());
+        const parentNodePath =
+          typeof data?.parentNode?.nodePath === 'string'
+            ? data.parentNode.nodePath
+            : matchedOrgNode?.parent?.nodePath || null;
+        const hasPathSignals = candidatePaths.length > 0;
+        const extractedNames = candidatePaths
+          .map((p) => p.split('.').pop()?.toLowerCase())
+          .filter((value): value is string => Boolean(value));
+        const allCandidateNames = [...candidateNodeNames, ...extractedNames];
+        const nodeNameMatches =
+          typeof nodePath === 'string' && nodePath.length > 0
+            ? true
+            : normalizedNodeName
+              ? allCandidateNames.includes(normalizedNodeName)
+              : true;
+        const nodePathMatches =
+          typeof nodePath === 'string' && nodePath.length > 0
+            ? hasPathSignals
+              ? candidatePaths.some((path) => path === nodePath)
+              : false
+            : true;
+        const nodeTypeMatches = selectedNodeType
+          ? candidateNodeType === selectedNodeType
+          : true;
+        const parentNodePathMatches = normalizedParentNodePath
+          ? identity.parentNodePath === normalizedParentNodePath ||
+            matchedOrgNode?.parent?.nodePath === normalizedParentNodePath ||
+            parentNodePath === normalizedParentNodePath
+          : true;
+        return (
+          nodeNameMatches &&
+          nodePathMatches &&
+          nodeTypeMatches &&
+          parentNodePathMatches
+        );
+      };
+
+      if (nodeName || nodePath || selectedNodeType || normalizedParentNodePath) {
+        const matchingReqs = (
+          await prisma.orgStructureReq.findMany({
+            where: { companyId: resolvedCompanyId },
+            select: { id: true, data: true, type: true },
+          })
+        ).filter((req) => matchesNodeFilter(req.data as any));
 
         const reqIds = matchingReqs.map((r) => r.id);
-        whereCondition.orgReqId = { in: reqIds };
+        if (reqIds.length > 0) {
+          whereCondition.orgReqId = { in: reqIds };
+        } else {
+          applyHistoryFilter = true;
+        }
       }
-
 
       let histories = await prisma.orgHistory.findMany({
         where: whereCondition,
@@ -587,16 +5435,14 @@ export class OrgStructureDbController {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Filter out rejected org structure requests
-      const rejectedReqIds = new Set<string>();
-      histories.forEach((h) => {
-        if (h.orgReqId && (h.event === 'REJECTED' || h.orgReq?.status === 'REJECTED')) {
-          rejectedReqIds.add(h.orgReqId);
-        }
-      });
-
+      if (applyHistoryFilter) {
+        histories = histories.filter((h) =>
+          matchesNodeFilter(h.orgReq?.data as any),
+        );
+      }
       histories = histories.filter(
-        (h) => !h.orgReqId || !rejectedReqIds.has(h.orgReqId)
+        (history) =>
+          history.event !== 'AUTO_GENERATE' && history.event !== 'AUTO_DELETE',
       );
 
       // 1. Collect all unique request IDs to fetch their workflow approval status
@@ -645,13 +5491,14 @@ export class OrgStructureDbController {
           const storedList = Array.isArray(level.approversList)
             ? (level.approversList as string[])
             : [];
-          level.approversList = await WorkflowApproverUtil.getEnrichedApproverIds(
-            resolvedCompanyId,
-            storedList,
-            initiatorId,
-            'ORG_STR',
-            approvedUserIds,
-          );
+          level.approversList =
+            await WorkflowApproverUtil.getEnrichedApproverIds(
+              resolvedCompanyId,
+              storedList,
+              initiatorId,
+              'ORG_STR',
+              approvedUserIds,
+            );
         }
       }
 
@@ -670,134 +5517,875 @@ export class OrgStructureDbController {
           id: true,
           name: true,
           email: true,
-          userAccesses: {
-            select: { roleCode: true },
-          },
         },
       });
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        ...Array.from(allApproverIds),
+        ...histories.map((h) => h.eventUserId),
+      ]);
       const approverMap = new Map(
-        approverDetails.map((u) => {
-          const isSaasAdmin = u.userAccesses.some(
-            (a) => a.roleCode === 'SAAS_ADMIN',
-          );
-          return [
+        approverDetails.map((u) => [
+          u.id,
+          HistoryUserUtil.formatAuditUser(
+            u,
             u.id,
-            {
-              name: isSaasAdmin ? 'Teams' : u.name,
-              email: isSaasAdmin ? 'Teams' : u.email,
-            },
-          ];
-        }),
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+        ]),
       );
-
-      const resultList: any[] = [];
-      const handledPendingReqs = new Set<string>();
-
-      // 3. Inject "Pending Approval" entries for any active requests
+      const historyUserMap = new Map(
+        histories.map((h) => [
+          h.eventUserId,
+          HistoryUserUtil.formatAuditUser(
+            h.user,
+            h.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+        ]),
+      );
+      const approvedEventsByReqLevel = new Map<string, any[]>();
+      const rejectedEventByReqId = new Map<
+        string,
+        { level: number | null; createdAt: Date | string | null }
+      >();
       histories.forEach((h) => {
-        if (h.orgReqId && !handledPendingReqs.has(h.orgReqId)) {
-          const levels = workflowMap.get(h.orgReqId);
-          if (levels) {
-            const currentPending = levels.find((l) => l.status === 'PENDING');
-            if (currentPending) {
-              const approvers = (currentPending.approversList as string[])
-                .map((id) => {
-                  const u = approverMap.get(id);
-                  return u ? { name: u.name, email: u.email } : null;
-                })
-                .filter(Boolean);
-
-              const data = h.orgReq?.data as any;
-              resultList.push({
-                companyCode: h.company.companyCode,
-                event: `L${currentPending.level} Pending Approval`,
-                createdAt: null,
-                eligibleapprovers: approvers,
-                newNodeName: data?.newNodeName || null,
-                nodeType: data?._nodeType || data?.nodeType || null,
-                parentNodePath: data?.parentNode?.nodePath || 'ROOT',
-                parentNodeName: data?.parentNode?.nodeName || 'ROOT',
-              });
-            }
+        if (h.orgReqId && h.event === 'APPROVED' && h.level) {
+          const key = `${h.orgReqId}:${h.level}`;
+          const existing = approvedEventsByReqLevel.get(key) || [];
+          existing.push({
+            historyId: h.id,
+            user: historyUserMap.get(h.eventUserId),
+            createdAt: h.createdAt,
+          });
+          approvedEventsByReqLevel.set(key, existing);
+        }
+        if (h.orgReqId && h.event === 'REJECTED') {
+          const existing = rejectedEventByReqId.get(h.orgReqId);
+          const currentTime = h.createdAt ? new Date(h.createdAt).getTime() : 0;
+          const existingTime = existing?.createdAt
+            ? new Date(existing.createdAt).getTime()
+            : -1;
+          if (!existing || currentTime >= existingTime) {
+            rejectedEventByReqId.set(h.orgReqId, {
+              level: h.level ?? null,
+              createdAt: h.createdAt,
+            });
           }
-          handledPendingReqs.add(h.orgReqId);
         }
       });
-
-      // 4. Format history for easy display
-      const formattedHistories = histories.map((h) => {
-        const data = h.orgReq?.data as any;
-        const initiatorAccesses = h.user?.userAccesses || [];
-
-        const isSaasAdmin = initiatorAccesses.some(
-          (a) => a.roleCode === 'SAAS_ADMIN',
+      const getMandatoryApprovalCount = (level: any) =>
+        Math.max(Number(level?.mandatoryCount || 1), 1);
+      const getLevelRule = (level: any) =>
+        getMandatoryApprovalCount(level) > 1 ? 'AND' : null;
+      const getSortedApprovedEvents = (
+        reqId: string,
+        level: number,
+        direction: 'asc' | 'desc' = 'asc',
+      ) => {
+        const sortedEvents = [
+          ...(approvedEventsByReqLevel.get(`${reqId}:${level}`) || []),
+        ].sort((left: any, right: any) => {
+          const leftTime = left.createdAt
+            ? new Date(left.createdAt).getTime()
+            : 0;
+          const rightTime = right.createdAt
+            ? new Date(right.createdAt).getTime()
+            : 0;
+          if (leftTime !== rightTime) {
+            return leftTime - rightTime;
+          }
+          return String(left.historyId).localeCompare(String(right.historyId));
+        });
+        return direction === 'desc' ? sortedEvents.reverse() : sortedEvents;
+      };
+      const approvalStepMetaByReqId = new Map<
+        string,
+        {
+          levelStartByLevel: Map<number, number>;
+          totalApprovalSteps: number;
+        }
+      >();
+      const approvedEventStepByHistoryId = new Map<string, number>();
+      for (const [reqId, levels] of workflowMap.entries()) {
+        const sortedLevels = [...levels].sort(
+          (left: any, right: any) => left.level - right.level,
         );
-        const isTeams = isSaasAdmin || (!h.user && h.eventUserId === null);
-
-        const levels = h.orgReqId ? workflowMap.get(h.orgReqId) : null;
-        let workflowStatus = null;
-
-        if (levels && levels.length > 0) {
-          const allApproved = levels.every((l: any) => l.status === 'APPROVED');
-          const isRejected = levels.some((l: any) => l.status === 'REJECTED');
-          const currentPending = levels.find(
-            (l: any) => l.status === 'PENDING',
+        const levelStartByLevel = new Map<number, number>();
+        let nextStep = 1;
+        sortedLevels.forEach((level: any) => {
+          levelStartByLevel.set(level.level, nextStep);
+          getSortedApprovedEvents(reqId, level.level).forEach(
+            (event: any, index: number) => {
+              approvedEventStepByHistoryId.set(
+                event.historyId,
+                nextStep + index,
+              );
+            },
           );
+          nextStep += getMandatoryApprovalCount(level);
+        });
+        approvalStepMetaByReqId.set(reqId, {
+          levelStartByLevel,
+          totalApprovalSteps: nextStep - 1,
+        });
+      }
+      const getLevelStartStep = (reqId: string, level: number) =>
+        approvalStepMetaByReqId.get(reqId)?.levelStartByLevel.get(level) ??
+        null;
+      const getApprovedEventStep = (
+        reqId: string,
+        level: number,
+        historyId?: string | null,
+      ) => {
+        if (historyId) {
+          const directStep = approvedEventStepByHistoryId.get(historyId);
+          if (directStep) return directStep;
+        }
+        const startStep = getLevelStartStep(reqId, level);
+        if (!startStep) return null;
+        const approvedCount = getSortedApprovedEvents(reqId, level).length;
+        return approvedCount > 0 ? startStep + approvedCount - 1 : startStep;
+      };
+      const getNextPendingApprovalStep = (reqId: string, level: number) => {
+        const startStep = getLevelStartStep(reqId, level);
+        if (!startStep) return null;
+        return startStep + getSortedApprovedEvents(reqId, level).length;
+      };
+      const getRejectedApprovalStep = (reqId: string, level: number) => {
+        const startStep = getLevelStartStep(reqId, level);
+        if (!startStep) return null;
+        const approvedCount = getSortedApprovedEvents(reqId, level).length;
+        return startStep + approvedCount;
+      };
+      const toApprovedUserSummary = (
+        event: any,
+        approvalStep: number | null,
+      ) =>
+        event?.user
+          ? {
+              levelCount: `A${approvalStep || 1}`,
+              name: event.user.name,
+              email: event.user.email,
+              approvedAt: event.createdAt,
+            }
+          : null;
+      const getLevelApprovalCount = (reqId: string, level: number) =>
+        getSortedApprovedEvents(reqId, level).length;
+      const isLevelApproved = (reqId: string, level: any) =>
+        getLevelApprovalCount(reqId, level.level) >=
+        getMandatoryApprovalCount(level);
+      const buildApprovalSummary = (reqId: string) => {
+        const levels = workflowMap.get(reqId) || [];
+        const request = histories.find((history) => history.orgReqId === reqId);
+        const requestStatus = request?.orgReq?.status || null;
+        const normalizedRequestStatus = String(
+          requestStatus || '',
+        ).toUpperCase();
 
-          workflowStatus = {
-            overallStatus: isRejected
-              ? 'REJECTED'
-              : allApproved
-                ? 'APPROVED'
-                : 'PENDING',
-            currentLevel: currentPending
-              ? currentPending.level
-              : allApproved
-                ? levels.length
+        if (levels.length === 0) {
+          return {
+            ...OrgStructureDbController.getEmptyOrgHistoryApprovalSummary(),
+            currentStatus:
+              normalizedRequestStatus === 'APPROVED' ||
+              normalizedRequestStatus === 'REJECTED' ||
+              normalizedRequestStatus === 'PENDING'
+                ? normalizedRequestStatus
                 : null,
-            totalLevels: levels.length,
-            levels: levels
-              .filter(
-                (l: any) => l.level <= (currentPending?.level || levels.length),
-              )
-              .map((l: any) => ({
-                level: l.level,
-                status: l.status,
-                eligibleapprovers: (l.approversList as string[])
-                  .map((id: string) => {
-                    const u = approverMap.get(id);
-                    return u ? { name: u.name, email: u.email } : null;
-                  })
-                  .filter(Boolean),
-              })),
           };
         }
 
+        const rejectedLevel = rejectedEventByReqId.get(reqId)?.level ?? null;
+        const completedLevels = levels.filter((level: any) =>
+          isLevelApproved(reqId, level),
+        ).length;
+        const currentPendingLevel =
+          normalizedRequestStatus === 'PENDING'
+            ? (levels.find((level: any) => !isLevelApproved(reqId, level))
+                ?.level ?? null)
+            : null;
+        const currentPendingStep =
+          currentPendingLevel && normalizedRequestStatus === 'PENDING'
+            ? getNextPendingApprovalStep(reqId, currentPendingLevel)
+            : null;
+        const isRejected = normalizedRequestStatus === 'REJECTED';
+        const allApproved =
+          levels.length > 0 && completedLevels === levels.length;
+
         return {
+          currentStatus: isRejected
+            ? 'REJECTED'
+            : allApproved || normalizedRequestStatus === 'APPROVED'
+              ? 'APPROVED'
+              : 'PENDING',
+          totalLevels: levels.length,
+          completedLevels,
+          ...(rejectedLevel ? { rejectedAtLevel: rejectedLevel } : {}),
+          ...(currentPendingLevel ? { currentPendingLevel } : {}),
+          ...(currentPendingStep ? { currentPendingStep } : {}),
+        };
+      };
+      const buildApprovedBy = (reqId: string) =>
+        (workflowMap.get(reqId) || [])
+          .map((level: any) => {
+            const rule = getLevelRule(level);
+            const approvers = getSortedApprovedEvents(reqId, level.level)
+              .map((event) =>
+                toApprovedUserSummary(
+                  event,
+                  getApprovedEventStep(reqId, level.level, event.historyId),
+                ),
+              )
+              .filter(Boolean);
+            return approvers.length > 0
+              ? {
+                  level: level.level,
+                  rule,
+                  approvedBy: approvers,
+                }
+              : null;
+          })
+          .filter(Boolean)
+          .sort((left: any, right: any) => right.level - left.level);
+      const buildEligibleApprovers = (reqId: string) => {
+        const levels = workflowMap.get(reqId) || [];
+        const pendingLevel = levels.find((l: any) => l.status === 'PENDING');
+        if (!pendingLevel) return [];
+        const approverIds = Array.isArray(pendingLevel.approversList)
+          ? (pendingLevel.approversList as string[])
+          : [];
+        return approverIds
+          .map((id: string) => {
+            const user = approverMap.get(id);
+            return user ? { name: user.name, email: user.email } : null;
+          })
+          .filter(Boolean);
+      };
+      const resolveHistoryNodeDisplay = (data: any) => {
+        const identity =
+          OrgStructureDbController.buildOrgHistoryNodeIdentity(data);
+        const candidatePaths = [
+          data?.targetNodePath,
+          data?.currentData?.nodePath,
+          data?.nodePath,
+          identity.nodePath,
+        ].filter((value): value is string => typeof value === 'string');
+        const matchedOrgNode = candidatePaths
+          .map((path) => orgNodeByPath.get(path))
+          .find(Boolean);
+
+        return {
+          nodeId:
+            data?.nodeId || data?.orgStructureId || matchedOrgNode?.id || null,
+          orgStructureId:
+            data?.orgStructureId || data?.nodeId || matchedOrgNode?.id || null,
+          newNodeName:
+            data?.newNodeName ||
+            data?.nodeName ||
+            data?.currentData?.nodeName ||
+            matchedOrgNode?.nodeName ||
+            null,
+          nodeType:
+            data?._nodeType ||
+            data?.nodeType ||
+            data?.currentData?.nodeType ||
+            matchedOrgNode?.nodeType ||
+            null,
+          nodePath:
+            data?.nodePath ||
+            data?.targetNodePath ||
+            data?.currentData?.nodePath ||
+            matchedOrgNode?.nodePath ||
+            null,
+          parentNodePath:
+            data?.parentNode?.nodePath ||
+            data?.parentNodePath ||
+            matchedOrgNode?.parent?.nodePath ||
+            'ROOT',
+          parentNodeName:
+            data?.parentNode?.nodeName ||
+            data?.parentNodeName ||
+            matchedOrgNode?.parent?.nodeName ||
+            'ROOT',
+        };
+      };
+
+      const modificationSequenceByReqId = new Map<string, number>();
+      const historyByReqId = new Map<string, any[]>();
+      histories
+        .filter((history) => history.orgReqId)
+        .sort((left, right) => {
+          const leftTime = left.createdAt
+            ? new Date(left.createdAt).getTime()
+            : 0;
+          const rightTime = right.createdAt
+            ? new Date(right.createdAt).getTime()
+            : 0;
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return String(left.id).localeCompare(String(right.id));
+        })
+        .forEach((history) => {
+          if (history.orgReqId) {
+            const existingEntries = historyByReqId.get(history.orgReqId) || [];
+            existingEntries.push(history);
+            historyByReqId.set(history.orgReqId, existingEntries);
+          }
+          const requestType =
+            OrgStructureDbController.resolveOrgHistoryRequestType(
+              history.orgReq,
+            );
+          if (
+            history.event === 'INITIATE' &&
+            requestType !== 'INITIATE' &&
+            history.orgReqId &&
+            !modificationSequenceByReqId.has(history.orgReqId)
+          ) {
+            modificationSequenceByReqId.set(
+              history.orgReqId,
+              modificationSequenceByReqId.size + 1,
+            );
+          }
+        });
+
+      // 3. Add actual history entries
+      const formattedHistories = histories.map((h) => {
+        const data = h.orgReq?.data as any;
+        const nodeDisplay = resolveHistoryNodeDisplay(data || {});
+        const requestType =
+          OrgStructureDbController.resolveOrgHistoryRequestType(h.orgReq);
+        const isChangeRequestStart =
+          h.event === 'INITIATE' && requestType !== 'INITIATE';
+        const displayEvent = OrgStructureDbController.getOrgHistoryDisplayEvent(
+          h.event,
+          requestType,
+        );
+        const approvalSummary = h.orgReqId
+          ? buildApprovalSummary(h.orgReqId)
+          : OrgStructureDbController.getEmptyOrgHistoryApprovalSummary();
+        const approvalLevel =
+          displayEvent === 'APPROVED' || displayEvent === 'REJECTED'
+            ? (h.level ?? null)
+            : approvalSummary.currentStatus === 'PENDING'
+              ? ((approvalSummary as any).currentPendingLevel ?? null)
+              : null;
+        const approvalStep =
+          displayEvent === 'APPROVED' && h.orgReqId && h.level
+            ? getApprovedEventStep(h.orgReqId, h.level, h.id)
+            : displayEvent === 'REJECTED' && h.orgReqId && h.level
+              ? getRejectedApprovalStep(h.orgReqId, h.level)
+              : approvalSummary.currentStatus === 'PENDING'
+                ? ((approvalSummary as any).currentPendingStep ?? null)
+                : null;
+        const levelCount = OrgStructureDbController.getOrgHistoryLevelCount(
+          displayEvent || '',
+          {
+            approvalLevel,
+            approvalStep,
+            isChangeRequestStart,
+            modificationSequence: h.orgReqId
+              ? modificationSequenceByReqId.get(h.orgReqId) || 1
+              : null,
+          },
+        );
+        const approvedBy = h.orgReqId ? buildApprovedBy(h.orgReqId) : [];
+
+        const result: Record<string, any> = {
+          id: h.id,
+          orgReqId: h.orgReqId,
+          type: requestType,
+          impact: h.orgReq?.impact || null,
           companyCode: h.company.companyCode,
-          event: h.event,
-          level: h.level,
+          oldData:
+            h.orgReq?.oldData || ((h.orgReq?.data as any)?.oldData ?? null),
+          newData: h.orgReq?.data || null,
+          event: displayEvent,
+          levelCount,
           createdAt: h.createdAt,
           remarks: h.remarks,
-          user: isTeams
-            ? { name: 'Teams', email: 'Teams' }
-            : {
-              name: h.user?.name || 'System',
-              email: h.user?.email || 'system@internal',
-            },
-          newNodeName: data?.newNodeName || null,
-          nodeType: data?._nodeType || data?.nodeType || null,
-          parentNodePath: data?.parentNode?.nodePath || 'ROOT',
-          parentNodeName: data?.parentNode?.nodeName || 'ROOT',
+          user: HistoryUserUtil.formatAuditUser(
+            h.user,
+            h.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+          nodeId: nodeDisplay.nodeId,
+          orgStructureId: nodeDisplay.orgStructureId,
+          newNodeName: nodeDisplay.newNodeName,
+          nodeType: nodeDisplay.nodeType,
+          nodePath: nodeDisplay.nodePath,
+          parentNodePath: nodeDisplay.parentNodePath,
+          parentNodeName: nodeDisplay.parentNodeName,
+          approvalLevel,
+          _reqId: h.orgReqId || null,
         };
+
+        if (displayEvent === 'APPROVED' && approvalLevel != null) {
+          result.level = approvalLevel;
+          result.approvalSummary = {
+            currentStatus: approvalSummary.currentStatus,
+            totalLevels: approvalSummary.totalLevels,
+            completedLevels: approvalSummary.completedLevels,
+          };
+          if (approvedBy.length > 0) {
+            result.approvedBy = approvedBy;
+          }
+        }
+
+        if (displayEvent === 'REJECTED' && approvalLevel != null) {
+          result.level = approvalLevel;
+        }
+
+        return result;
       });
 
-      resultList.push(...formattedHistories);
+      // 4. Generate synthetic approval-state events
+      const syntheticEvents: any[] = [];
+      const processedReqIds = new Set<string>();
+      const suppressApprovedForReqIds = new Set<string>();
+
+      for (const h of histories) {
+        if (!h.orgReqId || processedReqIds.has(h.orgReqId)) continue;
+        processedReqIds.add(h.orgReqId);
+
+        const approvalSummary = buildApprovalSummary(h.orgReqId);
+        const approvedBy = buildApprovedBy(h.orgReqId);
+
+        if (approvalSummary.totalLevels === 0) continue;
+
+        const isPending = approvalSummary.currentStatus === 'PENDING';
+        const isRejected = approvalSummary.currentStatus === 'REJECTED';
+        const isApproved = approvalSummary.currentStatus === 'APPROVED';
+        const isMultiLevel = approvalSummary.totalLevels > 1;
+        const latestEntries = historyByReqId.get(h.orgReqId) || [];
+        const latestEvent = latestEntries[latestEntries.length - 1];
+        const syntheticSource = latestEvent || h;
+        const sourceData = syntheticSource.orgReq?.data as any;
+        const sourceNodeDisplay = resolveHistoryNodeDisplay(sourceData || {});
+        const requestType =
+          OrgStructureDbController.resolveOrgHistoryRequestType(
+            syntheticSource.orgReq,
+          );
+
+        if (isPending || isRejected) {
+          suppressApprovedForReqIds.add(h.orgReqId);
+        }
+
+        if (isApproved && isMultiLevel) {
+          suppressApprovedForReqIds.add(h.orgReqId);
+          syntheticEvents.push({
+            id: OrgStructureDbController.buildSyntheticOrgHistoryId(
+              syntheticSource.id,
+              h.orgReqId,
+              'APPROVED',
+              approvalStepMetaByReqId.get(h.orgReqId)?.totalApprovalSteps ||
+                approvalSummary.totalLevels,
+            ),
+            orgReqId: h.orgReqId,
+            type: requestType,
+            impact: syntheticSource.orgReq?.impact || null,
+            companyCode: syntheticSource.company.companyCode,
+            oldData: null,
+            newData: null,
+            event: 'APPROVED',
+            levelCount: `A${approvalStepMetaByReqId.get(h.orgReqId)?.totalApprovalSteps || approvalSummary.totalLevels}`,
+            createdAt: latestEvent?.createdAt ?? null,
+            remarks: null,
+            user: HistoryUserUtil.formatAuditUser(
+              syntheticSource.user,
+              syntheticSource.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            nodeId: sourceNodeDisplay.nodeId,
+            orgStructureId: sourceNodeDisplay.orgStructureId,
+            newNodeName: sourceNodeDisplay.newNodeName,
+            nodeType: sourceNodeDisplay.nodeType,
+            nodePath: sourceNodeDisplay.nodePath,
+            parentNodePath: sourceNodeDisplay.parentNodePath,
+            parentNodeName: sourceNodeDisplay.parentNodeName,
+            approvalLevel: null,
+            approvalSummary: {
+              currentStatus: 'APPROVED',
+              totalLevels: approvalSummary.totalLevels,
+              completedLevels: approvalSummary.completedLevels,
+            },
+            approvedBy,
+            _reqId: h.orgReqId,
+          });
+        }
+
+        if (isRejected && approvalSummary.completedLevels > 0) {
+          const progressSummary: Record<string, any> = {
+            currentStatus: approvalSummary.currentStatus,
+            totalLevels: approvalSummary.totalLevels,
+            completedLevels: approvalSummary.completedLevels,
+          };
+          if ((approvalSummary as any).rejectedAtLevel) {
+            progressSummary.rejectedAtLevel = (
+              approvalSummary as any
+            ).rejectedAtLevel;
+          }
+
+          syntheticEvents.push({
+            id: OrgStructureDbController.buildSyntheticOrgHistoryId(
+              syntheticSource.id,
+              h.orgReqId,
+              'APPROVAL_PROGRESS',
+              (approvalSummary as any).rejectedAtLevel ||
+                approvalSummary.completedLevels,
+            ),
+            orgReqId: h.orgReqId,
+            type: requestType,
+            impact: syntheticSource.orgReq?.impact || null,
+            companyCode: syntheticSource.company.companyCode,
+            oldData: null,
+            newData: null,
+            event: 'APPROVAL_PROGRESS',
+            levelCount: null,
+            createdAt: latestEvent?.createdAt
+              ? new Date(
+                  new Date(latestEvent.createdAt).getTime() - 1000,
+                ).toISOString()
+              : null,
+            remarks: null,
+            user: HistoryUserUtil.formatAuditUser(
+              syntheticSource.user,
+              syntheticSource.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            nodeId: sourceNodeDisplay.nodeId,
+            orgStructureId: sourceNodeDisplay.orgStructureId,
+            newNodeName: sourceNodeDisplay.newNodeName,
+            nodeType: sourceNodeDisplay.nodeType,
+            nodePath: sourceNodeDisplay.nodePath,
+            parentNodePath: sourceNodeDisplay.parentNodePath,
+            parentNodeName: sourceNodeDisplay.parentNodeName,
+            approvalLevel: null,
+            approvalSummary: progressSummary,
+            approvedBy,
+            _reqId: h.orgReqId,
+          });
+        }
+
+        if (isPending && (approvalSummary as any).currentPendingLevel) {
+          const pendingLevel = (approvalSummary as any).currentPendingLevel;
+          const pendingStep =
+            (approvalSummary as any).currentPendingStep ?? pendingLevel;
+          const eligibleApprovers = buildEligibleApprovers(h.orgReqId);
+
+          syntheticEvents.push({
+            id: OrgStructureDbController.buildSyntheticOrgHistoryId(
+              syntheticSource.id,
+              h.orgReqId,
+              'PENDING',
+              pendingLevel,
+            ),
+            orgReqId: h.orgReqId,
+            type: requestType,
+            impact: syntheticSource.orgReq?.impact || null,
+            companyCode: syntheticSource.company.companyCode,
+            oldData: null,
+            newData: null,
+            event: `L${pendingLevel} Pending Approval`,
+            levelCount: `A${pendingStep}`,
+            createdAt: null,
+            remarks: null,
+            user: HistoryUserUtil.formatAuditUser(
+              syntheticSource.user,
+              syntheticSource.eventUserId,
+              saasAdminUserIds,
+              viewerUserId,
+            ),
+            nodeId: sourceNodeDisplay.nodeId,
+            orgStructureId: sourceNodeDisplay.orgStructureId,
+            newNodeName: sourceNodeDisplay.newNodeName,
+            nodeType: sourceNodeDisplay.nodeType,
+            nodePath: sourceNodeDisplay.nodePath,
+            parentNodePath: sourceNodeDisplay.parentNodePath,
+            parentNodeName: sourceNodeDisplay.parentNodeName,
+            approvalLevel: null,
+            approvalSummary: {
+              currentStatus: 'PENDING',
+              totalLevels: approvalSummary.totalLevels,
+              completedLevels: approvalSummary.completedLevels,
+            },
+            ...(eligibleApprovers.length > 0
+              ? { eligibleapprovers: eligibleApprovers }
+              : {}),
+            ...(approvedBy.length > 0 ? { approvedBy } : {}),
+            _reqId: h.orgReqId,
+          });
+        }
+      }
+
+      // 5. Filter duplicate individual approved entries and sort like user history
+      const filteredHistory = formattedHistories.filter((item: any) => {
+        if (
+          item.event === 'APPROVED' &&
+          item._reqId &&
+          suppressApprovedForReqIds.has(item._reqId)
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      const eventPriority = (event: string) => {
+        if (event && event.includes('Pending Approval')) return 0;
+        if (event === 'APPROVAL_PROGRESS') return 1;
+        if (event === 'REJECTED') return 2;
+        if (event === 'APPROVED') return 3;
+        return 4;
+      };
+
+      const resultList = [...filteredHistory, ...syntheticEvents].sort(
+        (left: any, right: any) => {
+          if (!left.createdAt && right.createdAt) return -1;
+          if (left.createdAt && !right.createdAt) return 1;
+          if (!left.createdAt && !right.createdAt) {
+            return eventPriority(left.event) - eventPriority(right.event);
+          }
+
+          const leftTime = new Date(left.createdAt).getTime();
+          const rightTime = new Date(right.createdAt).getTime();
+          if (leftTime !== rightTime) return rightTime - leftTime;
+
+          const leftPriority = eventPriority(left.event);
+          const rightPriority = eventPriority(right.event);
+          if (leftPriority !== rightPriority) {
+            return leftPriority - rightPriority;
+          }
+
+          return String(right.id).localeCompare(String(left.id));
+        },
+      );
+
+      const seenApprovedReqIds = new Set<string>();
+      const dedupedResultList = resultList.filter((item: any) => {
+        if (item.event !== 'APPROVED' || !item._reqId) return true;
+        if (seenApprovedReqIds.has(item._reqId)) return false;
+        seenApprovedReqIds.add(item._reqId);
+        return true;
+      });
+
+      const cleanedResultList = dedupedResultList.map(
+        ({ _reqId, ...rest }: any) => rest,
+      );
 
       res.status(200).json({
         message: 'Organization structure history fetched successfully!',
         code: 200,
-        data: resultList,
+        data: cleanedResultList,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Fetches a single org history event with its resolved request snapshot.
+   */
+  static async getOrgHistoryDetail(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const { id, companyId, companyCode, userId: viewerUserId } = req.body;
+
+      if (!id) {
+        throw new AppError('History id is required', 400);
+      }
+
+      let resolvedCompanyId = companyId;
+      if (!resolvedCompanyId) {
+        if (!companyCode) {
+          throw new AppError('companyCode or companyId is required', 400);
+        }
+        const company = await prisma.company.findUnique({
+          where: { companyCode },
+          select: { id: true },
+        });
+        if (!company) throw new AppError('Company not found', 404);
+        resolvedCompanyId = company.id;
+      }
+
+      const resolvedHistoryId =
+        OrgStructureDbController.resolveBaseOrgHistoryId(id);
+
+      const history = await prisma.orgHistory.findFirst({
+        where: {
+          id: resolvedHistoryId,
+          companyId: resolvedCompanyId,
+        },
+        include: {
+          user: {
+            include: {
+              userAccesses: {
+                where: { companyId: resolvedCompanyId },
+              },
+            },
+          },
+          orgReq: true,
+          company: { select: { companyCode: true, id: true } },
+        },
+      });
+
+      if (!history) {
+        throw new AppError('Organization history not found', 404);
+      }
+      if (
+        history.event === 'AUTO_GENERATE' ||
+        history.event === 'AUTO_DELETE'
+      ) {
+        throw new AppError('Organization history not found', 404);
+      }
+
+      const requestData = (history.orgReq?.data as any) || null;
+      const requestType = OrgStructureDbController.resolveOrgHistoryRequestType(
+        history.orgReq,
+      );
+      const displayEvent = OrgStructureDbController.getOrgHistoryDisplayEvent(
+        history.event,
+        requestType,
+      );
+
+      const allRequests = await prisma.orgStructureReq.findMany({
+        where: { companyId: resolvedCompanyId },
+        select: {
+          id: true,
+          data: true,
+          type: true,
+          status: true,
+          createdAt: true,
+        },
+      });
+      const detailIdentity =
+        OrgStructureDbController.buildOrgHistoryNodeIdentity(requestData);
+      const detailCandidatePaths = [
+        requestData?.targetNodePath,
+        requestData?.nodePath,
+        requestData?.currentData?.nodePath,
+        detailIdentity.nodePath,
+      ].filter((value): value is string => typeof value === 'string');
+      const detailNode =
+        detailCandidatePaths.length > 0
+          ? await prisma.orgStructure.findFirst({
+              where: {
+                companyId: resolvedCompanyId,
+                nodePath: { in: detailCandidatePaths },
+              },
+              include: { parent: true },
+            })
+          : null;
+      const historyRequests = allRequests
+        .filter((request) => {
+          return (
+            OrgStructureDbController.orgHistoryNodeIdentityMatches(
+              request.data,
+              requestData,
+            ) &&
+            (request.status !== 'REJECTED' || request.id === history.orgReqId)
+          );
+        })
+        .sort((left, right) => {
+          const leftTime = left.createdAt.getTime();
+          const rightTime = right.createdAt.getTime();
+          if (leftTime !== rightTime) return leftTime - rightTime;
+          return left.id.localeCompare(right.id);
+        });
+
+      let currentSnapshot: Record<string, unknown> | null = null;
+      let oldData: Record<string, unknown> | null = null;
+      let newData: Record<string, unknown> | null = null;
+
+      for (const request of historyRequests) {
+        const nextSnapshot: Record<string, unknown> | null =
+          request.type === 'INITIATE' || !currentSnapshot
+            ? OrgStructureDbController.extractOrgSnapshot(request.data)
+            : OrgStructureDbController.applyOrgRequestSnapshot(
+                currentSnapshot,
+                request,
+              );
+
+        if (!nextSnapshot) continue;
+
+        if (request.id === history.orgReqId) {
+          oldData = currentSnapshot ? cloneJson(currentSnapshot) : null;
+          newData = nextSnapshot;
+          break;
+        }
+
+        currentSnapshot = nextSnapshot;
+      }
+
+      if (!newData) {
+        newData = OrgStructureDbController.extractOrgSnapshot(requestData);
+      }
+
+      const saasAdminUserIds = await HistoryUserUtil.getSaasAdminUserIds([
+        viewerUserId,
+        history.eventUserId,
+      ]);
+
+      res.status(200).json({
+        message: 'Organization structure history item fetched successfully!',
+        code: 200,
+        data: {
+          id: history.id,
+          orgReqId: history.orgReqId,
+          companyCode: history.company.companyCode,
+          type: history.orgReq?.type || null,
+          impact: history.orgReq?.impact || null,
+          event: displayEvent,
+          rawEvent: history.event,
+          level: history.level,
+          createdAt: history.createdAt,
+          remarks: history.remarks,
+          oldData,
+          newData,
+          user: HistoryUserUtil.formatAuditUser(
+            history.user,
+            history.eventUserId,
+            saasAdminUserIds,
+            viewerUserId,
+          ),
+          request: history.orgReq
+            ? {
+                id: history.orgReq.id,
+                type: history.orgReq.type,
+                status: history.orgReq.status,
+                workflowId: history.orgReq.workflowId,
+                createdAt: history.orgReq.createdAt,
+              }
+            : null,
+          newNodeName:
+            requestData?.newNodeName ||
+            requestData?.nodeName ||
+            detailNode?.nodeName ||
+            null,
+          nodeType:
+            requestData?._nodeType ||
+            requestData?.nodeType ||
+            detailNode?.nodeType ||
+            null,
+          nodePath:
+            requestData?.nodePath ||
+            requestData?.targetNodePath ||
+            detailNode?.nodePath ||
+            null,
+          parentNodePath:
+            requestData?.parentNode?.nodePath ||
+            detailNode?.parent?.nodePath ||
+            'ROOT',
+          parentNodeName:
+            requestData?.parentNode?.nodeName ||
+            detailNode?.parent?.nodeName ||
+            'ROOT',
+        },
       });
     } catch (error) {
       next(error);
@@ -810,17 +6398,30 @@ export class OrgStructureDbController {
    */
   static async fetchStructure(req: Request, res: Response, next: NextFunction) {
     try {
-      const { companyCode, companyId } = req.body;
+      const { companyCode, companyId, userId } = req.body;
+      const requestedStatusType = String(
+        req.body?.statusType ?? '',
+      ).toLowerCase();
+      if (
+        requestedStatusType &&
+        !['active', 'inactive', 'archive'].includes(requestedStatusType)
+      ) {
+        throw new AppError('Invalid statusType', 400);
+      }
+      const statusType =
+        requestedStatusType === 'inactive'
+          ? 'INACTIVE'
+          : requestedStatusType === 'archive'
+            ? 'ARCHIVE'
+            : 'ACTIVE';
       let resolvedCompanyId = companyId;
 
       if (!resolvedCompanyId) {
         if (!companyCode) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: 'companyCode or companyId is required',
-            });
+          return res.status(400).json({
+            success: false,
+            message: 'companyCode or companyId is required',
+          });
         }
         const company = await prisma.company.findUnique({
           where: { companyCode: companyCode },
@@ -834,14 +6435,17 @@ export class OrgStructureDbController {
         resolvedCompanyId = company.id;
       }
 
-      // 1. Fetch active nodes in the hierarchy
-      const nodes = await prisma.orgStructure.findMany({
+      // 1. Fetch all nodes in the hierarchy so child paths can be linked
+      const allNodes = await prisma.orgStructure.findMany({
         where: { companyId: resolvedCompanyId },
         orderBy: { nodePath: 'asc' },
       });
+      const visibleNodes = allNodes.filter(
+        (node) => node.status === statusType,
+      );
 
       // 2. Fetch pending requests for parallel tracking
-      const pendingRequests = await prisma.orgStructureReq.findMany({
+      const pendingRequestsRaw = await prisma.orgStructureReq.findMany({
         where: {
           companyId: resolvedCompanyId,
           status: 'PENDING',
@@ -853,33 +6457,119 @@ export class OrgStructureDbController {
           },
         },
       });
+      const effectivePendingIds =
+        await OrgStructureDbController.filterEffectivelyPendingRequestIds(
+          'org_structure_req',
+          pendingRequestsRaw.map((request) => request.id),
+        );
+      const pendingRequests = pendingRequestsRaw.filter((request) =>
+        effectivePendingIds.has(request.id),
+      );
 
       // 3. Resolve workflow names and aliases for pending requests
-      const workflowIds = Array.from(new Set(pendingRequests.map(req => req.workflowId).filter(Boolean))) as string[];
+      const workflowIds = Array.from(
+        new Set(pendingRequests.map((req) => req.workflowId).filter(Boolean)),
+      ) as string[];
       const workflowDetails = await prisma.workflow.findMany({
-        where: { id: { in: workflowIds } },
-        select: { id: true, name: true, alias: true }
+        where: { id: { in: workflowIds }, status: 'ACTIVE' },
+        select: { id: true, name: true, alias: true },
       });
-      const workflowMap = new Map(workflowDetails.map(w => [w.id, w]));
+      const workflowMap = new Map(workflowDetails.map((w) => [w.id, w]));
 
-      const pendingWithDetails = pendingRequests.map((req) => {
-        const w = req.workflowId ? workflowMap.get(req.workflowId) : null;
-        const initiator = req.orgHistories[0]?.user || { name: '', email: '' };
-        
-        const { orgHistories, ...rest } = req;
-        return {
-          ...rest,
-          initiator,
-          workflowName: w?.name || 'N/A',
-          alias: w?.alias || 'N/A',
-        };
+      const pendingWithDetails = await Promise.all(
+        pendingRequests.map(async (req) => {
+          const w = req.workflowId ? workflowMap.get(req.workflowId) : null;
+          const initiator = req.orgHistories[0]?.user || {
+            name: '',
+            email: '',
+          };
+          const resolvedImpactSummary =
+            await OrgStructureDbController.resolveImpactSummary(
+              prisma as any,
+              resolvedCompanyId,
+              req.type || 'INITIATE',
+              req.data,
+            );
+
+          const { orgHistories, ...rest } = req;
+          const reqData = req.data as any;
+          const requestedNodePath =
+            OrgStructureDbController.resolveRequestedNodePath(reqData);
+          const newData = {
+            ...(reqData || {}),
+            impactSummary: resolvedImpactSummary,
+          };
+
+          return {
+            ...rest,
+            oldData: req.oldData || (reqData?.oldData ?? null),
+            newData,
+            levelCount:
+              typeof reqData?.levelCount === 'number'
+                ? reqData.levelCount
+                : OrgStructureDbController.getNodeLevelCount(
+                    requestedNodePath,
+                  ),
+            initiator,
+            workflowName: w?.name || 'N/A',
+            alias: w?.alias || 'N/A',
+            impactSummary: resolvedImpactSummary,
+          };
+        }),
+      );
+      const approverRequestIds = new Set(
+        await OrgStructureDbController.getCurrentApproverRequestIds(
+          'org_structure_req',
+          userId,
+          resolvedCompanyId,
+        ),
+      );
+      const pendingByNodePath = new Map<string, any>();
+      pendingWithDetails.forEach((request: any) => {
+        const requestData = request.data as any;
+        const targetPath =
+          requestData?.targetNodePath ||
+          requestData?.nodePath ||
+          requestData?.currentData?.nodePath;
+        if (
+          typeof targetPath === 'string' &&
+          !pendingByNodePath.has(targetPath)
+        ) {
+          pendingByNodePath.set(targetPath, request);
+        }
+      });
+      const visiblePendingWithDetails = pendingWithDetails.filter(
+        (request: any) => approverRequestIds.has(request.id),
+      );
+
+      const pendingNodePaths = new Set<string>();
+      pendingRequests.forEach((request: any) => {
+        const requestData = request.data as any;
+        const targetPath = OrgStructureDbController.resolveRequestedNodePath(
+          requestData,
+          requestData?.targetNodePath || requestData?.currentData?.nodePath,
+        );
+        if (typeof targetPath === 'string' && targetPath.length > 0) {
+          pendingNodePaths.add(targetPath);
+        }
       });
 
       // 4. Remove internal UUIDs and format for the tree UI
-      const safeNodes = nodes.map((node) => ({
+      const safeNodes = visibleNodes.map((node) => ({
+        id: node.id,
+        nodeId: node.id,
         nodeName: node.nodeName,
         nodeType: node.nodeType,
         nodePath: node.nodePath,
+        levelCount: OrgStructureDbController.getNodeLevelCount(node.nodePath),
+        status: node.status,
+        isPending: pendingByNodePath.has(node.nodePath),
+        isAutoDeleted: node.status !== 'ACTIVE',
+        linkedOrgStructure: OrgStructureDbController.buildLinkedOrgStructure(
+          allNodes as any,
+          node.nodePath,
+          pendingNodePaths,
+        ),
       }));
 
       res.status(200).json({
@@ -887,7 +6577,7 @@ export class OrgStructureDbController {
         code: 200,
         data: {
           nodes: safeNodes,
-          pending: pendingWithDetails,
+          pending: visiblePendingWithDetails,
         },
       });
     } catch (error) {

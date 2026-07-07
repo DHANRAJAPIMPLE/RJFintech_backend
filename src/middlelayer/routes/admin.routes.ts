@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { AdminController } from '../controllers/admin.controller';
-import { MonitoringController } from '../controllers/monitoring.controller';
+import { AdminController } from '../controllers/admin/admin.controller';
+import { MonitoringController } from '../controllers/monitoring/monitoring.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import { adminMiddleware } from '../middlewares/admin.middleware';
 
@@ -18,15 +18,17 @@ router.use(authMiddleware);
 router.use(adminMiddleware);
 
 // -------------company routes------------------------------
-router.post('/groups', AdminController.getGroupCompanies);
-router.post('/initiate', AdminController.initiateCompanyOnboarding);
-router.post('/action', AdminController.actionCompanyOnboarding);
-router.post('/fetch-history', AdminController.fetchCompanyHistory);
+router.post('/groups', AdminController.getGroupCompanies);  //done
+router.post('/company-details', AdminController.fetchCompanyDetails);
+router.post('/initiate', AdminController.initiateCompanyOnboarding); //done
+router.post('/action', AdminController.actionCompanyOnboarding);  //done
+router.post('/fetch-history', AdminController.fetchCompanyHistory);  //done
 // ----------------------------------------------------------
 
 // -------------monitoring routes----------------------------
-router.post('/monitoring/fetch-all', MonitoringController.fetchAllTraces);
-router.post('/monitoring/details', MonitoringController.getTraceDetails);
+router.post('/monitoring/fetch-all', MonitoringController.fetchAll); //done
+router.post('/monitoring-fetch-all', MonitoringController.fetchAll);
+router.post('/monitoring/details', MonitoringController.details);  //done
 // ----------------------------------------------------------
 
 export default router;

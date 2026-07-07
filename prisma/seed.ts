@@ -312,7 +312,7 @@ for (const role of roles) {
   console.log('Roles seeded.');
  
   // ─── Shared password for ALL seeded users ───────────────────────────────────
-  const sharedPassword = await argon2.hash('Admin@123');
+  const sharedPassword = await argon2.hash('Welcome@123');
  
   // ─── 2. Seed Group & Company ─────────────────────────────────────────────────
   const group = await prisma.groupCompany.upsert({
@@ -416,6 +416,7 @@ for (const role of roles) {
           companyId: company.id,
           isGlobalAccess,
           accessCategory,
+          source: 'USER',
         },
       });
     }
@@ -510,7 +511,7 @@ for (const role of roles) {
       const workflow = await prisma.workflow.create({
         data: {
           name: dwf.name,
-          alias: '1M_1C_1',
+          alias: '1M_1C_D',
           module: 'SYSTEM_ACCESS',
           subModule: dwf.subModule,
           roleCode: dwf.roleCode,

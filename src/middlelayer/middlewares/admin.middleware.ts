@@ -16,13 +16,12 @@ import { internalPost } from '../utils/internal-fetch.util';
  */
 
 export const adminMiddleware = async (
-  req: Request & { user?: { id: string; companyId?: string } },
+  req: Request & { user?: { id: string } },
   res: Response,
   next: NextFunction,
 ) => {
   try {
     const userId = req.user?.id;
-    const companyId = req.user?.companyId;
 
     if (!userId) {
       throw new AppError('User not found', 404);
@@ -30,7 +29,7 @@ export const adminMiddleware = async (
 
     const { data: user } = await internalPost<any>(
       `${config.backendAuthUrl}/get-role`,
-      { userId, companyId },
+      { userId },
     );
 
     if (user[0].roleCode !== 'SAAS_ADMIN') {

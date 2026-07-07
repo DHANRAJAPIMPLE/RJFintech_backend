@@ -11,22 +11,186 @@
  *      (e.g., 'initiate' permission for 'USER_ACC' module).
  */
 import { Router } from 'express';
+import type { NextFunction, Response } from 'express';
 import { authMiddleware } from '../middlewares/auth.middleware';
-import { OrgController } from '../controllers/org.controller';
-import { RoleController } from '../controllers/role.controller';
-import { UserController } from '../controllers/user.controller';
-import { WorkflowController } from '../controllers/workflow.controller';
+import type { AuthRequest } from '../middlewares/auth.middleware';
+import { AppError } from '../../shared/middlewares/error.middleware';
+import { config } from '../config';
+import { EditLockController } from '../controllers/edit-lock/edit-lock.controller';
+import { HistoryController } from '../controllers/history/history.controller';
+import { OrgController } from '../controllers/org/org.controller';
+import { RoleController } from '../controllers/role/role.controller';
+import { UserController } from '../controllers/user/user.controller';
+import { WorkflowController } from '../controllers/workflow/workflow.controller';
 
-import { authorize, checkGlobalUser } from '../middlewares/access.middleware';
+import { authorize } from '../middlewares/access.middleware';
+import { internalPost } from '../utils/internal-fetch.util';
 
 const router = Router();
 router.use(authMiddleware);
 
+const authorizeUserInitiate = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toLowerCase()
+      : 'initiate';
+
+  return authorize(type === 'initiate' ? 'initiate' : 'modify', 'USER_ACC')(
+    req,
+    res,
+    next,
+  );
+};
+
+const authorizeOrgInitiate = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toLowerCase()
+      : 'initiate';
+
+  return authorize(type === 'update' ? 'modify' : 'initiate', 'ORG_STR')(
+    req,
+    res,
+    next,
+  );
+};
+
+const authorizeWorkflowInitiate = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toLowerCase()
+      : 'initiate';
+
+  return authorize(
+    type === 'update' || type === 'inactive' || type === 'archive'
+      ? 'modify'
+      : 'initiate',
+    'WORK_FLOW',
+  )(req, res, next);
+};
+
+const authorizeEditLock = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  let moduleName: 'USER_ACC' | 'ORG_STR' | 'WORK_FLOW' | null = null;
+  switch (req.body?.type) {
+    case 'USER':
+      moduleName = 'USER_ACC';
+      break;
+    case 'ORG':
+      moduleName = 'ORG_STR';
+      break;
+    case 'WORKFLOW':
+      moduleName = 'WORK_FLOW';
+      break;
+  }
+
+  if (!moduleName) {
+    return next(new AppError('Invalid edit lock type', 400));
+  }
+
+  return authorize('modify', moduleName)(req, res, next);
+};
+
+const authorizeHistoryDetail = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const type =
+    typeof req.body?.type === 'string'
+      ? req.body.type.trim().toUpperCase()
+      : '';
+
+  const moduleName =
+    type === 'USER'
+      ? 'USER_ACC'
+      : type === 'ORG'
+        ? 'ORG_STR'
+        : type === 'WORKFLOW'
+          ? 'WORK_FLOW'
+          : null;
+
+  if (!moduleName) {
+    return next(new AppError('Invalid history type', 400));
+  }
+
+  return authorize('view', moduleName)(req, res, next);
+};
+
+const authorizeUserDetailAccess = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    if (req.body?.reportee === true) {
+      const userId = req.user?.id;
+      const companyId = req.user?.companyId;
+      const email =
+        typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+
+      if (userId && companyId && email) {
+        const response = await internalPost<{ users?: Array<{ email: string }> }>(
+          `${config.backendAuthUrl}/access-rights`,
+          {
+            reportee: true,
+            userId,
+            companyId,
+          },
+        );
+
+        const isDirectReportee =
+          response.ok &&
+          Array.isArray(response.data?.users) &&
+          response.data.users.some(
+            (user) => user.email.toLowerCase() === email.toLowerCase(),
+          );
+
+        if (isDirectReportee) {
+          return next();
+        }
+      }
+    }
+
+    return authorize('view', 'USER_ACC')(req, res, next);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+router.post('/edit-lock', authorizeEditLock, EditLockController.toggle);
+router.post(
+  '/history/detail',
+  authorizeHistoryDetail,
+  HistoryController.fetchHistoryDetail,
+);
+
 // -------------user routes----------------------------------
 router.post(
   '/user/initiate',
-  authorize('initiate', 'USER_ACC'),
+  authorizeUserInitiate,
   UserController.initiateUserOnboarding,
+);
+
+router.post(
+  '/user/bulk-upload/template',
+  authorizeUserInitiate,
+  UserController.downloadBulkUserUploadTemplate,
 );
 
 router.post(
@@ -35,36 +199,41 @@ router.post(
   UserController.actionUserOnboarding,
 );
 router.post(
-  '/user/fetch-all-users',
+  '/user/fetch-all-user',
   authorize('view', 'USER_ACC'),
   UserController.fetchAllUsers,
 );
-// router.post(
-//   '/user/update-status',
-//   authorize('modify', 'USER_ACC'),
-//   UserController.updateUserStatus,
-// );
+router.post(
+  '/user/details',
+  authorizeUserDetailAccess,
+  UserController.fetchUserDetails,
+);
+router.post(
+  '/user/user-filter-option',
+  authorize('view', 'USER_ACC'),
+  UserController.fetchUserFilterOptions,
+);
+
 router.post(
   '/user/fetch-history',
   authorize('view', 'USER_ACC'),
   UserController.getUserHistory,
-);
+); //done
 router.post(
   '/user/fetch-company-nodes',
-  authorize('view'),
   UserController.fetchCompanyNodes,
-);
+); //done
 router.post(
   '/user/fetch-users-by-nodepath-count',
   UserController.fetchUsersByNodePathCount,
-);
+); //done
 
 // ----------------------------------------------------------
 
 //--------------org routes-----------------------------------
 router.post(
   '/org/initiate',
-  authorize('initiate', 'ORG_STR'),
+  authorizeOrgInitiate,
   OrgController.initiateOrgRequest,
 );
 router.post(
@@ -76,18 +245,18 @@ router.post(
   '/org/fetch',
   authorize('view', 'ORG_STR'),
   OrgController.fetchOrgStructure,
-);
+); //done
 router.post(
   '/org/fetch-history',
   authorize('view', 'ORG_STR'),
   OrgController.fetchOrgHistory,
-);
+); //done
 // ----------------------------------------------------------
 
 // --------------workflow routes------------------------------
 router.post(
   '/workflow/initiate',
-  authorize('initiate', 'WORK_FLOW'),
+  authorizeWorkflowInitiate,
   WorkflowController.initiateWorkflow,
 );
 router.post(
@@ -99,18 +268,23 @@ router.post(
   '/workflow/fetch',
   authorize('view', 'WORK_FLOW'),
   WorkflowController.fetchAllWorkflows,
+); //done
+router.post(
+  '/workflow/details',
+  authorize('view', 'WORK_FLOW'),
+  WorkflowController.fetchWorkflowDetails,
 );
 router.post(
   '/workflow/fetch-history',
   authorize('view', 'WORK_FLOW'),
   WorkflowController.fetchWorkflowHistory,
-);
+); //done
 
 // ----------------------------------------------------------
 
 // --------------roles routes--------------------------------
 // router.post('/role/create', RoleController.createRoles);
-router.post('/role/fetch-all', RoleController.fetchAllRoles);
+router.post('/role/fetch-all', RoleController.fetchAllRoles); //done
 // ----------------------------------------------------------
 
 export default router;
